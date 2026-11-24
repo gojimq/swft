@@ -5,9 +5,7 @@ extension View {
     @ViewBuilder
     public func swftGlass<S: Shape>(in shape: S, interactive: Bool = false) -> some View {
         if #available(macOS 26, *) {
-            // A milky fill above the glass keeps it reading white like the reference instead of grey over the glow.
-            background(shape.fill(SwftColor.glassTint))
-                .glassEffect(interactive ? .regular.interactive() : .regular, in: shape)
+            glassEffect(interactive ? .regular.interactive() : .regular, in: shape)
         } else {
             background(.regularMaterial, in: shape)
                 .overlay(shape.stroke(SwftColor.borderSubtle, lineWidth: 1))

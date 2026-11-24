@@ -4,7 +4,6 @@ import SwiftUI
 struct SidebarView: View {
     @Environment(AppModel.self) private var model
     @State private var showingStatusPopover = false
-    @Namespace private var selectionNamespace
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -97,8 +96,6 @@ struct SidebarView: View {
             .padding(.horizontal, 8)
             .padding(.vertical, 8)
         }
-        .environment(\.swftSelectionNamespace, selectionNamespace)
-        .animation(SwftMotion.resolve(SwftMotion.glide, reduceMotion: reduceMotion), value: model.destination)
         .animation(SwftMotion.resolve(SwftMotion.spring, reduceMotion: reduceMotion), value: model.visibleThreads.map(\.id))
         .background(SwftColor.sidebar)
     }
