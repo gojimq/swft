@@ -90,6 +90,20 @@ struct Snapshots {
         }
     }
 
+    /// Rapidly stepping through thinking levels mid-transition: one level label, never overlapping.
+    @Test func thinkingSwap() throws {
+        let model = AppModel.mock()
+        model.destination = .thread(MockData.threadDetail.summary.id)
+        model.selectReasoningChoice("low")
+        model.toggleModelPicker()
+        try Self.capture(model, appearance: "light", name: "thinking-swap") {
+            for level in ["medium", "high", "xhigh"] {
+                withAnimation(SwftMotion.standard) { model.selectReasoningChoice(level) }
+                RunLoop.main.run(until: Date().addingTimeInterval(0.04))
+            }
+        }
+    }
+
     /// Mid-switch frame after clicking through threads faster than the screen animation: one transcript, one title.
     @Test func rapidThreadSwitch() throws {
         let model = AppModel.mock()

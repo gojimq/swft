@@ -28,13 +28,17 @@ private struct SwapOnChange<Key: Hashable>: ViewModifier {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     func body(content: Content) -> some View {
-        let rise: AnyTransition = reduceMotion ? .opacity : .opacity.combined(with: .offset(y: 5))
+        let rise: AnyTransition = reduceMotion ? .opacity : .opacity.combined(with: .offset(y: 4))
+        let animation = reduceMotion ? Animation.easeOut(duration: 0.1) : SwftMotion.snap
         ZStack {
             content
                 .id(key)
-                // The insertion carries its own animation, so it plays even when the change arrives unanimated.
-                .transition(.asymmetric(insertion: rise.animation(SwftMotion.resolve(SwftMotion.quick, reduceMotion: reduceMotion)), removal: .identity))
+                // The insertion carries its own animation so it plays even after we clear the transaction below.
+                .transition(.asymmetric(insertion: rise.animation(animation), removal: .identity))
         }
+        // Clear any inherited animation on swap so SwiftUI tears down the old identity at once instead of
+        // holding it at full opacity for a parent spring's duration.
+        .transaction(value: key) { $0.animation = nil }
     }
 }
 
@@ -507,6 +511,7 @@ public struct ThinkingSlider: View {
                 SwapText(levels.indices.contains(clamped) ? levels[clamped] : "").foregroundStyle(SwftColor.textPrimary)
             }
             .font(SwftType.caption)
+            .transaction(value: clamped) { $0.animation = nil }
 
             GeometryReader { geo in
                 let travel = geo.size.width - thumb
@@ -544,13 +549,13 @@ public struct ThinkingSlider: View {
                 )
             }
             .frame(height: 22)
+            // Levels are steps, so even a drag jumps; keep thumb and fill tight so rapid scrubbing never trails.
+            .animation(SwftMotion.resolve(SwftMotion.snap, reduceMotion: reduceMotion), value: clamped)
+            .animation(SwftMotion.resolve(SwftMotion.quick, reduceMotion: reduceMotion), value: dragging)
         }
         .padding(.horizontal, 16)
         .padding(.top, 10)
         .padding(.bottom, 12)
-        // Levels are steps, so even a drag jumps; easing the thumb and fill smooths each jump.
-        .animation(SwftMotion.resolve(SwftMotion.spring, reduceMotion: reduceMotion), value: clamped)
-        .animation(SwftMotion.resolve(SwftMotion.quick, reduceMotion: reduceMotion), value: dragging)
         .accessibilityElement()
         .accessibilityLabel("Thinking level")
         .accessibilityValue(levels.indices.contains(clamped) ? levels[clamped] : "")

@@ -35,6 +35,8 @@ import SwiftUI
 /// One-shot springs and transitions. Nothing in Swft repaints continuously (no repeating animations);
 /// every animation here settles and stops. Views pass `reduceMotion` so Reduce Motion falls back to crossfades.
 public enum SwftMotion {
+    /// Tightest swap/step motion: text swaps and stepped slider stops.
+    public static let snap = Animation.snappy(duration: 0.11)
     public static let quick = Animation.snappy(duration: 0.16)
     public static let standard = Animation.snappy(duration: 0.24)
     /// Default UI spring: hover/press, toggles, cards expanding.
