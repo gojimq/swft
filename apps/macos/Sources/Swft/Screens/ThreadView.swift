@@ -6,40 +6,60 @@ struct ThreadView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let detail: ThreadDetailState
     @State private var scrollPosition = ScrollPosition()
-    @State private var isAtBottom = true
     @State private var composerHeight: CGFloat = 110
+    @State private var sendFlight = SendFlightCoordinator()
     /// Rows animate in only once the transcript has content; its first population (or a snapshot arriving after a
     /// thread switch) lands in place instead of every row rising at once.
     @State private var populated = false
 
     var body: some View {
         let rows = detail.rows
+        let turns = SendFlightLogic.turns(from: rows)
+        let topInset = SwftLayout.titlebarHeight + 24
+        let streamRoomTopAnchor = SwftLayout.titlebarHeight + 16
+        let bottomInset = composerHeight + 28
+        let hasStreamRoom = sendFlight.hasStreamRoom(for: detail, isBusy: model.composer.isBusy)
+        let streamRoom = hasStreamRoom
+            ? SendFlightLogic.streamRoomHeight(viewportHeight: sendFlight.viewportSize.height, topInset: streamRoomTopAnchor, bottomInset: bottomInset)
+            : nil
+        let showWorking = sendFlight.shouldShowWorking(
+            for: detail,
+            isBusy: model.composer.isBusy,
+            latestTurnRows: turns.last?.rows ?? [],
+            latestSend: model.latestThreadSend,
+            reduceMotion: reduceMotion
+        )
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 16) {
-                ForEach(rows) { row in
-                    self.row(row)
-                        .transition(.swftRise(reduceMotion: reduceMotion))
+            LazyVStack(alignment: .leading, spacing: 32) {
+                ForEach(Array(turns.enumerated()), id: \.element.id) { index, turn in
+                    SendFlightTurnSection(
+                        detail: detail,
+                        turn: turn,
+                        isLatest: index == turns.count - 1,
+                        streamRoomHeight: streamRoom,
+                        showWorking: showWorking,
+                        coordinator: sendFlight,
+                        reduceMotion: reduceMotion
+                    ) { row in
+                        self.row(row)
+                    }
                 }
             }
             .frame(maxWidth: SwftLayout.contentMaxWidth)
             .padding(.horizontal, 32)
-            .padding(.top, SwftLayout.titlebarHeight + 24)
+            .padding(.top, topInset)
             // Room for the floating composer, so the latest message rests above it rather than under the glass.
-            .padding(.bottom, composerHeight + 28)
+            .padding(.bottom, bottomInset)
             .frame(maxWidth: .infinity)
-            .animation(populated ? SwftMotion.resolve(SwftMotion.spring, reduceMotion: reduceMotion) : nil, value: rows.map(\.id))
+            .animation(populated && sendFlight.activeFlight == nil ? SwftMotion.resolve(SwftMotion.settle, reduceMotion: reduceMotion) : nil, value: rows.map(\.id))
         }
         .task(id: rows.isEmpty) { if !rows.isEmpty { populated = true } }
         .scrollPosition($scrollPosition)
-        // Open at the latest message and follow growth, but keep short threads top-aligned like the reference.
+        // Open at the latest message and follow growth via stickiness, keeping short threads top-aligned.
         .defaultScrollAnchor(.top, for: .alignment)
         .defaultScrollAnchor(.bottom, for: .initialOffset)
-        .defaultScrollAnchor(.bottom, for: .sizeChanges)
-        .onScrollGeometryChange(for: Bool.self) { geometry in
-            geometry.visibleRect.maxY >= geometry.contentSize.height - 48
-        } action: { _, atBottom in
-            isAtBottom = atBottom
-        }
+        .defaultScrollAnchor(.top, for: .sizeChanges)
+        .threadSendFlightScrollTracking(coordinator: sendFlight, scrollPosition: $scrollPosition)
         .scrollEdgeSoftIfAvailable()
         // The macOS 26 toolbar reports a taller top safe area; the transcript already pads under the top bar itself.
         .ignoresSafeArea(.container, edges: .top)
@@ -48,6 +68,16 @@ struct ThreadView: View {
             composerBar
                 .onGeometryChange(for: CGFloat.self, of: \.size.height) { composerHeight = $0 }
         }
+        .threadSendFlightHost(
+            detail: detail,
+            isBusy: model.composer.isBusy,
+            latestThreadSend: model.latestThreadSend,
+            failedThreadSendID: model.failedThreadSendID,
+            topInset: streamRoomTopAnchor,
+            reduceMotion: reduceMotion,
+            coordinator: sendFlight,
+            scrollPosition: $scrollPosition
+        )
     }
 
     private var composerBar: some View {
@@ -62,9 +92,11 @@ struct ThreadView: View {
 
             ComposerView(placeholder: "Reply to \(detail.summary.providerLabel)…")
                 .frame(maxWidth: SwftLayout.composerMaxWidth)
+                .sendFlightComposerAnchor()
                 .overlay(alignment: .top) {
-                    if !isAtBottom {
+                    if sendFlight.showsScrollToBottom {
                         ScrollToBottomButton {
+                            sendFlight.armScrollToBottom()
                             withAnimation(SwftMotion.resolve(SwftMotion.screen, reduceMotion: reduceMotion)) {
                                 scrollPosition.scrollTo(edge: .bottom)
                             }
@@ -87,7 +119,7 @@ struct ThreadView: View {
             .frame(height: 64)
             .allowsHitTesting(false)
         }
-        .animation(SwftMotion.resolve(SwftMotion.pop, reduceMotion: reduceMotion), value: isAtBottom)
+        .animation(SwftMotion.resolve(SwftMotion.pop, reduceMotion: reduceMotion), value: sendFlight.showsScrollToBottom)
         .animation(SwftMotion.resolve(SwftMotion.spring, reduceMotion: reduceMotion), value: model.actionError)
     }
 
@@ -108,6 +140,7 @@ struct ThreadView: View {
             }
         case .work(let fold):
             WorkFoldView(fold: fold, isExpanded: model.expandedWorkFolds.contains(fold.id)) {
+                sendFlight.handleWorkFoldToggle()
                 withAnimation(SwftMotion.resolve(SwftMotion.disclosure, reduceMotion: reduceMotion)) {
                     model.toggleWorkFold(fold.id)
                 }

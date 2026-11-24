@@ -35,6 +35,10 @@ final class AppModel {
     var openProviderSettingsAction: ((String) -> Void)?
     /// Home → new thread staging (composer docking, hand-off); see `Motion/NewThread`.
     let newThread = NewThreadLauncher()
+    /// Most recent send dispatched inside an existing thread, observed by `ThreadView` to launch send flight.
+    var latestThreadSend: ThreadSendEvent?
+    /// Send event ID whose live dispatch failed, so `ThreadView` can cancel its flight overlay immediately.
+    var failedThreadSendID: UUID?
 
     // MARK: - Mode & Live SwftKit Backing
 
@@ -749,8 +753,12 @@ final class AppModel {
             composerText = ""
             let id = selectedThreadID ?? MockData.threadDetail.summary.id
             var existing = detail(for: id) ?? MockData.threadDetail
-            existing.items.append(TranscriptItem(id: UUID().uuidString, kind: .user(text)))
+            let itemID = UUID().uuidString
+            existing.items.append(TranscriptItem(id: itemID, kind: .user(text)))
             mockBacking?.details[id] = existing
+            if selectedThreadID != nil {
+                latestThreadSend = ThreadSendEvent(threadID: id, text: text, optimisticItemID: itemID)
+            }
             destination = .thread(id)
             return
         }
@@ -767,6 +775,8 @@ final class AppModel {
             let selection = selectedModel.map {
                 SwftAdapters.modelSelection(from: $0, reasoningChoiceId: selectedReasoningChoice?.id)
             }
+            let sendEvent = ThreadSendEvent(threadID: threadID, text: text)
+            latestThreadSend = sendEvent
             composerText = ""
             actionError = nil
             isSubmitting = true
@@ -774,6 +784,7 @@ final class AppModel {
                 do {
                     _ = try await threadStore.sendMessage(text: text, modelSelection: selection)
                 } catch {
+                    self.failedThreadSendID = sendEvent.id
                     if self.composerText.isEmpty { self.composerText = text }
                     self.actionError = error.localizedDescription
                 }
