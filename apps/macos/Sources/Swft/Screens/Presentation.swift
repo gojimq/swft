@@ -89,16 +89,6 @@ extension ThreadActivity {
     }
 }
 
-extension ToolCallItem.Status {
-    var cardStatus: ToolCallStatus {
-        switch self {
-        case .running: .running
-        case .succeeded: .succeeded
-        case .failed: .failed
-        }
-    }
-}
-
 extension ApprovalItem.Status {
     var cardStatus: ApprovalStatus {
         switch self {
@@ -106,23 +96,6 @@ extension ApprovalItem.Status {
         case .approved: .approved
         case .denied: .denied
         }
-    }
-}
-
-extension ToolCallItem {
-    var symbol: String {
-        switch kind {
-        case .command: "terminal"
-        case .read: "doc.text"
-        case .edit: "pencil"
-        case .search: "magnifyingglass"
-        case .thinking: "brain"
-        }
-    }
-
-    var durationText: String? {
-        guard let duration else { return nil }
-        return duration < 1 ? "\(Int(duration * 1000))ms" : String(format: "%.1fs", duration)
     }
 }
 

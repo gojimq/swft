@@ -15,12 +15,13 @@ struct RootView: View {
             ZStack(alignment: .top) {
                 screen
                     .id(model.destination)
-                    .transition(.swftScreen(reduceMotion: reduceMotion))
+                    .swftEntrance(reduceMotion: reduceMotion)
+                // Animate the bar only when the kind of screen changes; between threads its text swaps with the screen.
                 TopBar()
+                    .animation(SwftMotion.resolve(SwftMotion.screenSwitch, reduceMotion: reduceMotion), value: model.selectedThreadID == nil)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(SwftColor.canvas)
-            .animation(SwftMotion.resolve(SwftMotion.screen, reduceMotion: reduceMotion), value: model.destination)
         }
         .animation(SwftMotion.resolve(SwftMotion.screen, reduceMotion: reduceMotion), value: model.sidebarVisible)
         .background(SwftColor.sidebar)

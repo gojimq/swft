@@ -53,26 +53,45 @@ enum MockData {
         ComposerState(model: models[0], selectedReasoningChoiceId: "high", availableModels: models, contextLabel: context)
     }
 
+    private static func at(_ seconds: Double) -> Date { ago(30).addingTimeInterval(seconds) }
+
+    /// A settled turn (its work folds to "Worked for 14s") followed by a live one.
     static let threadDetail = ThreadDetailState(
         summary: threads[0],
         items: [
-            .init(id: "i1", kind: .user("Add a pill-shaped composer to the home screen with a model picker and a circular send button. Keep it quiet — no heavy shadows.")),
-            .init(id: "i2", kind: .assistant(blocks: [
-                .text("I’ll start by looking at how the design tokens are organised, then add a `PillComposer` component to **SwftDesign** so both the home and thread screens can share it."),
-            ], streaming: false)),
-            .init(id: "i3", kind: .toolCall(.init(kind: .search, title: "Searched", detail: "\"RoundedRectangle\" in Sources/SwftDesign", status: .succeeded, duration: 0.4, output: nil))),
-            .init(id: "i4", kind: .toolCall(.init(kind: .read, title: "Read", detail: "Sources/SwftDesign/Tokens/Metrics.swift", status: .succeeded, duration: 0.1, output: "public enum SwftRadius {\n    public static let s: CGFloat = 8\n    public static let m: CGFloat = 12\n    public static let composer: CGFloat = 28\n}"))),
-            .init(id: "i5", kind: .toolCall(.init(kind: .command, title: "Ran", detail: "swift build", status: .succeeded, duration: 7.4, output: "Building for debugging...\n[12/12] Compiling SwftDesign Composer.swift\nBuild complete! (7.41s)"))),
-            .init(id: "i6", kind: .assistant(blocks: [
+            .init(id: "i1", kind: .user("Add a pill-shaped composer to the home screen with a model picker and a circular send button. Keep it quiet — no heavy shadows."), startedAt: at(0)),
+            .init(id: "i2", kind: .toolCall(.init(kind: .thinking, title: "Thought", detail: "The composer should live in SwftDesign so home and thread share it.", status: .succeeded, duration: 1.8, output: "The composer should live in SwftDesign so home and thread share it. Check the radius tokens first.")), startedAt: at(1), completedAt: at(2.8)),
+            .init(id: "i3", kind: .assistant(blocks: [
+                .text("I’ll start by looking at how the design tokens are organised, then add a `PillComposer` component to **SwftDesign**."),
+            ], streaming: false), startedAt: at(3), completedAt: at(3.5)),
+            .init(id: "i4", kind: .toolCall(.init(kind: .search, title: "Searched", detail: "RoundedRectangle", status: .succeeded, duration: 0.4, output: nil)), startedAt: at(4), completedAt: at(4.4)),
+            .init(id: "i5", kind: .toolCall(.init(kind: .read, title: "Read", detail: "Sources/SwftDesign/Tokens/Metrics.swift", status: .succeeded, duration: 0.1, output: "public enum SwftRadius {\n    public static let s: CGFloat = 8\n    public static let m: CGFloat = 12\n    public static let composer: CGFloat = 28\n}")), startedAt: at(4.5), completedAt: at(4.6)),
+            .init(id: "i6", kind: .toolCall(.init(kind: .read, title: "Read", detail: "Sources/SwftDesign/Components/Primitives.swift", status: .succeeded, duration: 0.1, output: nil)), startedAt: at(4.7), completedAt: at(4.8)),
+            .init(id: "i7", kind: .toolCall(.init(kind: .command, title: "Ran", detail: "swift build", status: .succeeded, duration: 7.4, output: "Building for debugging...\n[12/12] Compiling SwftDesign Composer.swift\nBuild complete! (7.41s)")), startedAt: at(5), completedAt: at(12.4)),
+            .init(id: "i8", kind: .notice(title: "MCP server plugin:finance:slack needs a sign-in", message: "The plugin:finance:slack MCP server needs a sign-in before Claude can use it.", isError: false), startedAt: at(12.5)),
+            .init(id: "i9", kind: .assistant(blocks: [
                 .text("The composer is in place. It stacks a multi-line field above a control row, and the send button only lights up once there’s text:"),
                 .code(language: "swift", source: "PillComposer(text: $draft, placeholder: \"Ask Swft\", onSend: send) {\n    ModelPicker(model: \"Opus 5.5\", effort: \"High\") { modelMenu }\n}"),
-                .text("## What changed\n- `PillComposer` lives in **SwftDesign**, shared by home and thread screens.\n- The send button stays quiet until there’s text, then springs to life.\n\nNext I want to clear the stale build products so the bundle picks up the new font resources."),
-            ], streaming: false)),
-            .init(id: "i7", kind: .approval(.init(requestId: "mock-req-1", title: "Run command?", message: "Claude wants to delete the build directory before re-bundling the app.", command: "rm -rf apps/macos/build && scripts/bundle.sh", status: .pending))),
-            .init(id: "i8", kind: .assistant(blocks: [
-                .text("While that’s pending, I’m checking the dark-mode contrast of the composer border against the canvas"),
-            ], streaming: true)),
+                .text("## What changed\n- `PillComposer` lives in **SwftDesign**, shared by home and thread screens.\n- The send button stays quiet until there’s text, then springs to life."),
+            ], streaming: false), startedAt: at(12.6), completedAt: at(14.2)),
+            .init(id: "j1", kind: .user("Now check the dark-mode contrast of the composer border."), startedAt: at(60)),
+            .init(id: "j2", kind: .toolCall(.init(kind: .thinking, title: "Thought", detail: "Compare the border token against the dark canvas.", status: .succeeded, duration: 1.1, output: "Compare the border token against the dark canvas.")), startedAt: at(61), completedAt: at(62)),
+            .init(id: "j3", kind: .toolCall(.init(kind: .read, title: "Read", detail: "Sources/SwftDesign/Tokens/Colors.swift", status: .succeeded, duration: 0.1, output: nil)), startedAt: at(62), completedAt: at(62.1)),
+            .init(id: "j4", kind: .toolCall(.init(kind: .command, title: "Running", detail: "swift test --filter Contrast", status: .running, duration: nil, output: nil)), startedAt: at(63)),
         ],
-        diffStat: "+142 −38"
+        diffStat: "+142 −38",
+        isRunning: true
+    )
+
+    /// A live turn paused on an approval.
+    static let approvalDetail = ThreadDetailState(
+        summary: threads[1],
+        items: [
+            .init(id: "k1", kind: .user("Clear the stale build products and re-bundle the app."), startedAt: at(0)),
+            .init(id: "k2", kind: .toolCall(.init(kind: .read, title: "Read", detail: "scripts/bundle.sh", status: .succeeded, duration: 0.1, output: nil)), startedAt: at(1), completedAt: at(1.1)),
+            .init(id: "k3", kind: .approval(.init(requestId: "mock-req-1", title: "Run command?", message: "Delete the build directory before re-bundling the app.", command: "rm -rf apps/macos/build && scripts/bundle.sh", status: .pending)), startedAt: at(2)),
+        ],
+        diffStat: nil,
+        isRunning: true
     )
 }
