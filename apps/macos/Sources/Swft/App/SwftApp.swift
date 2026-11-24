@@ -26,6 +26,10 @@ struct SwftApp: App {
         .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 1360, height: 860)
         .commands {
+            CommandGroup(replacing: .appSettings) {
+                Button("Settings…") { model.openSettings() }
+                    .keyboardShortcut(",")
+            }
             CommandGroup(replacing: .newItem) {
                 Button("New Thread") { model.goHome() }
                     .keyboardShortcut("n")
@@ -51,7 +55,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         switch UserDefaults.standard.string(forKey: "SwftAppearance") {
         case "dark": NSApp.appearance = NSAppearance(named: .darkAqua)
         case "light": NSApp.appearance = NSAppearance(named: .aqua)
-        default: break
+        default:
+            if let name = AppearancePreference.load().nsAppearanceName {
+                NSApp.appearance = NSAppearance(named: name)
+            }
         }
         NSApp.activate()
     }
