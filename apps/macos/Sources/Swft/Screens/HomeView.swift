@@ -78,6 +78,7 @@ struct ComposerView: View {
             onStop: model.stopActiveRun
         ) {
             if model.selectedThreadID == nil {
+                ComposerEnvironmentPicker()
                 projectPicker(contextLabel: composer.contextLabel)
             } else if let context = composer.contextLabel {
                 ComposerChip(context, systemName: "folder")

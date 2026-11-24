@@ -39,6 +39,8 @@ struct RootView: View {
             }
         case .projects:
             ProjectsView()
+        case .settings:
+            RemoteSettingsStandaloneHost() // REMOTE-MERGE-REMOVE: Settings agent owns `.settings` routing
         default:
             HomeView()
         }

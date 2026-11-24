@@ -27,6 +27,17 @@ final class AppModel {
     /// Work folds the reader has opened, by fold id (ids are unique per turn, so this spans threads).
     var expandedWorkFolds: Set<String> = []
 
+    // MARK: - Remote Environments
+
+    var selectedEnvironmentID: String?
+    var activeThreadEnvironmentID: String?
+    let environmentRegistry: EnvironmentRegistry
+    let tunnelController: CloudflareTunnelController
+    var mockEnvironments: [RemoteEnvironmentItem]?
+    var mockProjectsByEnvironment: [String: [ProjectRef]] = [:]
+    var mockModelsByEnvironment: [String: [ModelOption]] = [:]
+    var mockThreadsOverride: [ThreadSummary]?
+
     // MARK: - Mode & Live SwftKit Backing
 
     let isMock: Bool
@@ -77,6 +88,27 @@ final class AppModel {
         self.isMock = isMock
         self.now = now
         self.mockBacking = mockBacking
+        let baseDir = Self.resolveBaseDirectory()
+        if isMock {
+            self.environmentRegistry = EnvironmentRegistry(
+                credentialStore: InMemoryCredentialStore(),
+                recordStore: InMemoryEnvironmentRecordStore()
+            )
+            self.tunnelController = CloudflareTunnelController(
+                baseDirectory: FileManager.default.temporaryDirectory
+                    .appendingPathComponent("swft-mock-tunnel", isDirectory: true),
+                localPort: 3773,
+                resolveBinary: { nil }
+            )
+        } else {
+            self.environmentRegistry = EnvironmentRegistry(
+                credentialStore: KeychainCredentialStore(
+                    service: KeychainCredentialStore.serviceName(forBaseDirectory: baseDir)
+                ),
+                recordStore: FileEnvironmentRecordStore(baseDirectory: baseDir)
+            )
+            self.tunnelController = CloudflareTunnelController(baseDirectory: baseDir)
+        }
     }
 
     static func makeForLaunch() -> AppModel {
@@ -150,6 +182,7 @@ final class AppModel {
         startClockTick()
         startVisitObservation()
         connectToLocalServer()
+        startRemoteConnections()
     }
 
     func retryConnection() {
@@ -162,10 +195,10 @@ final class AppModel {
     }
 
     func refreshProviders() {
-        guard !isMock, let threadsStore else { return }
+        guard !isMock, let store = resolvedActiveStore(localStore: threadsStore) else { return }
         Task {
             do {
-                _ = try await threadsStore.refreshProviders(fresh: true)
+                _ = try await store.refreshProviders(fresh: true)
             } catch {
                 self.actionError = error.localizedDescription
             }
@@ -186,6 +219,8 @@ final class AppModel {
         threadsStore?.stop()
         threadsStore = nil
 
+        await shutdownRemoteConnections()
+
         if let connection {
             await connection.disconnect()
         }
@@ -198,6 +233,7 @@ final class AppModel {
     }
 
     func terminateServerImmediately() {
+        tunnelController.terminateImmediately()
         serverProcess?.terminateImmediately()
     }
 
@@ -213,6 +249,7 @@ final class AppModel {
         activeThreadStore = nil
         threadsStore?.stop()
         threadsStore = nil
+        await unregisterLocalEnvironment()
         if let connection {
             await connection.disconnect()
         }
@@ -266,6 +303,7 @@ final class AppModel {
         self.connection = conn
         self.threadsStore = store
         self.launchPhase = .running
+        registerLocalEnvironment(endpoint: endpoint, connection: conn, store: store)
 
         store.start()
         do {
@@ -278,7 +316,8 @@ final class AppModel {
 
         // If the user already navigated to a thread before connect finished, attach its store now.
         if case .thread(let id) = destination, activeThreadStore?.threadId != id {
-            attachThreadStore(for: id, initialProjection: nil)
+            let ownerConn = owningEnvironment(forThreadID: id)?.connection ?? conn
+            attachThreadStore(for: id, on: ownerConn, initialProjection: nil)
         }
     }
 
@@ -332,12 +371,18 @@ final class AppModel {
 
     var projects: [ProjectRef] {
         if let mockBacking {
-            return mockBacking.projects
+            return resolvedMockProjects(defaultProjects: mockBacking.projects)
         }
-        guard let threadsStore else { return [] }
-        return threadsStore.projects
+        guard let store = resolvedComposerStore(localStore: threadsStore) else { return [] }
+        let envID = activeComposerEnvironmentID ?? store.environment?.environmentId
+        return store.projects
             .filter { $0.archivedAt == nil }
-            .map(SwftAdapters.projectRef(from:))
+            .map { project in
+                if let envID {
+                    return SwftAdapters.projectRef(from: project, environmentID: envID)
+                }
+                return SwftAdapters.projectRef(from: project)
+            }
     }
 
     var selectedProject: ProjectRef? {
@@ -350,18 +395,21 @@ final class AppModel {
 
     var availableModels: [ModelOption] {
         if let mockBacking {
-            return mockBacking.models
+            return resolvedMockModels(defaultModels: mockBacking.models)
         }
-        guard let threadsStore else { return [] }
-        return SwftAdapters.modelOptions(from: threadsStore.providers)
+        guard let store = resolvedActiveStore(localStore: threadsStore) else { return [] }
+        return SwftAdapters.modelOptions(from: store.providers)
     }
 
     var pickerCatalog: PickerCatalog {
         if let mockBacking {
-            return PickerCatalog(harnesses: mockBacking.harnesses, models: mockBacking.models)
+            return PickerCatalog(
+                harnesses: mockBacking.harnesses,
+                models: resolvedMockModels(defaultModels: mockBacking.models)
+            )
         }
-        guard let threadsStore else { return .empty }
-        return SwftAdapters.pickerCatalog(from: threadsStore.providers)
+        guard let store = resolvedActiveStore(localStore: threadsStore) else { return .empty }
+        return SwftAdapters.pickerCatalog(from: store.providers)
     }
 
     var selectedModel: ModelOption? {
@@ -369,18 +417,19 @@ final class AppModel {
         if let selectedModelID, let match = options.first(where: { $0.id == selectedModelID }) {
             return match
         }
+        let activeStore = resolvedActiveStore(localStore: threadsStore)
         if !isMock,
            let thread = activeThreadStore?.thread,
-           let threadsStore
+           let activeStore
         {
-            let providersByID = Dictionary(uniqueKeysWithValues: threadsStore.providers.map { ($0.instanceId, $0) })
+            let providersByID = Dictionary(uniqueKeysWithValues: activeStore.providers.map { ($0.instanceId, $0) })
             return options.first(where: {
                 $0.instanceId == thread.modelSelection.instanceId && $0.slug == thread.modelSelection.model
             }) ?? SwftAdapters.fallbackModelOption(for: thread.modelSelection, providersByID: providersByID)
         }
         let projectDefault: ModelSelection?
         if let projectID = selectedProject?.id {
-            projectDefault = threadsStore?.projectsByID[projectID]?.defaultModelSelection
+            projectDefault = resolvedComposerStore(localStore: threadsStore)?.projectsByID[projectID]?.defaultModelSelection
         } else {
             projectDefault = nil
         }
@@ -404,22 +453,10 @@ final class AppModel {
 
     var sidebar: SidebarState {
         if let mockBacking {
-            return SidebarState(threads: mockBacking.threads, filter: filter, account: mockBacking.account)
+            let threads = mockThreadsOverride ?? mockBacking.threads
+            return SidebarState(threads: threads, filter: filter, account: mockBacking.account)
         }
-        let hostName = threadsStore?.environment?.label ?? threadsStore?.hostname
-        let projectsByID = threadsStore?.projectsByID ?? [:]
-        let providersByID = Dictionary(
-            uniqueKeysWithValues: (threadsStore?.providers ?? []).map { ($0.instanceId, $0) }
-        )
-        let threads = (threadsStore?.listedThreads ?? []).map { shell in
-            SwftAdapters.threadSummary(
-                from: shell,
-                projectsByID: projectsByID,
-                providersByID: providersByID,
-                hostName: hostName,
-                activelyViewingThreadID: selectedThreadID
-            )
-        }
+        let threads = aggregatedSidebarThreads(fallbackLocalStore: threadsStore)
         return SidebarState(threads: threads, filter: filter, account: liveAccountSummary)
     }
 
@@ -446,7 +483,7 @@ final class AppModel {
                 contextLabel = nil
             }
         } else if let mockBacking {
-            contextLabel = mockBacking.defaultContextLabel
+            contextLabel = mockEnvironments != nil ? selectedProject?.name : mockBacking.defaultContextLabel
         } else {
             contextLabel = selectedProject?.name
         }
@@ -489,7 +526,7 @@ final class AppModel {
 
     var readyProviderNames: [String] {
         if isMock { return ["Claude", "Codex", "Cursor"] }
-        return (threadsStore?.providers ?? [])
+        return (resolvedActiveStore(localStore: threadsStore)?.providers ?? [])
             .filter { $0.enabled && $0.installed && $0.status != .disabled }
             .map(\.label)
     }
@@ -503,10 +540,19 @@ final class AppModel {
            activeThreadStore.threadId == id,
            let thread = activeThreadStore.thread
         {
-            let project = threadsStore?.projectsByID[thread.projectId].map(SwftAdapters.projectRef(from:))
-            let provider = threadsStore?.provider(for: thread.providerInstanceId)
+            let owner = owningEnvironment(forThreadID: id)
+            let store = owner?.threadsStore ?? threadsStore
+            let project = store?.projectsByID[thread.projectId].map(SwftAdapters.projectRef(from:))
+            let provider = store?.provider(for: thread.providerInstanceId)
+            let hostLabel = owner?.displayLabel ?? store?.environment?.label ?? store?.hostname
             let location: ThreadLocation? = thread.branch.flatMap { $0.isEmpty ? nil : .branch($0) }
-                ?? (threadsStore?.environment?.label ?? threadsStore?.hostname).map { .host($0) }
+                ?? hostLabel.map { .host($0) }
+            let showEnv = owner.map {
+                RemoteLogic.shouldShowEnvironmentDisambiguation(
+                    environmentCount: environmentRegistry.entries.count,
+                    isRemote: !$0.isLocal
+                )
+            } ?? false
             return ThreadSummary(
                 id: thread.id,
                 title: thread.title,
@@ -518,7 +564,11 @@ final class AppModel {
                 ),
                 providerDisplayName: provider?.label,
                 activity: activeThreadStore.isRunning ? .running : .idle,
-                updatedAt: thread.updatedAt
+                updatedAt: thread.updatedAt,
+                environmentID: owner?.id,
+                environmentLabel: showEnv ? hostLabel : nil,
+                isRemoteEnvironment: owner.map { !$0.isLocal } ?? false,
+                environmentMachineSymbol: owner.map { RemoteLogic.machineSymbol(for: $0.machineKind) }
             )
         }
         return nil
@@ -555,6 +605,7 @@ final class AppModel {
 
     func goHome() {
         destination = .home
+        activeThreadEnvironmentID = nil
         detachActiveThread()
     }
 
@@ -563,6 +614,11 @@ final class AppModel {
         actionError = nil
 
         if isMock {
+            if let index = mockThreadsOverride?.firstIndex(where: { $0.id == id }),
+               mockThreadsOverride?[index].activity == .unread
+            {
+                mockThreadsOverride?[index].activity = .idle
+            }
             if let index = mockBacking?.threads.firstIndex(where: { $0.id == id }),
                mockBacking?.threads[index].activity == .unread
             {
@@ -571,10 +627,13 @@ final class AppModel {
             return
         }
 
-        if let shell = threadsStore?.threads.first(where: { $0.id == id }) {
-            syncComposerModel(to: shell.modelSelection)
+        let owner = owningEnvironment(forThreadID: id)
+        activeThreadEnvironmentID = owner?.id
+        let ownerStore = owner?.threadsStore ?? threadsStore
+        if let shell = ownerStore?.threads.first(where: { $0.id == id }) {
+            syncComposerModel(to: shell.modelSelection, in: ownerStore)
         }
-        attachThreadStore(for: id, initialProjection: nil)
+        attachThreadStore(for: id, on: owner?.connection ?? connection, initialProjection: nil)
         visitPolicy.selectThread(id)
         visitTimerTask?.cancel()
         visitTimerTask = nil
@@ -593,9 +652,9 @@ final class AppModel {
         selectedProjectID = id
         actionError = nil
         if !isMock,
-           let projectDefault = threadsStore?.projectsByID[id]?.defaultModelSelection
+           let projectDefault = resolvedComposerStore(localStore: threadsStore)?.projectsByID[id]?.defaultModelSelection
         {
-            syncComposerModel(to: projectDefault)
+            syncComposerModel(to: projectDefault, in: resolvedComposerStore(localStore: threadsStore))
         }
     }
 
@@ -670,6 +729,9 @@ final class AppModel {
     }
 
     func pickAndAddProject() {
+        if pickAndAddProjectForActiveEnvironment() {
+            return
+        }
         let panel = NSOpenPanel()
         panel.title = "Add Project"
         panel.prompt = "Add Project"
@@ -690,19 +752,26 @@ final class AppModel {
                 name: title,
                 initials: SwftAdapters.deriveInitials(from: title),
                 tint: SwftAdapters.stableTintIndex(for: url.path),
-                workspaceRoot: url.path
+                workspaceRoot: url.path,
+                environmentID: activeComposerEnvironmentID
             )
-            mockBacking?.projects.append(ref)
+            if let envID = activeComposerEnvironmentID, mockProjectsByEnvironment[envID] != nil {
+                mockProjectsByEnvironment[envID]?.append(ref)
+            } else {
+                mockBacking?.projects.append(ref)
+            }
             selectedProjectID = ref.id
             return
         }
 
-        guard let threadsStore, serverStatus.isConnected else {
-            actionError = "Connect to the local server before adding a project."
+        guard let targetStore = resolvedComposerStore(localStore: threadsStore),
+              isTargetEnvironmentConnected(localConnected: serverStatus.isConnected)
+        else {
+            actionError = "Connect to the target server before adding a project."
             return
         }
         do {
-            let created = try await threadsStore.createProject(title: title, workspaceRoot: url.path)
+            let created = try await targetStore.createProject(title: title, workspaceRoot: url.path)
             selectedProjectID = created.id
             actionError = nil
         } catch {
@@ -724,8 +793,11 @@ final class AppModel {
             return
         }
 
-        guard serverStatus.isConnected, let threadsStore else {
-            actionError = "Local server is not connected yet."
+        guard isTargetEnvironmentConnected(localConnected: serverStatus.isConnected),
+              let targetStore = resolvedActiveStore(localStore: threadsStore)
+        else {
+            let targetName = activeComposerEnvironment?.label ?? "Server"
+            actionError = "\(targetName) is not connected yet."
             return
         }
 
@@ -751,7 +823,7 @@ final class AppModel {
             return
         }
 
-        // Home composer: create a new thread in the selected project and send the first message.
+        // Home composer: create a new thread in the selected project on the target environment.
         guard let project = selectedProject else {
             actionError = "Select or add a project first to start a thread."
             return
@@ -761,11 +833,15 @@ final class AppModel {
             return
         }
 
+        let targetEnv = activeComposerEnvironmentID.flatMap { environmentRegistry.environment(id: $0) }
+        let launchStore = targetEnv?.threadsStore ?? targetStore
+        let launchConnection = targetEnv?.connection ?? connection
+
         let modelSelection = SwftAdapters.modelSelection(
             from: modelOption,
             reasoningChoiceId: selectedReasoningChoice?.id
         )
-        let provider = threadsStore.provider(for: modelOption.instanceId)
+        let provider = launchStore.provider(for: modelOption.instanceId)
         let runtimeMode = Self.resolveRuntimeMode(for: provider)
         let initialTitle = Self.initialThreadTitle(from: text)
 
@@ -785,9 +861,14 @@ final class AppModel {
                     workspaceStrategy: .root(),
                     initialMessage: LaunchThreadInitialMessage(text: text)
                 )
-                let result = try await threadsStore.launchThread(input)
+                let result = try await launchStore.launchThread(input)
+                self.activeThreadEnvironmentID = targetEnv?.id
                 self.destination = .thread(result.threadId)
-                self.attachThreadStore(for: result.threadId, initialProjection: result.projection)
+                self.attachThreadStore(
+                    for: result.threadId,
+                    on: launchConnection,
+                    initialProjection: result.projection
+                )
                 self.visitPolicy.selectThread(result.threadId)
                 self.visitTimerTask?.cancel()
                 self.visitTimerTask = nil
@@ -820,7 +901,8 @@ final class AppModel {
             }
             return false
         }
-        let canForceStop = threadsStore?.environment?.capabilities.threadForceStop == true
+        let ownerStore = owningEnvironment(forThreadID: threadStore.threadId)?.threadsStore ?? threadsStore
+        let canForceStop = ownerStore?.environment?.capabilities.threadForceStop == true
 
         Task {
             do {
@@ -893,11 +975,22 @@ final class AppModel {
         case .failed:
             detail = "Server offline · Click to retry"
         }
-        return AccountSummary(name: Self.localUserFullName(), detail: detail)
+        return AccountSummary(
+            name: Self.localUserFullName(),
+            detail: remoteAwareAccountDetail(defaultDetail: detail)
+        )
     }
 
-    private func attachThreadStore(for threadID: String, initialProjection: ThreadProjection?) {
-        if activeThreadStore?.threadId == threadID {
+    private func attachThreadStore(
+        for threadID: String,
+        on targetConnection: ServerConnection? = nil,
+        initialProjection: ThreadProjection?
+    ) {
+        let resolvedConnection = targetConnection ?? connection
+        if activeThreadStore?.threadId == threadID,
+           let resolvedConnection,
+           activeThreadStore?.connection === resolvedConnection
+        {
             return
         }
         if let previous = activeThreadStore {
@@ -905,14 +998,14 @@ final class AppModel {
             recentProjections.remember(previous.projection)
         }
         optimisticApprovals.removeAll()
-        guard let connection else {
+        guard let resolvedConnection else {
             activeThreadStore = nil
             return
         }
         // Start from the last projection seen for this thread so a revisit shows its transcript at once; the
         // subscription's snapshot replaces it moments later.
         let store = ThreadStore(
-            connection: connection,
+            connection: resolvedConnection,
             threadId: threadID,
             initialProjection: initialProjection ?? recentProjections.projection(for: threadID)
         )
@@ -930,13 +1023,13 @@ final class AppModel {
         visitTimerTask = nil
     }
 
-    private func syncComposerModel(to selection: ModelSelection) {
+    private func syncComposerModel(to selection: ModelSelection, in storeOverride: ThreadsStore? = nil) {
         let targetID = SwftAdapters.modelOptionID(instanceId: selection.instanceId, slug: selection.model)
         if let option = availableModels.first(where: { $0.id == targetID }) {
             selectedModelID = option.id
             selectedReasoningChoiceId = SwftAdapters.reasoningChoiceId(from: selection, for: option)
-        } else if let threadsStore {
-            let providersByID = Dictionary(uniqueKeysWithValues: threadsStore.providers.map { ($0.instanceId, $0) })
+        } else if let store = storeOverride ?? resolvedActiveStore(localStore: threadsStore) {
+            let providersByID = Dictionary(uniqueKeysWithValues: store.providers.map { ($0.instanceId, $0) })
             let fallback = SwftAdapters.fallbackModelOption(for: selection, providersByID: providersByID)
             selectedModelID = fallback.id
             selectedReasoningChoiceId = SwftAdapters.reasoningChoiceId(from: selection, for: fallback)
@@ -976,12 +1069,12 @@ final class AppModel {
 
     private func evaluateActiveThreadVisit() {
         guard let threadID = selectedThreadID,
-              let threadsStore,
-              threadsStore.connectionState.isConnected,
-              let shell = threadsStore.threads.first(where: { $0.id == threadID })
+              let ownerStore = owningEnvironment(forThreadID: threadID)?.threadsStore ?? threadsStore,
+              ownerStore.connectionState.isConnected,
+              let shell = ownerStore.threads.first(where: { $0.id == threadID })
         else { return }
 
-        if threadsStore.environment?.capabilities.threadVisitedTracking == false {
+        if ownerStore.environment?.capabilities.threadVisitedTracking == false {
             return
         }
 
@@ -999,7 +1092,7 @@ final class AppModel {
             visitTimerTask?.cancel()
             visitTimerTask = nil
             Task {
-                try? await threadsStore.markVisited(
+                try? await ownerStore.markVisited(
                     threadId: threadID,
                     visitedAt: visitedAt,
                     opened: opened
@@ -1012,7 +1105,7 @@ final class AppModel {
                 guard !Task.isCancelled, let self else { return }
                 self.visitTimerTask = nil
                 guard self.selectedThreadID == threadID,
-                      let store = self.threadsStore,
+                      let store = self.owningEnvironment(forThreadID: threadID)?.threadsStore ?? self.threadsStore,
                       store.connectionState.isConnected,
                       let latestShell = store.threads.first(where: { $0.id == threadID })
                 else { return }

@@ -129,6 +129,21 @@ public actor ServerConnection {
     public var state: ConnectionState { currentState }
     public var environment: ExecutionEnvironmentDescriptor? { environmentDescriptor }
 
+    /// Returns the active bearer access token for HTTP endpoints (e.g. minting pairing invites),
+    /// reusing the session's cached token so desktop-bootstrap sessions are never replaced mid-flight.
+    public func currentAccessToken() async throws -> String {
+        if let existing = cachedAccessToken {
+            return existing
+        }
+        let token = try await authClient.resolveAccessToken(
+            baseURL: httpBaseURL,
+            credential: credential,
+            clientLabel: clientLabel
+        )
+        cachedAccessToken = token
+        return token
+    }
+
     /// Stream of connection state updates; yields the current state immediately on subscribe.
     public func stateUpdates() -> AsyncStream<ConnectionState> {
         let id = UUID()
@@ -538,6 +553,14 @@ public actor ServerConnection {
                     _ = try await self.openAuthenticatedSocket()
                     return
                 } catch {
+                    if case RPCError.authenticationFailed = error {
+                        await self.transition(to: .failed(error.localizedDescription))
+                        return
+                    }
+                    if case RPCError.incompatibleProtocol = error {
+                        await self.transition(to: .failed(error.localizedDescription))
+                        return
+                    }
                     reason = error.localizedDescription
                     attempt += 1
                 }
