@@ -32,6 +32,20 @@ The sidebar thread list is NOT plain titles: it follows the thread-inbox layout 
 (project chip + name, relative time, bold thread title, branch/host subtitle, provider glyph, status icons, highlighted
 active/unread rows) restyled in the Gemini visual language.
 
+## Font
+
+`Sources/SwftDesign/Resources/Fonts/GoogleSansFlex.ttf` is the variable Google Sans Flex from google/fonts
+(`ofl/googlesansflex`), licensed under the SIL Open Font License 1.1 (`OFL.txt` alongside it). It is registered
+per-process at launch (`SwftFonts.register()`); every type token falls back to the system font if that fails.
+
+## UI state and screenshots
+
+Screens render plain value types from `Sources/Swft/ViewState`, seeded today by `Sources/Swft/Preview/MockData.swift`
+through `AppModel`. Wiring real data means filling those types from SwftKit, not changing the views.
+
+Launch flags (handy for screenshots): `-SwftScreen thread` opens the sample thread, `-SwftAppearance light|dark`
+pins the appearance. Current captures live in `docs/screens/`.
+
 ## Safety
 
 Never start a dev server against `~/.t3/userdata` (the user's live install). Use a temp `T3CODE_HOME`/base dir.
