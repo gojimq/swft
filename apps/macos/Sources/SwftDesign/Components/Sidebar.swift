@@ -159,6 +159,7 @@ public struct ThreadInboxRow: View {
                     .font(emphasized ? SwftType.rowTitle : SwftType.rowTitleRead)
                     .foregroundStyle(SwftColor.textPrimary)
                     .lineLimit(1)
+                    .swftTitleSwap(model.title)
                 HStack(spacing: 5) {
                     if let location = model.location {
                         Image(systemName: model.locationSymbol)

@@ -33,6 +33,8 @@ final class AppModel {
     let settings = SettingsController()
     /// Hook invoked when the model picker's signed-out action deep-links to provider settings.
     var openProviderSettingsAction: ((String) -> Void)?
+    /// Home → new thread staging (composer docking, hand-off); see `Motion/NewThread`.
+    let newThread = NewThreadLauncher()
 
     // MARK: - Mode & Live SwftKit Backing
 
@@ -573,11 +575,13 @@ final class AppModel {
     // MARK: - Actions
 
     func goHome() {
+        newThread.cancel()
         destination = .home
         detachActiveThread()
     }
 
     func open(_ id: ThreadSummary.ID) {
+        newThread.cancel()
         destination = .thread(id)
         actionError = nil
 
@@ -738,14 +742,11 @@ final class AppModel {
         guard !text.isEmpty else { return }
 
         if isMock {
-            composerText = ""
-            if selectedThreadID == nil && selectedProject == nil {
-                let created = makeMockNoProjectThread(text: text)
-                mockBacking?.threads.insert(created.summary, at: 0)
-                mockBacking?.details[created.summary.id] = created
-                destination = .thread(created.summary.id)
+            if selectedThreadID == nil {
+                launchMockThread(text: text)
                 return
             }
+            composerText = ""
             let id = selectedThreadID ?? MockData.threadDetail.summary.id
             var existing = detail(for: id) ?? MockData.threadDetail
             existing.items.append(TranscriptItem(id: UUID().uuidString, kind: .user(text)))
@@ -803,6 +804,7 @@ final class AppModel {
         composerText = ""
         actionError = nil
         isSubmitting = true
+        let launchToken = newThread.begin(text: text)
 
         Task {
             do {
@@ -818,6 +820,11 @@ final class AppModel {
                     initialMessage: LaunchThreadInitialMessage(text: text)
                 )
                 let result = try await threadsStore.launchThread(input)
+                // Wait for Home's composer to dock; if the user moved on meanwhile, leave them where they are.
+                guard await self.newThread.awaitHandoff(token: launchToken, threadID: result.threadId) else {
+                    self.isSubmitting = false
+                    return
+                }
                 self.destination = .thread(result.threadId)
                 self.attachThreadStore(for: result.threadId, initialProjection: result.projection)
                 self.visitPolicy.selectThread(result.threadId)
@@ -825,11 +832,54 @@ final class AppModel {
                 self.visitTimerTask = nil
                 self.evaluateActiveThreadVisit()
             } catch {
+                self.newThread.fail(token: launchToken)
                 if self.composerText.isEmpty { self.composerText = text }
                 self.actionError = error.localizedDescription
             }
             self.isSubmitting = false
         }
+    }
+
+    /// Mock Home send: a new thread row lands in the inbox, Home hands off once the composer docks, and a "generated"
+    /// title replaces the first-message title a moment later (as the server's title generation would).
+    private func launchMockThread(text: String) {
+        guard mockBacking != nil else { return }
+        composerText = ""
+        let created: ThreadDetailState
+        if selectedProject == nil {
+            created = makeMockNoProjectThread(text: text)
+        } else {
+            let summary = ThreadSummary(
+                id: "mock-\(UUID().uuidString.prefix(8))",
+                title: Self.initialThreadTitle(from: text),
+                project: selectedProject,
+                location: .branch("main"),
+                provider: selectedModel?.provider ?? .claude,
+                providerDisplayName: selectedModel?.providerDisplayName,
+                activity: .idle,
+                updatedAt: now
+            )
+            created = ThreadDetailState(summary: summary, items: [TranscriptItem(id: UUID().uuidString, kind: .user(text))], diffStat: nil)
+        }
+        let id = created.summary.id
+        mockBacking?.threads.insert(created.summary, at: 0)
+        mockBacking?.details[id] = created
+        let token = newThread.begin(text: text)
+        Task {
+            guard await self.newThread.awaitHandoff(token: token, threadID: id) else { return }
+            self.destination = .thread(id)
+        }
+        Task {
+            try? await Task.sleep(for: .seconds(1.6))
+            self.renameMockThread(id, to: MockData.generatedTitle(for: text))
+        }
+    }
+
+    /// Mock stand-in for a server-generated title arriving.
+    func renameMockThread(_ id: ThreadSummary.ID, to title: String) {
+        guard let index = mockBacking?.threads.firstIndex(where: { $0.id == id }) else { return }
+        mockBacking?.threads[index].title = title
+        mockBacking?.details[id]?.summary.title = title
     }
 
     func stopActiveRun() {

@@ -16,6 +16,7 @@ struct RootView: View {
                 screen
                     .id(model.destination)
                     .swftEntrance(reduceMotion: reduceMotion)
+                    .environment(\.swftScreenHandoff, model.newThread.isHandoff(to: model.destination))
                 // Animate the bar only when the kind of screen changes; between threads its text swaps with the screen.
                 TopBar()
                     .animation(SwftMotion.resolve(SwftMotion.screenSwitch, reduceMotion: reduceMotion), value: model.selectedThreadID == nil)
@@ -68,6 +69,7 @@ struct TopBar: View {
                 VStack(alignment: .leading, spacing: 0) {
                     Text(summary.title).font(SwftType.labelStrong).foregroundStyle(SwftColor.textPrimary).lineLimit(1)
                         .contentTransition(.interpolate)
+                        .swftTitleSwap(summary.title, identity: id)
                     Text(summary.project?.name ?? "No project").font(SwftType.caption).foregroundStyle(SwftColor.textTertiary)
                 }
                 .padding(.leading, model.sidebarVisible ? 12 : 4)

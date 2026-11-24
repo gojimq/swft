@@ -3,11 +3,13 @@ import SwiftUI
 
 struct HomeView: View {
     @Environment(AppModel.self) private var model
+    @State private var docked = false
 
     var body: some View {
         @Bindable var model = model
         ZStack {
             GlowBackground()
+                .swftBloom(fading: docked)
             VStack(spacing: 0) {
                 Spacer(minLength: SwftLayout.titlebarHeight)
                 Text("Hi \(model.home.greetingName), what are we building?")
@@ -15,9 +17,12 @@ struct HomeView: View {
                     .foregroundStyle(SwftColor.textPrimary)
                     .multilineTextAlignment(.center)
                     .padding(.bottom, 28)
+                    .swftArrival(order: 0, departing: docked, departure: .up)
 
                 ComposerView(placeholder: "Ask Swft to build, fix or explain…", pickerOpensBelow: true)
                     .frame(maxWidth: SwftLayout.composerMaxWidth)
+                    .newThreadDock(docked)
+                    .swftArrival(order: 1, blur: 0)
                     // The model picker drops over the toggle and suggestions below.
                     .zIndex(1)
 
@@ -39,12 +44,14 @@ struct HomeView: View {
 
                 SegmentedToggle(selection: $model.composerMode, options: ComposerMode.allCases.map { ($0, $0.rawValue) })
                     .padding(.top, 14)
+                    .swftArrival(order: 2, departing: docked, departure: .down)
 
                 VStack(spacing: 8) {
                     ForEach(model.home.suggestions) { suggestion in
                         SuggestionRow(suggestion.text, systemName: suggestion.symbol) {
                             model.composerText = suggestion.text
                         }
+                        .swftArrival(order: 3 + (model.home.suggestions.firstIndex { $0.id == suggestion.id } ?? 0), departing: docked, departure: .down)
                     }
                 }
                 .frame(maxWidth: SwftLayout.composerMaxWidth - 16)
@@ -55,6 +62,7 @@ struct HomeView: View {
             }
             .padding(.horizontal, 32)
         }
+        .newThreadLaunchStage(docked: $docked)
     }
 }
 
