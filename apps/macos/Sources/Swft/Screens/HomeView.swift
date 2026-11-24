@@ -16,8 +16,10 @@ struct HomeView: View {
                     .multilineTextAlignment(.center)
                     .padding(.bottom, 28)
 
-                ComposerView(placeholder: "Ask Swft to build, fix or explain…")
+                ComposerView(placeholder: "Ask Swft to build, fix or explain…", pickerOpensBelow: true)
                     .frame(maxWidth: SwftLayout.composerMaxWidth)
+                    // The model picker drops over the toggle and suggestions below.
+                    .zIndex(1)
 
                 if case .failed(let message) = model.serverStatus {
                     ServerErrorBanner(
@@ -59,7 +61,11 @@ struct HomeView: View {
 /// The shared composer bound to the app's composer state.
 struct ComposerView: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let placeholder: String
+    /// Home has room below the composer; a thread's composer sits at the bottom, so its picker opens above.
+    var pickerOpensBelow = false
+    @State private var triggerFrame: CGRect = .zero
 
     var body: some View {
         @Bindable var model = model
@@ -77,7 +83,16 @@ struct ComposerView: View {
                 ComposerChip(context, systemName: "folder")
             }
         } trailing: {
-            modelPicker(composer: composer)
+            modelPickerTrigger(composer: composer)
+        }
+        .overlay(alignment: pickerOpensBelow ? .bottomTrailing : .topTrailing) {
+            if let session = model.modelPicker, let content = model.modelPickerContent {
+                ModelPickerPanel(session: session, content: content, triggerFrame: triggerFrame)
+                    .padding(pickerOpensBelow ? .top : .bottom, 8)
+                    // A zero-height anchor on the composer's edge; the panel overflows away from the composer.
+                    .frame(height: 0, alignment: pickerOpensBelow ? .top : .bottom)
+                    .transition(reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.94, anchor: pickerOpensBelow ? .topTrailing : .bottomTrailing)).combined(with: .offset(y: pickerOpensBelow ? -6 : 6)))
+            }
         }
     }
 
@@ -119,57 +134,41 @@ struct ComposerView: View {
     }
 
     @ViewBuilder
-    private func modelPicker(composer: ComposerState) -> some View {
-        let currentModel = composer.model
-        let modelLabel: String = {
-            if let currentModel { return currentModel.name }
+    private func modelPickerTrigger(composer: ComposerState) -> some View {
+        let current = composer.model
+        let label: String = {
+            if let current { return current.name }
             switch model.serverStatus {
             case .connected: return "No models"
             case .failed: return "Offline"
             case .starting, .connecting, .reconnecting: return "Connecting…"
             }
         }()
-
-        ModelPicker(model: modelLabel, effort: composer.selectedReasoningChoice?.label) {
-            if composer.availableModels.isEmpty {
-                switch model.serverStatus {
-                case .connected:
-                    Text("No models available")
-                case .failed:
-                    Text("Local server offline")
-                case .starting, .connecting, .reconnecting:
-                    Text("Waiting for server…")
-                }
-            } else {
-                let modelBinding = Binding<String>(
-                    get: { currentModel?.id ?? "" },
-                    set: { newID in
-                        if let picked = composer.availableModels.first(where: { $0.id == newID }) {
-                            model.selectModel(picked)
-                        }
-                    }
-                )
-                Picker("Model", selection: modelBinding) {
-                    ForEach(composer.availableModels) { option in
-                        Text("\(option.name) · \(option.providerDisplayName)").tag(option.id)
-                    }
-                }
-                .pickerStyle(.inline)
-            }
-
-            if let currentModel, !currentModel.reasoningChoices.isEmpty {
-                let reasoningBinding = Binding<String>(
-                    get: { composer.selectedReasoningChoice?.id ?? "" },
-                    set: { model.selectReasoningChoice($0) }
-                )
-                Picker(currentModel.reasoningOptionLabel ?? "Thinking", selection: reasoningBinding) {
-                    ForEach(currentModel.reasoningChoices) { choice in
-                        Text(choice.label).tag(choice.id)
-                    }
-                }
-                .pickerStyle(.inline)
+        let catalog = model.pickerCatalog
+        let harness = current.map { ModelPickerLogic.harness($0.instanceId, in: catalog) }
+        let mark = harness.map { harness in
+            PickerRailItem(id: harness.id, symbol: harness.kind.pickerSymbol, monogram: harness.label, tint: harness.kind.tint, accent: harness.accentColor, tooltip: harness.label, inUse: true)
+        }
+        let effort = (current?.reasoningChoices.count ?? 0) > 1 ? composer.selectedReasoningChoice?.label : nil
+        ModelPickerTrigger(
+            mark: mark,
+            disambiguator: harness.flatMap { ModelPickerLogic.disambiguator(of: $0, among: catalog.harnesses) },
+            model: label,
+            effort: effort,
+            isOpen: model.modelPicker != nil
+        ) {
+            withAnimation(SwftMotion.resolve(model.modelPicker == nil ? SwftMotion.pop : SwftMotion.standard, reduceMotion: reduceMotion)) {
+                model.toggleModelPicker()
             }
         }
+        .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) { triggerFrame = $0 }
+        .help("Model and thinking level")
+        .accessibilityLabel(accessibilityLabel(model: label, harness: harness, effort: effort))
+    }
+
+    private func accessibilityLabel(model name: String, harness: PickerHarness?, effort: String?) -> String {
+        let full = harness.map { "\(name) on \($0.label)" } ?? name
+        return effort.map { "Model: \(full), \($0) thinking" } ?? "Model: \(full)"
     }
 }
 

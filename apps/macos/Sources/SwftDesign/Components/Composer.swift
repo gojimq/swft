@@ -138,45 +138,6 @@ public struct ComposerChip: View {
     }
 }
 
-/// "Model  Effort" picker label (model in primary ink, effort in tertiary) that opens a menu.
-public struct ModelPicker<MenuContent: View>: View {
-    let model: String
-    let effort: String?
-    let menu: MenuContent
-
-    public init(model: String, effort: String?, @ViewBuilder menu: () -> MenuContent) {
-        self.model = model
-        self.effort = effort
-        self.menu = menu()
-    }
-
-    public var body: some View {
-        Menu {
-            menu
-        } label: {
-            HStack(spacing: 5) {
-                Text(model).foregroundStyle(SwftColor.textPrimary)
-                    .contentTransition(.interpolate)
-                if let effort {
-                    Text(effort).foregroundStyle(SwftColor.textTertiary)
-                        .contentTransition(.interpolate)
-                        .transition(.opacity.combined(with: .scale(scale: 0.8, anchor: .leading)))
-                }
-            }
-            .animation(SwftMotion.spring, value: model)
-            .animation(SwftMotion.spring, value: effort)
-            .font(SwftType.label)
-            .padding(.horizontal, 10)
-            .frame(height: 30)
-            .contentShape(Capsule())
-        }
-        .menuStyle(.button)
-        .buttonStyle(HoverFillStyle(shape: Capsule()))
-        .menuIndicator(.hidden)
-        .fixedSize()
-    }
-}
-
 /// Two-or-more segment capsule toggle (Chat / Task).
 public struct SegmentedToggle<Value: Hashable>: View {
     @Binding var selection: Value

@@ -10,7 +10,11 @@ import SwiftUI
 final class AppModel {
     // MARK: - Navigation & UI Controls
 
-    var destination: SidebarDestination = .home
+    var destination: SidebarDestination = .home {
+        didSet { if oldValue != destination { modelPicker = nil } }
+    }
+    /// The open model picker, or nil when it is closed.
+    var modelPicker: ModelPickerSession?
     var sidebarVisible = true
     var filter: ThreadFilter = .all
     var composerText = ""
@@ -60,6 +64,7 @@ final class AppModel {
         var account: AccountSummary
         var home: HomeState
         var models: [ModelOption]
+        var harnesses: [PickerHarness]
         var details: [ThreadSummary.ID: ThreadDetailState]
         var defaultContextLabel: String?
     }
@@ -92,6 +97,7 @@ final class AppModel {
             account: MockData.sidebar.account,
             home: MockData.home,
             models: MockData.models,
+            harnesses: MockData.harnesses,
             details: [MockData.threadDetail.summary.id: MockData.threadDetail, MockData.approvalDetail.summary.id: MockData.approvalDetail],
             defaultContextLabel: "Swft · main"
         )
@@ -102,6 +108,11 @@ final class AppModel {
         // `-SwftScreen thread` opens straight into the mock thread (used for screenshots).
         if UserDefaults.standard.string(forKey: "SwftScreen") == "thread" {
             model.destination = .thread(MockData.threadDetail.summary.id)
+        }
+        // `-SwftPicker open|<query>` opens the model picker (optionally searching), for screenshots.
+        if let picker = UserDefaults.standard.string(forKey: "SwftPicker") {
+            model.toggleModelPicker()
+            if picker != "open" { model.modelPicker?.setQuery(picker) }
         }
         return model
     }
@@ -343,6 +354,14 @@ final class AppModel {
         }
         guard let threadsStore else { return [] }
         return SwftAdapters.modelOptions(from: threadsStore.providers)
+    }
+
+    var pickerCatalog: PickerCatalog {
+        if let mockBacking {
+            return PickerCatalog(harnesses: mockBacking.harnesses, models: mockBacking.models)
+        }
+        guard let threadsStore else { return .empty }
+        return SwftAdapters.pickerCatalog(from: threadsStore.providers)
     }
 
     var selectedModel: ModelOption? {
@@ -589,6 +608,60 @@ final class AppModel {
             selectedReasoningChoiceId = option.defaultReasoningChoiceId ?? option.reasoningChoices.first?.id
         }
         syncSelectionToActiveThread()
+    }
+
+    // MARK: Model picker
+
+    var modelPickerContent: ModelPickerContent? {
+        guard let modelPicker else { return nil }
+        let current = selectedModel
+        return ModelPickerContent(
+            catalog: pickerCatalog,
+            session: modelPicker,
+            currentModel: current,
+            currentInstanceId: current?.instanceId,
+            offersPanelAction: true
+        )
+    }
+
+    func toggleModelPicker() {
+        if modelPicker == nil {
+            modelPicker = ModelPickerSession(catalog: pickerCatalog, currentInstanceId: selectedModel?.instanceId)
+        } else {
+            modelPicker = nil
+        }
+    }
+
+    func closeModelPicker() {
+        modelPicker = nil
+    }
+
+    func pickModel(_ option: ModelOption) {
+        selectModel(option)
+        modelPicker = nil
+    }
+
+    /// Swft has no provider settings screen yet; signing in happens in the provider's CLI, so the action re-checks.
+    func runPickerPanelAction(harnessID: String) {
+        refreshProviders()
+    }
+
+    /// Routes one key to the open picker. Returns false when the key isn't the picker's.
+    @discardableResult
+    func handleModelPickerKey(_ key: ModelPickerKey) -> Bool {
+        guard var session = modelPicker, let content = modelPickerContent else { return false }
+        guard let outcome = ModelPickerLogic.handle(key, session: &session, content: content, currentLevelID: selectedReasoningChoice?.id) else {
+            return false
+        }
+        modelPicker = session
+        switch outcome {
+        case .pick(let option): pickModel(option)
+        case .selectLevel(let id): selectReasoningChoice(id)
+        case .panelAction(let id): runPickerPanelAction(harnessID: id)
+        case .close: closeModelPicker()
+        case nil: break
+        }
+        return true
     }
 
     func selectReasoningChoice(_ choiceId: String) {

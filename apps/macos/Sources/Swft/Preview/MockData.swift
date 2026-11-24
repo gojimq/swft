@@ -42,12 +42,43 @@ enum MockData {
         .init(id: "max", label: "Max"),
     ]
 
-    static let models: [ModelOption] = [
-        .init(id: "claudeAgent::opus", instanceId: "claudeAgent", slug: "opus", name: "Opus 5.5", provider: .claude, reasoningOptionId: "effort", reasoningOptionLabel: "Thinking", reasoningChoices: reasoningChoices, defaultReasoningChoiceId: "high", isDefault: true),
-        .init(id: "claudeAgent::sonnet", instanceId: "claudeAgent", slug: "sonnet", name: "Sonnet 5.5", provider: .claude, reasoningOptionId: "effort", reasoningOptionLabel: "Thinking", reasoningChoices: reasoningChoices, defaultReasoningChoiceId: "medium"),
-        .init(id: "codex::gpt", instanceId: "codex", slug: "gpt", name: "GPT-6.1", provider: .codex, reasoningOptionId: "reasoningEffort", reasoningOptionLabel: "Thinking", reasoningChoices: reasoningChoices, defaultReasoningChoiceId: "high"),
-        .init(id: "cursor::composer", instanceId: "cursor", slug: "composer", name: "Composer 2", provider: .cursor),
+    static let claudeLevels: [ReasoningChoice] = [
+        .init(id: "low", label: "Low"),
+        .init(id: "medium", label: "Medium"),
+        .init(id: "high", label: "High"),
+        .init(id: "xhigh", label: "Extra high"),
+        .init(id: "max", label: "Max"),
     ]
+
+    /// Provider instances for the picker: a lone Claude, two Codex accounts (account switcher), Cursor without thinking
+    /// levels, OpenCode with sub-providers, and a signed-out Antigravity.
+    static let harnesses: [PickerHarness] = [
+        .init(id: "claudeAgent", driver: "claudeAgent", label: "Claude", kind: .claude, account: "Claude Max · jim@example.com"),
+        .init(id: "codex", driver: "codex", label: "Codex", kind: .codex, account: "ChatGPT Pro · jim@work.dev"),
+        .init(id: "codex_personal", driver: "codex", label: "Codex Personal", kind: .codex, accentHex: "#1e8e3e", account: "ChatGPT Plus · jim@example.com"),
+        .init(id: "cursor", driver: "cursor", label: "Cursor", kind: .cursor),
+        .init(id: "opencode", driver: "opencode", label: "OpenCode", kind: .opencode, subProviders: [
+            .init(name: "OpenRouter"),
+            .init(name: "Anthropic API", unavailableReason: "No API key"),
+        ]),
+        .init(id: "antigravity", driver: "antigravity", label: "Antigravity", kind: .gemini, unauthenticated: true, unavailableReason: "Not signed in"),
+    ]
+
+    static let models: [ModelOption] = [
+        .init(id: "claudeAgent::opus", instanceId: "claudeAgent", slug: "opus", name: "Opus 5.5", provider: .claude, providerDisplayName: "Claude", reasoningOptionId: "effort", reasoningOptionLabel: "Thinking", reasoningChoices: claudeLevels, defaultReasoningChoiceId: "high", isDefault: true),
+        .init(id: "claudeAgent::sonnet", instanceId: "claudeAgent", slug: "sonnet", name: "Sonnet 5.5", provider: .claude, providerDisplayName: "Claude", reasoningOptionId: "effort", reasoningOptionLabel: "Thinking", reasoningChoices: claudeLevels, defaultReasoningChoiceId: "medium"),
+        .init(id: "claudeAgent::haiku", instanceId: "claudeAgent", slug: "haiku", name: "Haiku 5.5", provider: .claude, providerDisplayName: "Claude", reasoningOptionId: "effort", reasoningOptionLabel: "Thinking", reasoningChoices: Array(claudeLevels.prefix(3)), defaultReasoningChoiceId: "medium"),
+        .init(id: "claudeAgent::fable", instanceId: "claudeAgent", slug: "fable", name: "Fable 5.2", provider: .claude, providerDisplayName: "Claude", reasoningOptionId: "effort", reasoningOptionLabel: "Thinking", reasoningChoices: claudeLevels, defaultReasoningChoiceId: "high", isNew: true),
+        .init(id: "codex::gpt", instanceId: "codex", slug: "gpt-6.1", name: "GPT-6.1", provider: .codex, providerDisplayName: "Codex", reasoningOptionId: "reasoningEffort", reasoningOptionLabel: "Thinking", reasoningChoices: reasoningChoices, defaultReasoningChoiceId: "high", isNew: true),
+        .init(id: "codex::luna", instanceId: "codex", slug: "gpt-6-luna", name: "GPT-6 Luna", provider: .codex, providerDisplayName: "Codex", reasoningOptionId: "reasoningEffort", reasoningOptionLabel: "Thinking", reasoningChoices: reasoningChoices, defaultReasoningChoiceId: "medium"),
+        .init(id: "codex_personal::gpt", instanceId: "codex_personal", slug: "gpt-6.1", name: "GPT-6.1", provider: .codex, providerDisplayName: "Codex Personal", reasoningOptionId: "reasoningEffort", reasoningOptionLabel: "Thinking", reasoningChoices: reasoningChoices, defaultReasoningChoiceId: "high"),
+        .init(id: "codex_personal::astra", instanceId: "codex_personal", slug: "gpt-6-astra", name: "GPT-6 Astra", provider: .codex, providerDisplayName: "Codex Personal", reasoningOptionId: "reasoningEffort", reasoningOptionLabel: "Thinking", reasoningChoices: reasoningChoices, defaultReasoningChoiceId: "medium"),
+        .init(id: "cursor::composer", instanceId: "cursor", slug: "composer", name: "Composer 2", provider: .cursor, providerDisplayName: "Cursor"),
+        .init(id: "opencode::deepseek", instanceId: "opencode", slug: "openrouter/deepseek-v4", name: "DeepSeek V4", provider: .opencode, providerDisplayName: "OpenCode", subProvider: "OpenRouter"),
+        .init(id: "opencode::kimi", instanceId: "opencode", slug: "openrouter/kimi-k3", name: "Kimi K3", provider: .opencode, providerDisplayName: "OpenCode", reasoningOptionId: "reasoning", reasoningOptionLabel: "Thinking", reasoningChoices: Array(reasoningChoices.prefix(3)), defaultReasoningChoiceId: "medium", subProvider: "OpenRouter", isNew: true),
+    ]
+
+    static let pickerCatalog = PickerCatalog(harnesses: harnesses, models: models)
 
     static func composer(context: String? = "Swft · main") -> ComposerState {
         ComposerState(model: models[0], selectedReasoningChoiceId: "high", availableModels: models, contextLabel: context)
@@ -71,7 +102,7 @@ enum MockData {
             .init(id: "i8", kind: .notice(title: "MCP server plugin:finance:slack needs a sign-in", message: "The plugin:finance:slack MCP server needs a sign-in before Claude can use it.", isError: false), startedAt: at(12.5)),
             .init(id: "i9", kind: .assistant(blocks: [
                 .text("The composer is in place. It stacks a multi-line field above a control row, and the send button only lights up once there’s text:"),
-                .code(language: "swift", source: "PillComposer(text: $draft, placeholder: \"Ask Swft\", onSend: send) {\n    ModelPicker(model: \"Opus 5.5\", effort: \"High\") { modelMenu }\n}"),
+                .code(language: "swift", source: "PillComposer(text: $draft, placeholder: \"Ask Swft\", onSend: send) {\n    ModelPickerTrigger(model: \"Opus 5.5\", effort: \"High\") { openPicker() }\n}"),
                 .text("## What changed\n- `PillComposer` lives in **SwftDesign**, shared by home and thread screens.\n- The send button stays quiet until there’s text, then springs to life."),
             ], streaming: false), startedAt: at(12.6), completedAt: at(14.2)),
             .init(id: "j1", kind: .user("Now check the dark-mode contrast of the composer border."), startedAt: at(60)),

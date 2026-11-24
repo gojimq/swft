@@ -18,6 +18,8 @@ public enum SwftRadius {
     public static let l: CGFloat = 16
     public static let xl: CGFloat = 20
     public static let composer: CGFloat = 28
+    /// Floating menus and popovers (model picker).
+    public static let menu: CGFloat = 22
 }
 
 public enum SwftLayout {

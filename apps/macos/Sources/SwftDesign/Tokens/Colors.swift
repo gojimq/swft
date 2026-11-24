@@ -29,6 +29,8 @@ public enum SwftColor {
     public static let sidebar = Color.swft(light: 0xEFEFEF, dark: 0x1B1C1D)
     public static let surface = Color.swft(light: 0xFFFFFF, dark: 0x1E1F20)
     public static let surfaceRaised = Color.swft(light: 0xFFFFFF, dark: 0x252628)
+    /// Floating menu panels: white in light, a lifted grey in dark.
+    public static let menuSurface = Color.swft(light: 0xFFFFFF, dark: 0x28292A)
     public static let surfaceMuted = Color.swft(light: 0xF3F4F5, dark: 0x232425)
     public static let codeBackground = Color.swft(light: 0xF6F7F8, dark: 0x1A1B1C)
     /// Milky tint so glass reads white like the reference composer instead of picking up the blue glow.

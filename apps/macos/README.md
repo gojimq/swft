@@ -53,13 +53,18 @@ Mock data (`Sources/Swft/Preview/MockData.swift`) is used only for SwiftUI previ
 - `-SwftScreen thread`: open the sample mock thread.
 - `-SwftAppearance light|dark`: pin the appearance for screenshot runs.
 - `-SwftWindowSize 1924x1052`: pin the window size (for side-by-side comparisons with the reference).
+- `-SwftPicker open` (or `-SwftPicker gpt` to search): open the composer's model picker.
 
 Current mock captures live in `docs/screens/`. To regenerate them without launching the app (offscreen, light and
-dark, plus open work folds, an approval and a mid-switch frame): `SWFT_SNAPSHOT_DIR=/tmp/shots swift test --filter Snapshots`.
+dark, plus open work folds, an approval, the model picker and mid-switch frames): `SWFT_SNAPSHOT_DIR=/tmp/shots swift test --filter Snapshots`.
 
 Each settled turn folds its intermediate work (thoughts, tool calls, interim commentary, resolved approvals, notices)
 into one "Worked for 12s" row above the answer; a running turn shows its current step over a muted summary. The
 folding is pure logic in `Sources/Swft/Adapters/TranscriptLayout.swift`.
+
+The composer's model picker is a native port of Studio's: search, provider rail, account switcher and thinking slider.
+Its grouping, labels, search and keyboard navigation are pure functions in `Sources/Swft/Adapters/ModelPicker*.swift`;
+the views in `ModelPickerView.swift` and `SwftDesign/Components/ModelPickerParts.swift` only lay them out.
 
 ## Running the local server (dev vs packaged `.app`)
 
