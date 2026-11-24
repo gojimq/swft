@@ -477,6 +477,7 @@ public struct ServerProviderAuth: Codable, Sendable, Equatable {
     public let type: String?
     public let label: String?
     public let email: String?
+    public let canLogout: Bool?
 
     public init(
         status: ServerProviderAuthStatus,
@@ -488,6 +489,21 @@ public struct ServerProviderAuth: Codable, Sendable, Equatable {
         self.type = type
         self.label = label
         self.email = email
+        self.canLogout = nil
+    }
+
+    public init(
+        status: ServerProviderAuthStatus,
+        type: String? = nil,
+        label: String? = nil,
+        email: String? = nil,
+        canLogout: Bool?
+    ) {
+        self.status = status
+        self.type = type
+        self.label = label
+        self.email = email
+        self.canLogout = canLogout
     }
 }
 
@@ -564,6 +580,10 @@ public struct ServerProvider: Codable, Sendable, Equatable, Identifiable {
     public let unavailableReason: String?
     public let models: [ServerProviderModel]
     public let subProviders: [ServerProviderSubProvider]?
+    public let setup: ServerProviderSetup?
+    public let versionAdvisory: ServerProviderVersionAdvisory?
+    public let compatibilityAdvisory: ServerProviderCompatibilityAdvisory?
+    public let updateState: ServerProviderUpdateState?
 
     public var id: String { instanceId }
     public var label: String { displayName ?? driver }
@@ -609,6 +629,60 @@ public struct ServerProvider: Codable, Sendable, Equatable, Identifiable {
         self.unavailableReason = unavailableReason
         self.models = models
         self.subProviders = subProviders
+        self.setup = nil
+        self.versionAdvisory = nil
+        self.compatibilityAdvisory = nil
+        self.updateState = nil
+    }
+
+    public init(
+        instanceId: String,
+        driver: String,
+        displayName: String? = nil,
+        accentColor: String? = nil,
+        iconUrl: String? = nil,
+        badgeLabel: String? = nil,
+        showInteractionModeToggle: Bool? = nil,
+        supportedRuntimeModes: [RuntimeMode]? = nil,
+        enabled: Bool,
+        installed: Bool,
+        version: String? = nil,
+        status: ServerProviderState,
+        auth: ServerProviderAuth,
+        checkedAt: Date,
+        message: String? = nil,
+        availability: String? = nil,
+        unavailableReason: String? = nil,
+        models: [ServerProviderModel],
+        subProviders: [ServerProviderSubProvider]? = nil,
+        setup: ServerProviderSetup?,
+        versionAdvisory: ServerProviderVersionAdvisory? = nil,
+        compatibilityAdvisory: ServerProviderCompatibilityAdvisory? = nil,
+        updateState: ServerProviderUpdateState? = nil
+    ) {
+        self.instanceId = instanceId
+        self.driver = driver
+        self.displayName = displayName
+        self.accentColor = accentColor
+        self.iconUrl = iconUrl
+        self.badgeLabel = badgeLabel
+        self.showInteractionModeToggle = showInteractionModeToggle
+        self.supportedRuntimeModes = supportedRuntimeModes
+        self.enabled = enabled
+        self.installed = installed
+        self.version = version
+        self.status = status
+        self.auth = auth
+        self.checkedAt = checkedAt
+        self.message = message
+        self.availability = availability
+        self.unavailableReason = unavailableReason
+        self.models = models
+        self.subProviders = subProviders
+        self.setup = setup
+        self.versionAdvisory = versionAdvisory
+        self.compatibilityAdvisory = compatibilityAdvisory
+        self.updateState = updateState
     }
 }
 
@@ -625,6 +699,7 @@ public struct ServerConfig: Codable, Sendable, Equatable {
     public let threadResumeCompletionMarker: Bool?
     public let shellThreadFamilies: Bool?
     public let shellOlderSettled: Bool?
+    public let settings: ServerSettings?
 
     public init(
         environment: ExecutionEnvironmentDescriptor,
@@ -652,6 +727,37 @@ public struct ServerConfig: Codable, Sendable, Equatable {
         self.threadResumeCompletionMarker = threadResumeCompletionMarker
         self.shellThreadFamilies = shellThreadFamilies
         self.shellOlderSettled = shellOlderSettled
+        self.settings = nil
+    }
+
+    public init(
+        environment: ExecutionEnvironmentDescriptor,
+        auth: ServerAuthDescriptor,
+        cwd: String,
+        hostname: String? = nil,
+        providers: [ServerProvider],
+        serverTime: Date? = nil,
+        scratchWorkspaceRoot: String? = nil,
+        newProjectsRoot: String? = nil,
+        shellResumeCompletionMarker: Bool? = nil,
+        threadResumeCompletionMarker: Bool? = nil,
+        shellThreadFamilies: Bool? = nil,
+        shellOlderSettled: Bool? = nil,
+        settings: ServerSettings?
+    ) {
+        self.environment = environment
+        self.auth = auth
+        self.cwd = cwd
+        self.hostname = hostname
+        self.providers = providers
+        self.serverTime = serverTime
+        self.scratchWorkspaceRoot = scratchWorkspaceRoot
+        self.newProjectsRoot = newProjectsRoot
+        self.shellResumeCompletionMarker = shellResumeCompletionMarker
+        self.threadResumeCompletionMarker = threadResumeCompletionMarker
+        self.shellThreadFamilies = shellThreadFamilies
+        self.shellOlderSettled = shellOlderSettled
+        self.settings = settings
     }
 }
 
@@ -668,6 +774,7 @@ public struct SubscribeServerConfigInput: Encodable, Sendable {
 public enum ServerConfigStreamEvent: Sendable, Equatable {
     case snapshot(ServerConfig)
     case providerStatuses([ServerProvider])
+    case settingsUpdated(ServerSettings)
     case unknown(type: String)
 }
 
@@ -682,6 +789,10 @@ extension ServerConfigStreamEvent: Decodable {
         let providers: [ServerProvider]
     }
 
+    private struct SettingsUpdatedPayload: Decodable {
+        let settings: ServerSettings
+    }
+
     public init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         let type = try c.decode(String.self, forKey: .type)
@@ -692,6 +803,9 @@ extension ServerConfigStreamEvent: Decodable {
         case "providerStatuses":
             let payload = try c.decode(ProviderStatusesPayload.self, forKey: .payload)
             self = .providerStatuses(payload.providers)
+        case "settingsUpdated":
+            let payload = try c.decode(SettingsUpdatedPayload.self, forKey: .payload)
+            self = .settingsUpdated(payload.settings)
         default:
             self = .unknown(type: type)
         }
@@ -704,6 +818,7 @@ public struct ServerRefreshProvidersInput: Encodable, Sendable {
     public let fresh: Bool?
     public let refreshModels: Bool?
     public let modelCatalogOnly: Bool?
+    public let reloadSecrets: Bool?
 
     public init(
         instanceId: String? = nil,
@@ -717,6 +832,23 @@ public struct ServerRefreshProvidersInput: Encodable, Sendable {
         self.fresh = fresh
         self.refreshModels = refreshModels
         self.modelCatalogOnly = modelCatalogOnly
+        self.reloadSecrets = nil
+    }
+
+    public init(
+        instanceId: String? = nil,
+        cwd: String? = nil,
+        fresh: Bool? = nil,
+        refreshModels: Bool? = nil,
+        modelCatalogOnly: Bool? = nil,
+        reloadSecrets: Bool?
+    ) {
+        self.instanceId = instanceId
+        self.cwd = cwd
+        self.fresh = fresh
+        self.refreshModels = refreshModels
+        self.modelCatalogOnly = modelCatalogOnly
+        self.reloadSecrets = reloadSecrets
     }
 }
 

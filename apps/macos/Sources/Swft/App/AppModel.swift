@@ -29,6 +29,10 @@ final class AppModel {
     var actionError: String?
     /// Work folds the reader has opened, by fold id (ids are unique per turn, so this spans threads).
     var expandedWorkFolds: Set<String> = []
+    /// Settings screen coordinator (preferences, server settings RPCs, provider setup streams).
+    let settings = SettingsController()
+    /// Hook invoked when the model picker's signed-out action deep-links to provider settings.
+    var openProviderSettingsAction: ((String) -> Void)?
 
     // MARK: - Mode & Live SwftKit Backing
 
@@ -80,6 +84,11 @@ final class AppModel {
         self.isMock = isMock
         self.now = now
         self.mockBacking = mockBacking
+        self.settings.attach(to: self)
+        self.openProviderSettingsAction = { [weak self] harnessID in
+            self?.openSettings(section: .providers, providerID: harnessID)
+        }
+        self.settings.applyAppearance()
     }
 
     static func makeForLaunch() -> AppModel {
@@ -111,6 +120,9 @@ final class AppModel {
         // `-SwftScreen thread` opens straight into the mock thread (used for screenshots).
         if UserDefaults.standard.string(forKey: "SwftScreen") == "thread" {
             model.destination = .thread(MockData.threadDetail.summary.id)
+        }
+        if UserDefaults.standard.string(forKey: "SwftScreen") == "settings" {
+            model.destination = .settings
         }
         // `-SwftPicker open|<query>` opens the model picker (optionally searching), for screenshots.
         if let picker = UserDefaults.standard.string(forKey: "SwftPicker") {
@@ -177,6 +189,7 @@ final class AppModel {
 
     func shutdown() async {
         isShuttingDown = true
+        settings.stopProviderSubscriptions()
         startupTask?.cancel()
         startupTask = nil
         clockTask?.cancel()
@@ -308,6 +321,10 @@ final class AppModel {
 
     // MARK: - Derived View State
 
+    var activeConnection: ServerConnection? { connection }
+    var activeThreadsStore: ThreadsStore? { threadsStore }
+    var resolvedDataDirectory: URL { Self.resolveBaseDirectory() }
+
     var serverStatus: ServerStatus {
         if isMock {
             return .connected(label: "Local server", providerCount: 3, port: nil)
@@ -387,13 +404,25 @@ final class AppModel {
         } else {
             projectDefault = nil
         }
-        return SwftAdapters.preferredDefaultModel(from: options, projectDefault: projectDefault)
+        return SwftAdapters.preferredDefaultModel(
+            from: options,
+            projectDefault: projectDefault ?? settings.serverSettings?.defaultModelSelection
+        )
     }
 
     var selectedReasoningChoice: ReasoningChoice? {
         guard let model = selectedModel, !model.reasoningChoices.isEmpty else { return nil }
         if let id = selectedReasoningChoiceId,
            let match = model.reasoningChoices.first(where: { $0.id == id })
+        {
+            return match
+        }
+        if selectedModelID == nil,
+           let serverDefault = settings.serverSettings?.defaultModelSelection,
+           serverDefault.instanceId == model.instanceId,
+           serverDefault.model == model.slug,
+           let configured = SwftAdapters.reasoningChoiceId(from: serverDefault, for: model),
+           let match = model.reasoningChoices.first(where: { $0.id == configured })
         {
             return match
         }
@@ -631,8 +660,12 @@ final class AppModel {
         modelPicker = nil
     }
 
-    /// Swft has no provider settings screen yet; signing in happens in the provider's CLI, so the action re-checks.
+    /// Deep-links to provider settings when configured, falling back to re-checking providers.
     func runPickerPanelAction(harnessID: String) {
+        if let openProviderSettingsAction {
+            openProviderSettingsAction(harnessID)
+            return
+        }
         refreshProviders()
     }
 
@@ -764,7 +797,7 @@ final class AppModel {
             reasoningChoiceId: selectedReasoningChoice?.id
         )
         let provider = threadsStore.provider(for: modelOption.instanceId)
-        let runtimeMode = Self.resolveRuntimeMode(for: provider)
+        let runtimeMode = Self.resolveRuntimeMode(for: provider, preferred: settings.serverSettings?.defaultRuntimeMode)
         let initialTitle = Self.initialThreadTitle(from: text)
 
         composerText = ""
@@ -1026,10 +1059,11 @@ final class AppModel {
         }
     }
 
-    private static func resolveRuntimeMode(for provider: ServerProvider?) -> RuntimeMode {
+    private static func resolveRuntimeMode(for provider: ServerProvider?, preferred: RuntimeMode? = nil) -> RuntimeMode {
         guard let supported = provider?.supportedRuntimeModes, !supported.isEmpty else {
-            return .fullAccess
+            return preferred ?? .fullAccess
         }
+        if let preferred, supported.contains(preferred) { return preferred }
         if supported.contains(.fullAccess) { return .fullAccess }
         return supported.first ?? .fullAccess
     }

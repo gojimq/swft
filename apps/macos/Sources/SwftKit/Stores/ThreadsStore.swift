@@ -35,6 +35,7 @@ public final class ThreadsStore {
     public private(set) var connectionState: ConnectionState = .disconnected
     public private(set) var environment: ExecutionEnvironmentDescriptor?
     public private(set) var serverConfig: ServerConfig?
+    public private(set) var serverSettings: ServerSettings?
     public private(set) var hostname: String?
     public private(set) var providers: [ServerProvider] = []
     public private(set) var projects: [ProjectShell] = []
@@ -211,14 +212,27 @@ public final class ThreadsStore {
         switch event {
         case .snapshot(let config):
             serverConfig = config
+            if let settings = config.settings {
+                serverSettings = settings
+            }
             environment = config.environment
             hostname = config.hostname
             providers = config.providers
         case .providerStatuses(let updatedProviders):
             providers = updatedProviders
+        case .settingsUpdated(let settings):
+            serverSettings = settings
         case .unknown:
             break
         }
+    }
+
+    public func updateServerSettings(_ settings: ServerSettings) {
+        serverSettings = settings
+    }
+
+    internal func applyRefreshedProviders(_ updated: [ServerProvider]) {
+        providers = updated
     }
 
     internal func apply(_ item: ShellStreamItem) {

@@ -40,6 +40,8 @@ struct ModelPickerPanel: View {
     let content: ModelPickerContent
     /// The trigger's frame in window coordinates, so clicking it toggles instead of counting as "outside".
     let triggerFrame: CGRect
+    /// Optional hook to deep-link a signed-out harness to Settings → Providers (falls back to `model.openProviderSettingsAction`, then CLI re-check).
+    var onOpenProviderSettings: ((String) -> Void)? = nil
     @FocusState private var searchFocused: Bool
     @State private var panelFrame: CGRect = .zero
 
@@ -205,11 +207,21 @@ struct ModelPickerPanel: View {
                         PickerNote(reason)
                     }
                     if harness.unauthenticated {
-                        if signInOnly {
-                            PickerNote("Sign in with the \(harness.label) CLI to use models from this account, then check again.")
-                        }
-                        PickerActionButton("Check again", isHighlighted: session.focus == .action) {
-                            model.runPickerPanelAction(harnessID: harness.id)
+                        let openSettings = onOpenProviderSettings ?? model.openProviderSettingsAction
+                        if let openSettings {
+                            if signInOnly {
+                                PickerNote("Sign in to \(harness.label) in Settings to use models from this account.")
+                            }
+                            PickerActionButton("Sign in in Settings", isHighlighted: session.focus == .action) {
+                                openSettings(harness.id)
+                            }
+                        } else {
+                            if signInOnly {
+                                PickerNote("Sign in with the \(harness.label) CLI to use models from this account, then check again.")
+                            }
+                            PickerActionButton("Check again", isHighlighted: session.focus == .action) {
+                                model.runPickerPanelAction(harnessID: harness.id)
+                            }
                         }
                     }
                     ForEach(content.sections) { section in

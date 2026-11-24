@@ -39,6 +39,8 @@ struct RootView: View {
             }
         case .projects:
             ProjectsView()
+        case .settings:
+            SettingsView()
         default:
             HomeView()
         }
