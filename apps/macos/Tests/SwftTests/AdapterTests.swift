@@ -245,6 +245,20 @@ struct AdapterTests {
                 )
             ),
             ProjectedTurnItem(
+                position: 1,
+                visibility: .local,
+                sourceThreadId: "thr-1",
+                sourceItemId: "i-prep",
+                item: TurnItem(
+                    id: "i-prep",
+                    threadId: "thr-1",
+                    ordinal: 2,
+                    status: "completed",
+                    updatedAt: t0,
+                    kind: .commandExecution(input: "Preparing workspace", output: nil, outputOmitted: false, outputIndicatesFailure: nil, exitCode: nil, monitor: nil)
+                )
+            ),
+            ProjectedTurnItem(
                 position: 2,
                 visibility: .local,
                 sourceThreadId: "thr-1",

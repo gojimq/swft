@@ -3,57 +3,72 @@ import SwiftUI
 
 struct RootView: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         HStack(spacing: 0) {
             if model.sidebarVisible {
                 SidebarView()
                     .frame(width: SwftLayout.sidebarWidth)
-                    .transition(.move(edge: .leading).combined(with: .opacity))
+                    .transition(reduceMotion ? .opacity : .move(edge: .leading).combined(with: .opacity))
             }
             ZStack(alignment: .top) {
-                switch model.destination {
-                case .thread(let id):
-                    if let detail = model.detail(for: id) {
-                        ThreadView(detail: detail).id(id)
-                    } else {
-                        HomeView()
-                    }
-                case .projects:
-                    ProjectsView()
-                default:
-                    HomeView()
-                }
+                screen
+                    .id(model.destination)
+                    .transition(.swftScreen(reduceMotion: reduceMotion))
                 TopBar()
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(SwftColor.canvas)
+            .animation(SwftMotion.resolve(SwftMotion.screen, reduceMotion: reduceMotion), value: model.destination)
         }
+        .animation(SwftMotion.resolve(SwftMotion.screen, reduceMotion: reduceMotion), value: model.sidebarVisible)
         .background(SwftColor.sidebar)
         .background(WindowChrome())
         .ignoresSafeArea()
+    }
+
+    @ViewBuilder private var screen: some View {
+        switch model.destination {
+        case .thread(let id):
+            if let detail = model.detail(for: id) {
+                ThreadView(detail: detail)
+            } else {
+                HomeView()
+            }
+        case .projects:
+            ProjectsView()
+        default:
+            HomeView()
+        }
     }
 }
 
 /// Window-top row of the content area: sidebar toggle (when collapsed) and the right-hand pill group.
 struct TopBar: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var showingServerPopover = false
 
     var body: some View {
         HStack(spacing: 8) {
             if !model.sidebarVisible {
                 // Leave room for the traffic lights.
-                Color.clear.frame(width: 68, height: 1)
-                IconButton("sidebar.left", help: "Show sidebar", action: model.toggleSidebar)
-                IconButton("square.and.pencil", help: "New thread", action: model.goHome)
+                Color.clear.frame(width: 76, height: 1)
+                Group {
+                    IconButton("sidebar.left", help: "Show sidebar", action: model.toggleSidebar)
+                    IconButton("square.and.pencil", help: "New thread", action: model.goHome)
+                }
+                .transition(.swftPop(reduceMotion: reduceMotion, scale: 0.7))
             }
             if case .thread(let id) = model.destination, let summary = model.threadSummary(for: id) {
                 VStack(alignment: .leading, spacing: 0) {
                     Text(summary.title).font(SwftType.labelStrong).foregroundStyle(SwftColor.textPrimary).lineLimit(1)
+                        .contentTransition(.interpolate)
                     Text(summary.project?.name ?? "No project").font(SwftType.caption).foregroundStyle(SwftColor.textTertiary)
                 }
                 .padding(.leading, model.sidebarVisible ? 12 : 4)
+                .transition(.swftRise(reduceMotion: reduceMotion, distance: -6))
             }
             Spacer(minLength: 12)
             trailingPills
@@ -101,6 +116,12 @@ struct TopBar: View {
     }
 
     private var serverStatusPill: some View {
+        statusPillContent
+            .animation(SwftMotion.resolve(SwftMotion.spring, reduceMotion: reduceMotion), value: model.serverStatus.pillTitle)
+            .transition(.swftPop(reduceMotion: reduceMotion, scale: 0.85))
+    }
+
+    private var statusPillContent: some View {
         ToolbarPill {
             Button {
                 showingServerPopover.toggle()
@@ -108,6 +129,7 @@ struct TopBar: View {
                 HStack(spacing: 7) {
                     Circle().fill(model.serverStatus.dotColor).frame(width: 7, height: 7)
                     Text(model.serverStatus.pillTitle).font(SwftType.label)
+                        .contentTransition(.interpolate)
                 }
                 .padding(.horizontal, 10)
                 .frame(height: 28)
@@ -123,6 +145,7 @@ struct TopBar: View {
                 PillTextButton("Retry", systemName: "arrow.clockwise") {
                     model.retryConnection()
                 }
+                .transition(.swftPop(reduceMotion: reduceMotion, scale: 0.8))
             }
         }
     }

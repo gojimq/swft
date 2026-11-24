@@ -4,28 +4,32 @@ import SwiftUI
 struct SidebarView: View {
     @Environment(AppModel.self) private var model
     @State private var showingStatusPopover = false
+    @Namespace private var selectionNamespace
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         @Bindable var model = model
         VStack(alignment: .leading, spacing: 0) {
-            // Shares the traffic-light row; the lights sit at the leading edge.
+            // Shares the traffic-light row. Like the reference, these icons sit ~5pt above the lights' centre line.
             HStack(spacing: 2) {
                 Spacer()
-                IconButton("magnifyingglass", help: "Search threads")
-                IconButton("sidebar.left", help: "Hide sidebar", action: model.toggleSidebar)
+                IconButton("magnifyingglass", help: "Search threads", weight: .medium, tint: SwftColor.textPrimary)
+                IconButton("sidebar.left", help: "Hide sidebar", weight: .medium, tint: SwftColor.textPrimary, action: model.toggleSidebar)
             }
             .padding(.horizontal, 10)
-            .frame(height: SwftLayout.titlebarHeight)
+            .frame(height: 42)
 
             HStack(spacing: 9) {
                 SwftMark(size: 22)
                 Text("Swft").font(SwftType.brand).foregroundStyle(SwftColor.textPrimary)
             }
+            .frame(height: 24)
             .padding(.leading, 18)
-            .padding(.bottom, 14)
+            .padding(.top, 10)
+            .padding(.bottom, 12)
 
             VStack(spacing: 2) {
-                SidebarNavRow("New thread", systemName: "square.and.pencil", isSelected: model.destination == .home, isProminent: true) {
+                SidebarNavRow("New thread", systemName: "square.and.pencil", isSelected: model.destination == .home) {
                     model.goHome()
                 }
                 SidebarNavRow("Projects", systemName: "folder", isSelected: model.destination == .projects) {
@@ -71,12 +75,14 @@ struct SidebarView: View {
                         ThreadInboxRow(thread.inboxModel(now: model.now), isSelected: model.selectedThreadID == thread.id) {
                             model.open(thread.id)
                         }
+                        .transition(.swftRise(reduceMotion: reduceMotion, distance: -6))
                     }
                 }
                 .padding(.horizontal, 8)
                 .padding(.bottom, 8)
             }
             .scrollIndicators(.automatic)
+            .scrollEdgeSoftIfAvailable()
 
             AccountRow(name: model.sidebar.account.name, detail: model.sidebar.account.detail) {
                 if model.serverStatus.needsRetry {
@@ -91,6 +97,9 @@ struct SidebarView: View {
             .padding(.horizontal, 8)
             .padding(.vertical, 8)
         }
+        .environment(\.swftSelectionNamespace, selectionNamespace)
+        .animation(SwftMotion.resolve(SwftMotion.glide, reduceMotion: reduceMotion), value: model.destination)
+        .animation(SwftMotion.resolve(SwftMotion.spring, reduceMotion: reduceMotion), value: model.visibleThreads.map(\.id))
         .background(SwftColor.sidebar)
     }
 }

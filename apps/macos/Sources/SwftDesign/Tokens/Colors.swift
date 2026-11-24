@@ -31,7 +31,9 @@ public enum SwftColor {
     public static let surfaceRaised = Color.swft(light: 0xFFFFFF, dark: 0x252628)
     public static let surfaceMuted = Color.swft(light: 0xF3F4F5, dark: 0x232425)
     public static let codeBackground = Color.swft(light: 0xF6F7F8, dark: 0x1A1B1C)
-    public static let userBubble = Color.swft(light: 0xE9EEF6, dark: 0x2A2C2F)
+    /// Milky tint so glass reads white like the reference composer instead of picking up the blue glow.
+    public static let glassTint = Color.swft(light: 0xFFFFFF, dark: 0x1E1F20, lightAlpha: 0.72, darkAlpha: 0.45)
+    public static let userBubble = Color.swft(light: 0xF2F0F0, dark: 0x2C2D2F)
 
     // Interaction fills
     public static let hover = Color.swft(light: 0x000000, dark: 0xFFFFFF, lightAlpha: 0.045, darkAlpha: 0.06)

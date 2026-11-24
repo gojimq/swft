@@ -39,13 +39,15 @@ public struct IconButton: View {
     let help: String
     var size: CGFloat
     var weight: Font.Weight
+    var tint: Color
     let action: () -> Void
 
-    public init(_ systemName: String, help: String, size: CGFloat = 28, weight: Font.Weight = .regular, action: @escaping () -> Void = {}) {
+    public init(_ systemName: String, help: String, size: CGFloat = 28, weight: Font.Weight = .regular, tint: Color = SwftColor.textSecondary, action: @escaping () -> Void = {}) {
         self.systemName = systemName
         self.help = help
         self.size = size
         self.weight = weight
+        self.tint = tint
         self.action = action
     }
 
@@ -56,46 +58,75 @@ public struct IconButton: View {
                 .frame(width: size, height: size)
                 .contentShape(Circle())
         }
-        .buttonStyle(HoverFillStyle(shape: Circle()))
-        .foregroundStyle(SwftColor.textSecondary)
+        .buttonStyle(HoverFillStyle(shape: Circle(), pressScale: 0.9))
+        .foregroundStyle(tint)
         .help(help)
         .accessibilityLabel(help)
     }
 }
 
-/// Plain button style that paints a hover/pressed fill in the given shape.
+/// Plain button style that paints a hover/pressed fill in the given shape. Hover and press animate with a spring;
+/// the selected fill glides between rows when a `swftSelectionNamespace` is in the environment.
 public struct HoverFillStyle<S: Shape>: ButtonStyle {
     let shape: S
     var selected: Bool
-    public init(shape: S, selected: Bool = false) {
+    var pressScale: CGFloat
+    public init(shape: S, selected: Bool = false, pressScale: CGFloat = 0.97) {
         self.shape = shape
         self.selected = selected
+        self.pressScale = pressScale
     }
 
     public func makeBody(configuration: Configuration) -> some View {
-        HoverFillBody(configuration: configuration, shape: shape, selected: selected)
+        HoverFillBody(configuration: configuration, shape: shape, selected: selected, pressScale: pressScale)
     }
 
     struct HoverFillBody: View {
         let configuration: Configuration
         let shape: S
         let selected: Bool
+        let pressScale: CGFloat
         @State private var hovering = false
+        @Environment(\.swftSelectionNamespace) private var selectionNamespace
+        @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
         var body: some View {
             configuration.label
                 .background {
-                    shape.fill(fill)
+                    ZStack {
+                        shape.fill(hoverFill)
+                        if selected {
+                            if let selectionNamespace {
+                                shape.fill(SwftColor.selection)
+                                    .matchedGeometryEffect(id: SwftSelection.pillID, in: selectionNamespace)
+                            } else {
+                                shape.fill(SwftColor.selection)
+                            }
+                        }
+                    }
                 }
+                .scaleEffect(configuration.isPressed && !reduceMotion ? pressScale : 1)
+                .animation(SwftMotion.resolve(SwftMotion.quick, reduceMotion: reduceMotion), value: hovering)
+                .animation(SwftMotion.resolve(SwftMotion.spring, reduceMotion: reduceMotion), value: configuration.isPressed)
                 .onHover { hovering = $0 }
         }
 
-        var fill: Color {
-            if selected { return SwftColor.selection }
+        var hoverFill: Color {
+            if selected { return .clear }
             if configuration.isPressed { return SwftColor.pressed }
             return hovering ? SwftColor.hover : .clear
         }
     }
+}
+
+/// Shared identity for the sidebar's single selection pill.
+public enum SwftSelection {
+    public static let pillID = "swft.selection.pill"
+}
+
+extension EnvironmentValues {
+    /// When set, selected `HoverFillStyle` fills share one matched geometry so the selection pill glides between rows.
+    @Entry public var swftSelectionNamespace: Namespace.ID?
 }
 
 /// Small rounded-square project badge with initials (the "ST" chip in the inbox).

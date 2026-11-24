@@ -401,6 +401,8 @@ enum SwftAdapters {
         return ThreadDetailState(summary: resolvedSummary, items: items, diffStat: diffStat)
     }
 
+    static let workspacePreparationInput = "Preparing workspace"
+
     static func transcriptItem(
         from item: TurnItem,
         requestsByID: [String: RuntimeRequest],
@@ -479,10 +481,13 @@ enum SwftAdapters {
             )
 
         case .commandExecution(let input, let output, let outputOmitted, let outputIndicatesFailure, let exitCode, _):
+            let failed = outputIndicatesFailure == true || (exitCode != nil && exitCode != 0)
+            // Server-side workspace setup is not an agent action; only surface it if it failed (matches the web client).
+            if input == workspacePreparationInput && !failed { return nil }
             let resolvedStatus: ToolCallItem.Status
             if status == .running {
                 resolvedStatus = .running
-            } else if outputIndicatesFailure == true || (exitCode != nil && exitCode != 0) {
+            } else if failed {
                 resolvedStatus = .failed
             } else {
                 resolvedStatus = status

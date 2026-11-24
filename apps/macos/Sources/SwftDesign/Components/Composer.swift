@@ -10,6 +10,7 @@ public struct PillComposer<Leading: View, Trailing: View>: View {
     let leading: Leading
     let trailing: Trailing
     @FocusState private var focused: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     public init(text: Binding<String>, placeholder: String, isBusy: Bool = false, onSend: @escaping () -> Void, onStop: (() -> Void)? = nil, @ViewBuilder leading: () -> Leading, @ViewBuilder trailing: () -> Trailing) {
         self._text = text
@@ -48,17 +49,20 @@ public struct PillComposer<Leading: View, Trailing: View>: View {
         .padding(.trailing, 10)
         .padding(.top, 14)
         .padding(.bottom, 9)
-        .background {
-            RoundedRectangle(cornerRadius: SwftRadius.composer, style: .continuous)
-                .fill(SwftColor.surface)
-                .shadow(color: SwftColor.shadow, radius: 14, y: 3)
-        }
+        .swftGlass(in: shape)
         .overlay {
-            RoundedRectangle(cornerRadius: SwftRadius.composer, style: .continuous)
-                .strokeBorder(focused ? SwftColor.border : SwftColor.borderSubtle)
+            shape.strokeBorder(focused ? SwftColor.border : SwftColor.borderSubtle)
         }
-        .contentShape(RoundedRectangle(cornerRadius: SwftRadius.composer, style: .continuous))
+        .shadow(color: SwftColor.shadow.opacity(focused ? 1 : 0.7), radius: focused ? 18 : 12, y: focused ? 5 : 3)
+        .contentShape(shape)
         .onTapGesture { focused = true }
+        .animation(SwftMotion.resolve(SwftMotion.spring, reduceMotion: reduceMotion), value: focused)
+        // Grows/shrinks smoothly as lines are added or removed.
+        .animation(SwftMotion.resolve(SwftMotion.spring, reduceMotion: reduceMotion), value: text.filter(\.isNewline).count)
+    }
+
+    private var shape: RoundedRectangle {
+        RoundedRectangle(cornerRadius: SwftRadius.composer, style: .continuous)
     }
 }
 
@@ -83,16 +87,27 @@ public struct SendButton: View {
         Button(action: action) {
             Image(systemName: state == .stop ? "stop.fill" : "arrow.up")
                 .font(.system(size: state == .stop ? 11 : 14, weight: .semibold))
+                .contentTransition(.symbolEffect(.replace))
                 .foregroundStyle(state == .idle ? SwftColor.onSend.opacity(0.55) : SwftColor.onSend)
                 .frame(width: 32, height: 32)
                 .background(Circle().fill(state == .idle ? SwftColor.sendFillIdle : SwftColor.sendFill))
+                .scaleEffect(state == .idle ? 0.94 : 1)
                 .contentShape(Circle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressScaleStyle())
         .disabled(state == .idle)
-        .animation(SwftMotion.quick, value: state)
+        .animation(SwftMotion.pop, value: state)
         .help(state == .stop ? "Stop" : "Send")
         .keyboardShortcut(.return, modifiers: .command)
+    }
+}
+
+/// Plain style that springs down a little while pressed.
+struct PressScaleStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.9 : 1)
+            .animation(SwftMotion.spring, value: configuration.isPressed)
     }
 }
 
@@ -141,10 +156,15 @@ public struct ModelPicker<MenuContent: View>: View {
         } label: {
             HStack(spacing: 5) {
                 Text(model).foregroundStyle(SwftColor.textPrimary)
+                    .contentTransition(.interpolate)
                 if let effort {
                     Text(effort).foregroundStyle(SwftColor.textTertiary)
+                        .contentTransition(.interpolate)
+                        .transition(.opacity.combined(with: .scale(scale: 0.8, anchor: .leading)))
                 }
             }
+            .animation(SwftMotion.spring, value: model)
+            .animation(SwftMotion.spring, value: effort)
             .font(SwftType.label)
             .padding(.horizontal, 10)
             .frame(height: 30)
@@ -173,7 +193,7 @@ public struct SegmentedToggle<Value: Hashable>: View {
             ForEach(options, id: \.value) { option in
                 let selected = option.value == selection
                 Button {
-                    withAnimation(SwftMotion.quick) { selection = option.value }
+                    withAnimation(SwftMotion.glide) { selection = option.value }
                 } label: {
                     Text(option.title)
                         .font(selected ? SwftType.labelStrong : SwftType.label)
@@ -217,7 +237,7 @@ public struct SuggestionRow: View {
                     .foregroundStyle(SwftColor.textSecondary)
                     .frame(width: 18)
                 Text(title)
-                    .font(SwftType.body)
+                    .font(SwftType.suggestion)
                     .foregroundStyle(SwftColor.textPrimary)
                 Spacer(minLength: 0)
             }

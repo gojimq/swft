@@ -20,10 +20,10 @@ public struct SidebarNavRow: View {
 
     public var body: some View {
         Button(action: action) {
-            HStack(spacing: 12) {
+            HStack(spacing: 10) {
                 Image(systemName: systemName)
                     .font(.system(size: 14, weight: .regular))
-                    .frame(width: 18)
+                    .frame(width: 16)
                 Text(title)
                     .font(isProminent ? SwftType.sidebarStrong : SwftType.sidebar)
                 Spacer(minLength: 0)
@@ -36,7 +36,7 @@ public struct SidebarNavRow: View {
             .frame(height: SwftLayout.sidebarRowHeight)
             .contentShape(Capsule())
         }
-        .buttonStyle(HoverFillStyle(shape: Capsule(), selected: isSelected))
+        .buttonStyle(HoverFillStyle(shape: RoundedRectangle(cornerRadius: SwftRadius.l, style: .continuous), selected: isSelected, pressScale: 0.985))
     }
 }
 
@@ -52,11 +52,11 @@ public struct SidebarSectionHeader<Trailing: View>: View {
 
     public var body: some View {
         HStack(spacing: 4) {
-            Text(title).font(SwftType.label).foregroundStyle(SwftColor.textTertiary)
+            Text(title).font(SwftType.sectionHeader).foregroundStyle(SwftColor.textTertiary)
             Spacer(minLength: 0)
             trailing
         }
-        .padding(.leading, 12)
+        .padding(.leading, 9)
         .padding(.trailing, 6)
         .frame(height: 28)
     }
@@ -146,16 +146,19 @@ public struct ThreadInboxRow: View {
                     }
                     Spacer(minLength: 4)
                     statusView
+                        .id(model.status)
+                        .transition(.opacity.combined(with: .scale(scale: 0.6)))
                     ProviderGlyph(symbol: model.providerSymbol, tint: model.providerTint, name: model.providerName)
                 }
                 .foregroundStyle(SwftColor.textTertiary)
                 .frame(height: 16)
             }
-            .padding(.horizontal, 12)
+            .padding(.horizontal, 10)
             .padding(.vertical, 9)
             .contentShape(RoundedRectangle(cornerRadius: SwftRadius.l, style: .continuous))
         }
-        .buttonStyle(HoverFillStyle(shape: RoundedRectangle(cornerRadius: SwftRadius.l, style: .continuous), selected: isSelected))
+        .buttonStyle(HoverFillStyle(shape: RoundedRectangle(cornerRadius: SwftRadius.l, style: .continuous), selected: isSelected, pressScale: 0.985))
+        .animation(SwftMotion.pop, value: model.status)
         .accessibilityElement(children: .combine)
     }
 
