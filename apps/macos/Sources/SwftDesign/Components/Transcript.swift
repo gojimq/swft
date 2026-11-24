@@ -1,10 +1,13 @@
 import AppKit
 import SwiftUI
 
-/// Right-aligned user message bubble.
+/// Right-aligned user message: a plain soft-grey bubble with a large radius, like the reference. Nothing attached.
 public struct UserBubble: View {
     let text: String
     public init(_ text: String) { self.text = text }
+
+    /// The reference bubble is 61pt tall for one line; derive padding from this font's natural line height.
+    private static let verticalPadding = max(10, (61 - SwftFonts.lineHeight(SwftType.bodySize)) / 2)
 
     public var body: some View {
         HStack {
@@ -12,14 +15,11 @@ public struct UserBubble: View {
             Text(text)
                 .font(SwftType.body)
                 .foregroundStyle(SwftColor.textPrimary)
-                .lineSpacing(3)
+                .lineSpacing(SwftType.bodyLineSpacing)
                 .textSelection(.enabled)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 11)
-                .background(
-                    UnevenRoundedRectangle(topLeadingRadius: 22, bottomLeadingRadius: 22, bottomTrailingRadius: 22, topTrailingRadius: 6, style: .continuous)
-                        .fill(SwftColor.userBubble)
-                )
+                .padding(.horizontal, 20)
+                .padding(.vertical, Self.verticalPadding)
+                .background(RoundedRectangle(cornerRadius: 28, style: .continuous).fill(SwftColor.userBubble))
         }
     }
 }
@@ -37,13 +37,15 @@ public struct AssistantMessage<Content: View>: View {
     public var body: some View {
         HStack(alignment: .top, spacing: 14) {
             avatar.frame(width: 24, height: 24)
-            VStack(alignment: .leading, spacing: 12) { content }
+            VStack(alignment: .leading, spacing: 14) { content }
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 }
 
-/// Inline-markdown prose paragraph. `streaming` appends a static caret (no blink, by design).
+/// Markdown prose: paragraphs, `#` headings and `-`/`1.` lists, with bold and inline code styled explicitly so they
+/// stay in Google Sans Flex / mono instead of falling back to the system font.
+/// `streaming` appends a static caret (no blink, by design) and lets the text grow smoothly.
 public struct MessageText: View {
     let markdown: String
     var streaming: Bool
@@ -54,13 +56,180 @@ public struct MessageText: View {
     }
 
     public var body: some View {
-        let attributed = (try? AttributedString(markdown: markdown, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(markdown)
-        (Text(attributed) + (streaming ? Text(" \u{258D}").foregroundColor(SwftColor.accent) : Text("")))
-            .font(SwftType.body)
+        let blocks = MarkdownProse.blocks(markdown)
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(blocks.enumerated()), id: \.offset) { index, block in
+                let caret = streaming && index == blocks.count - 1
+                blockView(block, caret: caret)
+                    .padding(.top, index == 0 ? 0 : block.spacingBefore(after: blocks[index - 1]))
+            }
+        }
+        .textSelection(.enabled)
+        .fixedSize(horizontal: false, vertical: true)
+        .animation(streaming ? .easeOut(duration: 0.22) : nil, value: markdown)
+    }
+
+    @ViewBuilder private func blockView(_ block: MarkdownProse.Block, caret: Bool) -> some View {
+        switch block {
+        case .heading(let level, let text):
+            styledText(text, base: level <= 2 ? .heading : .subheading, caret: caret)
+        case .paragraph(let text):
+            styledText(text, base: .body, caret: caret)
+        case .listItem(let marker, let depth, let text):
+            HStack(alignment: .firstTextBaseline, spacing: 0) {
+                Text(marker.display(depth: depth))
+                    .font(marker.isOrdered ? SwftType.body : SwftFonts.flex(13))
+                    .foregroundStyle(SwftColor.textPrimary)
+                    .frame(width: 22, alignment: marker.isOrdered ? .trailing : .center)
+                    .padding(.trailing, marker.isOrdered ? 8 : 6)
+                styledText(text, base: .body, caret: caret)
+            }
+            .padding(.leading, 6 + CGFloat(depth) * 22)
+        }
+    }
+
+    private func styledText(_ source: String, base: MarkdownProse.Style, caret: Bool) -> some View {
+        var attributed = MarkdownProse.inline(source, style: base)
+        if caret {
+            var mark = AttributedString(" \u{258D}")
+            mark.foregroundColor = SwftColor.accent
+            attributed.append(mark)
+        }
+        return Text(attributed)
+            .font(base.font)
             .foregroundStyle(SwftColor.textPrimary)
-            .lineSpacing(4)
-            .textSelection(.enabled)
-            .fixedSize(horizontal: false, vertical: true)
+            .lineSpacing(base == .body ? SwftType.bodyLineSpacing : 4)
+            .contentTransition(.interpolate)
+    }
+}
+
+/// Small block-level markdown splitter for assistant prose (fenced code is split out earlier, upstream).
+public enum MarkdownProse {
+    public enum Style: Equatable {
+        case body, heading, subheading
+
+        var font: Font {
+            switch self {
+            case .body: SwftType.body
+            case .heading: SwftType.heading
+            case .subheading: SwftType.subheading
+            }
+        }
+
+        var strongFont: Font {
+            switch self {
+            case .body: SwftType.bodyStrong
+            case .heading: SwftFonts.flex(20, weight: 620)
+            case .subheading: SwftFonts.flex(17, weight: 700)
+            }
+        }
+    }
+
+    public enum Marker: Equatable {
+        case bullet
+        case ordered(String)
+
+        var isOrdered: Bool { if case .ordered = self { true } else { false } }
+
+        func display(depth: Int) -> String {
+            switch self {
+            case .bullet: depth == 0 ? "\u{25E6}" : "\u{25AA}"
+            case .ordered(let n): "\(n)."
+            }
+        }
+    }
+
+    public enum Block: Equatable {
+        case heading(level: Int, text: String)
+        case paragraph(String)
+        case listItem(marker: Marker, depth: Int, text: String)
+
+        func spacingBefore(after previous: Block) -> CGFloat {
+            switch (previous, self) {
+            case (_, .heading): 26
+            case (.heading, _): 10
+            case (.listItem, .listItem): 8
+            default: 14
+            }
+        }
+    }
+
+    public static func blocks(_ markdown: String) -> [Block] {
+        var blocks: [Block] = []
+        var paragraph: [String] = []
+
+        func flush() {
+            let text = paragraph.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+            if !text.isEmpty { blocks.append(.paragraph(text)) }
+            paragraph.removeAll()
+        }
+
+        for rawLine in markdown.split(separator: "\n", omittingEmptySubsequences: false) {
+            let line = String(rawLine)
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.isEmpty {
+                flush()
+                continue
+            }
+            if let heading = heading(trimmed) {
+                flush()
+                blocks.append(heading)
+                continue
+            }
+            if let item = listItem(line) {
+                flush()
+                blocks.append(item)
+                continue
+            }
+            if case .listItem(let marker, let depth, let text) = blocks.last, paragraph.isEmpty, line.first == " " {
+                // Indented continuation of the previous list item.
+                blocks[blocks.count - 1] = .listItem(marker: marker, depth: depth, text: text + "\n" + trimmed)
+                continue
+            }
+            paragraph.append(line)
+        }
+        flush()
+        return blocks
+    }
+
+    private static func heading(_ trimmed: String) -> Block? {
+        let hashes = trimmed.prefix(while: { $0 == "#" }).count
+        guard (1...6).contains(hashes) else { return nil }
+        let rest = trimmed.dropFirst(hashes)
+        guard rest.first == " " else { return nil }
+        return .heading(level: hashes, text: rest.trimmingCharacters(in: .whitespaces))
+    }
+
+    private static func listItem(_ line: String) -> Block? {
+        let indent = line.prefix(while: { $0 == " " || $0 == "\t" }).reduce(0) { $0 + ($1 == "\t" ? 4 : 1) }
+        let body = line.drop(while: { $0 == " " || $0 == "\t" })
+        let depth = min(indent / 2, 3)
+        if let first = body.first, "-*+".contains(first), body.dropFirst().first == " " {
+            return .listItem(marker: .bullet, depth: depth, text: body.dropFirst(2).trimmingCharacters(in: .whitespaces))
+        }
+        let digits = body.prefix(while: \.isNumber)
+        if !digits.isEmpty, digits.count <= 3 {
+            let rest = body.dropFirst(digits.count)
+            if let sep = rest.first, sep == "." || sep == ")", rest.dropFirst().first == " " {
+                return .listItem(marker: .ordered(String(digits)), depth: depth, text: rest.dropFirst(2).trimmingCharacters(in: .whitespaces))
+            }
+        }
+        return nil
+    }
+
+    /// Inline markdown with explicit fonts on strong and code runs.
+    public static func inline(_ source: String, style: Style) -> AttributedString {
+        var attributed = (try? AttributedString(markdown: source, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
+            ?? AttributedString(source)
+        for run in attributed.runs {
+            guard let intent = run.inlinePresentationIntent else { continue }
+            if intent.contains(.code) {
+                attributed[run.range].font = SwftType.inlineCode
+            } else if intent.contains(.stronglyEmphasized) {
+                attributed[run.range].font = style.strongFont
+            }
+        }
+        return attributed
     }
 }
 
@@ -130,6 +299,7 @@ public struct ToolCallCard: View {
     let duration: String?
     let output: String?
     @State private var expanded: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     public init(title: String, detail: String, systemName: String, status: ToolCallStatus, duration: String? = nil, output: String? = nil, expanded: Bool = false) {
         self.title = title
@@ -145,7 +315,7 @@ public struct ToolCallCard: View {
         VStack(alignment: .leading, spacing: 0) {
             Button {
                 guard output != nil else { return }
-                withAnimation(SwftMotion.quick) { expanded.toggle() }
+                withAnimation(SwftMotion.resolve(SwftMotion.spring, reduceMotion: reduceMotion)) { expanded.toggle() }
             } label: {
                 HStack(spacing: 10) {
                     Image(systemName: systemName)
@@ -163,6 +333,8 @@ public struct ToolCallCard: View {
                         Text(duration).font(SwftType.caption).monospacedDigit().foregroundStyle(SwftColor.textTertiary)
                     }
                     statusIcon
+                        .id(status)
+                        .transition(.swftPop(reduceMotion: reduceMotion, scale: 0.5))
                     if output != nil {
                         Image(systemName: "chevron.right")
                             .font(.system(size: 10, weight: .semibold))
@@ -177,6 +349,7 @@ public struct ToolCallCard: View {
             .buttonStyle(.plain)
 
             if expanded, let output {
+                VStack(spacing: 0) {
                 Divider().overlay(SwftColor.borderSubtle)
                 ScrollView(.horizontal, showsIndicators: false) {
                     Text(output)
@@ -188,10 +361,13 @@ public struct ToolCallCard: View {
                         .padding(12)
                 }
                 .background(SwftColor.codeBackground)
+                }
+                .transition(reduceMotion ? .opacity : .opacity.combined(with: .move(edge: .top)))
             }
         }
         .background(SwftColor.surface)
         .clipShape(RoundedRectangle(cornerRadius: SwftRadius.m, style: .continuous))
+        .animation(SwftMotion.resolve(SwftMotion.pop, reduceMotion: reduceMotion), value: status)
         .overlay(RoundedRectangle(cornerRadius: SwftRadius.m, style: .continuous).strokeBorder(SwftColor.border))
     }
 
@@ -220,6 +396,7 @@ public struct ApprovalCard: View {
     let status: ApprovalStatus
     let onApprove: () -> Void
     let onDeny: () -> Void
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     public init(title: String, message: String, command: String?, status: ApprovalStatus, onApprove: @escaping () -> Void = {}, onDeny: @escaping () -> Void = {}) {
         self.title = title
@@ -242,6 +419,7 @@ public struct ApprovalCard: View {
                     Label(status == .approved ? "Approved" : "Denied", systemImage: status == .approved ? "checkmark" : "xmark")
                         .font(SwftType.caption)
                         .foregroundStyle(status == .approved ? SwftColor.success : SwftColor.danger)
+                        .transition(.swftPop(reduceMotion: reduceMotion, scale: 0.7))
                 }
             }
             Text(message).font(SwftType.label).foregroundStyle(SwftColor.textSecondary).fixedSize(horizontal: false, vertical: true)
@@ -272,10 +450,12 @@ public struct ApprovalCard: View {
                             .foregroundStyle(SwftColor.canvas)
                             .contentShape(Capsule())
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(PressScaleStyle())
                 }
+                .transition(reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.96, anchor: .topTrailing)))
             }
         }
+        .animation(SwftMotion.resolve(SwftMotion.spring, reduceMotion: reduceMotion), value: status)
         .padding(14)
         .background(RoundedRectangle(cornerRadius: SwftRadius.l, style: .continuous).fill(SwftColor.warningSoft))
         .overlay(RoundedRectangle(cornerRadius: SwftRadius.l, style: .continuous).strokeBorder(SwftColor.warningBorder))

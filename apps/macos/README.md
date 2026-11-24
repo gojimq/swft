@@ -22,6 +22,9 @@ No T3 names, logos or icons may appear in the app (see /TRADEMARK.md).
     swift test
     scripts/bundle.sh      # produces build/Swft.app ; open build/Swft.app
 
+Run Swft from `build/Swft.app`. SwiftPM stamps the binary with the deployment target as its SDK version, which makes
+macOS 26+ run it in compatibility mode (small traffic lights, no Liquid Glass); `bundle.sh` re-stamps the real SDK.
+
 ## Visual direction
 
 Layout and feel follow the Gemini macOS desktop app (`docs/ref-gemini-home.png`): light, airy, soft blue radial glow,
@@ -49,6 +52,7 @@ Mock data (`Sources/Swft/Preview/MockData.swift`) is used only for SwiftUI previ
 - `-SwftMock` (or `-SwftMock YES`): force mock mode without starting a server (`-SwftMock NO` forces live mode).
 - `-SwftScreen thread`: open the sample mock thread.
 - `-SwftAppearance light|dark`: pin the appearance for screenshot runs.
+- `-SwftWindowSize 1924x1052`: pin the window size (for side-by-side comparisons with the reference).
 
 Current mock captures live in `docs/screens/`.
 

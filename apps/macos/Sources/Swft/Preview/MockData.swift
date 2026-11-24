@@ -66,7 +66,7 @@ enum MockData {
             .init(id: "i6", kind: .assistant(blocks: [
                 .text("The composer is in place. It stacks a multi-line field above a control row, and the send button only lights up once there’s text:"),
                 .code(language: "swift", source: "PillComposer(text: $draft, placeholder: \"Ask Swft\", onSend: send) {\n    ModelPicker(model: \"Opus 5.5\", effort: \"High\") { modelMenu }\n}"),
-                .text("Next I want to clear the stale build products so the bundle picks up the new font resources."),
+                .text("## What changed\n- `PillComposer` lives in **SwftDesign**, shared by home and thread screens.\n- The send button stays quiet until there’s text, then springs to life.\n\nNext I want to clear the stale build products so the bundle picks up the new font resources."),
             ], streaming: false)),
             .init(id: "i7", kind: .approval(.init(requestId: "mock-req-1", title: "Run command?", message: "Claude wants to delete the build directory before re-bundling the app.", command: "rm -rf apps/macos/build && scripts/bundle.sh", status: .pending))),
             .init(id: "i8", kind: .assistant(blocks: [

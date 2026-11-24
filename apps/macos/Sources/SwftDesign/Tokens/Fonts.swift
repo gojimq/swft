@@ -1,3 +1,4 @@
+import AppKit
 import CoreText
 import Foundation
 import SwiftUI
@@ -42,19 +43,31 @@ public enum SwftFonts {
         s.unicodeScalars.reduce(0) { ($0 << 8) | Int($1.value) }
     }
 
-    /// Google Sans Flex at an exact variable weight (100–1000) with optical size matched to the point size.
-    public static func flex(_ size: CGFloat, weight: CGFloat = 400, rounded: CGFloat = 0) -> Font {
+    /// Google Sans Flex at an exact variable weight (100–1000).
+    /// Defaults match the reference app's text measured at 1x: width 96 and optical size 32 at every point size
+    /// (narrower, taller-looking glyphs than the font's defaults).
+    public static func flex(_ size: CGFloat, weight: CGFloat = 400, width: CGFloat = 96, opticalSize: CGFloat = 32, rounded: CGFloat = 0) -> Font {
+        Font(ctFont(size, weight: weight, width: width, opticalSize: opticalSize, rounded: rounded))
+    }
+
+    public static func ctFont(_ size: CGFloat, weight: CGFloat = 400, width: CGFloat = 96, opticalSize: CGFloat = 32, rounded: CGFloat = 0) -> CTFont {
         guard var descriptor = baseDescriptor else {
-            return .system(size: size, weight: systemWeight(weight))
+            return NSFont.systemFont(ofSize: size, weight: nsWeight(weight))
         }
-        let axes: [(String, CGFloat)] = [("wght", weight), ("opsz", min(max(size, 6), 144)), ("ROND", rounded)]
+        let axes: [(String, CGFloat)] = [("wght", weight), ("wdth", width), ("opsz", opticalSize), ("ROND", rounded)]
         for (name, value) in axes {
             descriptor = CTFontDescriptorCreateCopyWithVariation(descriptor, tag(name) as CFNumber, value)
         }
-        return Font(CTFontCreateWithFontDescriptor(descriptor, size, nil))
+        return CTFontCreateWithFontDescriptor(descriptor, size, nil)
     }
 
-    static func systemWeight(_ w: CGFloat) -> Font.Weight {
+    /// Natural line height (ascent + descent + leading) of a token size, used to derive SwiftUI line spacing.
+    public static func lineHeight(_ size: CGFloat) -> CGFloat {
+        let font = ctFont(size)
+        return CTFontGetAscent(font) + CTFontGetDescent(font) + CTFontGetLeading(font)
+    }
+
+    static func nsWeight(_ w: CGFloat) -> NSFont.Weight {
         switch w {
         case ..<250: .light
         case ..<450: .regular
@@ -65,24 +78,34 @@ public enum SwftFonts {
     }
 }
 
-/// Type scale. Sizes follow the reference: quiet 13–15pt UI text, a large light greeting.
+/// Type scale, measured against the reference app at the same window size (1pt = 1px).
 public enum SwftType {
-    public static let greeting = SwftFonts.flex(30, weight: 420)
+    public static let greeting = SwftFonts.flex(32.5, weight: 400)
     public static let title = SwftFonts.flex(20, weight: 500)
+    /// Assistant markdown headings (`#`–`###`).
+    public static let heading = SwftFonts.flex(20, weight: 450)
+    public static let subheading = SwftFonts.flex(17, weight: 600)
     public static let headline = SwftFonts.flex(15, weight: 560)
-    public static let body = SwftFonts.flex(15, weight: 400)
-    public static let bodyStrong = SwftFonts.flex(15, weight: 560)
-    public static let composer = SwftFonts.flex(16, weight: 400)
-    public static let sidebar = SwftFonts.flex(13.5, weight: 420)
-    public static let sidebarStrong = SwftFonts.flex(13.5, weight: 600)
-    public static let rowTitle = SwftFonts.flex(13.5, weight: 600)
-    public static let rowTitleRead = SwftFonts.flex(13.5, weight: 480)
-    public static let label = SwftFonts.flex(13, weight: 450)
-    public static let labelStrong = SwftFonts.flex(13, weight: 580)
+    /// Transcript prose and the user bubble.
+    public static let bodySize: CGFloat = 17
+    public static let body = SwftFonts.flex(bodySize, weight: 400)
+    public static let bodyStrong = SwftFonts.flex(bodySize, weight: 620)
+    /// Pitch between transcript lines; the reference runs ~1.5x the point size.
+    public static let bodyLineSpacing: CGFloat = max(0, 25.5 - SwftFonts.lineHeight(bodySize))
+    public static let composer = SwftFonts.flex(17, weight: 400)
+    public static let suggestion = SwftFonts.flex(15.5, weight: 400)
+    public static let sidebar = SwftFonts.flex(13.75, weight: 400)
+    public static let sidebarStrong = SwftFonts.flex(13.75, weight: 560)
+    public static let rowTitle = SwftFonts.flex(13.75, weight: 560)
+    public static let rowTitleRead = SwftFonts.flex(13.75, weight: 400)
+    public static let sectionHeader = SwftFonts.flex(13.5, weight: 400)
+    public static let label = SwftFonts.flex(13.75, weight: 400)
+    public static let labelStrong = SwftFonts.flex(13.75, weight: 580)
     public static let caption = SwftFonts.flex(12, weight: 420)
     public static let captionStrong = SwftFonts.flex(12, weight: 580)
     public static let micro = SwftFonts.flex(10, weight: 700)
-    public static let brand = SwftFonts.flex(19, weight: 560, rounded: 40)
-    public static let mono = Font.system(size: 12.5, design: .monospaced)
-    public static let monoSmall = Font.system(size: 11.5, design: .monospaced)
+    public static let brand = SwftFonts.flex(19, weight: 500, rounded: 40)
+    public static let inlineCode = Font.system(size: 15.5, design: .monospaced)
+    public static let mono = Font.system(size: 13.5, design: .monospaced)
+    public static let monoSmall = Font.system(size: 12, design: .monospaced)
 }
