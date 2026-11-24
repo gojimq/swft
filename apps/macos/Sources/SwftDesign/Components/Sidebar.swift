@@ -36,7 +36,7 @@ public struct SidebarNavRow: View {
             .frame(height: SwftLayout.sidebarRowHeight)
             .contentShape(Capsule())
         }
-        .buttonStyle(HoverFillStyle(shape: RoundedRectangle(cornerRadius: SwftRadius.l, style: .continuous), selected: isSelected, pressScale: 0.985))
+        .buttonStyle(SidebarSelectionButtonStyle(shape: RoundedRectangle(cornerRadius: SwftRadius.l, style: .continuous), selected: isSelected, pressScale: SidebarSelectionMotion.rowPressScale))
     }
 }
 
@@ -180,7 +180,7 @@ public struct ThreadInboxRow: View {
             .padding(.vertical, 9)
             .contentShape(RoundedRectangle(cornerRadius: SwftRadius.l, style: .continuous))
         }
-        .buttonStyle(HoverFillStyle(shape: RoundedRectangle(cornerRadius: SwftRadius.l, style: .continuous), selected: isSelected, pressScale: 0.985))
+        .buttonStyle(SidebarSelectionButtonStyle(shape: RoundedRectangle(cornerRadius: SwftRadius.l, style: .continuous), selected: isSelected, pressScale: SidebarSelectionMotion.rowPressScale))
         .animation(SwftMotion.pop, value: model.status)
         .accessibilityElement(children: .combine)
     }

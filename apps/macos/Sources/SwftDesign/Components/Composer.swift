@@ -25,44 +25,47 @@ public struct PillComposer<Leading: View, Trailing: View>: View {
     private var canSend: Bool { !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 
     public var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            TextField("", text: $text, prompt: Text(placeholder).foregroundStyle(SwftColor.placeholder), axis: .vertical)
+        VStack(alignment: .leading, spacing: ComposerPolish.verticalSpacing) {
+            TextField(
+                "",
+                text: $text,
+                prompt: Text(placeholder)
+                    .font(ComposerPolish.placeholderFont)
+                    .foregroundStyle(ComposerPolish.placeholderColor),
+                axis: .vertical
+            )
                 .textFieldStyle(.plain)
-                .font(SwftType.composer)
+                .font(ComposerPolish.inputFont)
                 .foregroundStyle(SwftColor.textPrimary)
                 .lineLimit(1...10)
                 .focused($focused)
                 .onSubmit { if canSend { onSend() } }
-                .padding(.horizontal, 6)
-                .padding(.top, 2)
+                .padding(.horizontal, ComposerPolish.textHorizontalInset)
+                .padding(.top, ComposerPolish.textTopInset)
 
-            HStack(spacing: 6) {
-                IconButton("plus", help: "Attach files", size: 30)
+            HStack(spacing: ComposerPolish.controlsSpacing) {
+                IconButton("plus", help: "Attach files", size: ComposerPolish.controlButtonSize, tint: SwftColor.textPrimary)
                 leading
                 Spacer(minLength: 8)
                 trailing
-                IconButton("mic", help: "Dictate", size: 30)
+                IconButton("mic", help: "Dictate", size: ComposerPolish.controlButtonSize, tint: SwftColor.textPrimary)
                 SendButton(state: isBusy ? .stop : (canSend ? .ready : .idle), action: isBusy ? (onStop ?? onSend) : onSend)
             }
         }
-        .padding(.leading, 12)
-        .padding(.trailing, 10)
-        .padding(.top, 14)
-        .padding(.bottom, 9)
-        .swftGlass(in: shape)
-        .overlay {
-            shape.strokeBorder(focused ? SwftColor.border : SwftColor.borderSubtle)
-        }
-        .shadow(color: SwftColor.shadow.opacity(focused ? 1 : 0.7), radius: focused ? 18 : 12, y: focused ? 5 : 3)
+        .padding(.leading, ComposerPolish.contentLeadingPadding)
+        .padding(.trailing, ComposerPolish.contentTrailingPadding)
+        .padding(.top, ComposerPolish.contentTopPadding)
+        .padding(.bottom, ComposerPolish.contentBottomPadding)
+        .frame(minHeight: ComposerPolish.minHeight, alignment: .top)
+        .swftComposerGlass(in: shape)
         .contentShape(shape)
         .onTapGesture { focused = true }
-        .animation(SwftMotion.resolve(SwftMotion.spring, reduceMotion: reduceMotion), value: focused)
         // Grows/shrinks smoothly as lines are added or removed.
         .animation(SwftMotion.resolve(SwftMotion.spring, reduceMotion: reduceMotion), value: text.filter(\.isNewline).count)
     }
 
     private var shape: RoundedRectangle {
-        RoundedRectangle(cornerRadius: SwftRadius.composer, style: .continuous)
+        RoundedRectangle(cornerRadius: ComposerPolish.cornerRadius, style: .continuous)
     }
 }
 
@@ -78,6 +81,8 @@ public struct SendButton: View {
     let state: State
     let action: () -> Void
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     public init(state: State, action: @escaping () -> Void) {
         self.state = state
         self.action = action
@@ -86,17 +91,16 @@ public struct SendButton: View {
     public var body: some View {
         Button(action: action) {
             Image(systemName: state == .stop ? "stop.fill" : "arrow.up")
-                .font(.system(size: state == .stop ? 11 : 14, weight: .semibold))
+                .font(.system(size: state == .stop ? 10.5 : 13, weight: .semibold))
                 .contentTransition(.symbolEffect(.replace))
-                .foregroundStyle(state == .idle ? SwftColor.onSend.opacity(0.55) : SwftColor.onSend)
-                .frame(width: 32, height: 32)
-                .background(Circle().fill(state == .idle ? SwftColor.sendFillIdle : SwftColor.sendFill))
-                .scaleEffect(state == .idle ? 0.94 : 1)
+                .foregroundStyle(ComposerPolish.sendIconColor(for: state))
+                .frame(width: ComposerPolish.sendButtonSize, height: ComposerPolish.sendButtonSize)
+                .background(Circle().fill(ComposerPolish.sendFill(for: state)))
                 .contentShape(Circle())
         }
         .buttonStyle(PressScaleStyle())
         .disabled(state == .idle)
-        .animation(SwftMotion.pop, value: state)
+        .animation(SwftMotion.resolve(SwftMotion.pop, reduceMotion: reduceMotion), value: state)
         .help(state == .stop ? "Stop" : "Send")
         .keyboardShortcut(.return, modifiers: .command)
     }
