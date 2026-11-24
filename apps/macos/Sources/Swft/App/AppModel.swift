@@ -19,7 +19,10 @@ final class AppModel {
     var filter: ThreadFilter = .all
     var composerText = ""
     var composerMode: ComposerMode = .chat
-    var selectedProjectID: String?
+    var selectedProjectID: String? {
+        didSet { if selectedProjectID != nil { isNoProjectSelected = false } }
+    }
+    var isNoProjectSelected = false
     var selectedModelID: String?
     var selectedReasoningChoiceId: String?
     var now: Date
@@ -33,7 +36,7 @@ final class AppModel {
 
     private var serverProcess: ServerProcess?
     private var connection: ServerConnection?
-    private var threadsStore: ThreadsStore?
+    private(set) var threadsStore: ThreadsStore?
     private var activeThreadStore: ThreadStore?
     private var serverPort: Int?
     private var launchPhase: LaunchPhase = .idle
@@ -336,16 +339,16 @@ final class AppModel {
         }
         guard let threadsStore else { return [] }
         return threadsStore.projects
-            .filter { $0.archivedAt == nil }
+            .filter { $0.archivedAt == nil && !threadsStore.isScratchProject($0) }
             .map(SwftAdapters.projectRef(from:))
     }
 
     var selectedProject: ProjectRef? {
-        let all = projects
-        if let selectedProjectID, let match = all.first(where: { $0.id == selectedProjectID }) {
-            return match
-        }
-        return all.first
+        NoProjectLogic.resolveSelectedProject(
+            projects: projects,
+            selectedProjectID: selectedProjectID,
+            isNoProjectSelected: isNoProjectSelected
+        )
     }
 
     var availableModels: [ModelOption] {
@@ -407,7 +410,7 @@ final class AppModel {
             return SidebarState(threads: mockBacking.threads, filter: filter, account: mockBacking.account)
         }
         let hostName = threadsStore?.environment?.label ?? threadsStore?.hostname
-        let projectsByID = threadsStore?.projectsByID ?? [:]
+        let projectsByID = nonScratchProjectsByID
         let providersByID = Dictionary(
             uniqueKeysWithValues: (threadsStore?.providers ?? []).map { ($0.instanceId, $0) }
         )
@@ -434,22 +437,7 @@ final class AppModel {
     }
 
     var composer: ComposerState {
-        let contextLabel: String?
-        if let id = selectedThreadID, let summary = threadSummary(for: id) {
-            if let projectName = summary.project?.name {
-                if case .branch(let branch) = summary.location {
-                    contextLabel = "\(projectName) · \(branch)"
-                } else {
-                    contextLabel = projectName
-                }
-            } else {
-                contextLabel = nil
-            }
-        } else if let mockBacking {
-            contextLabel = mockBacking.defaultContextLabel
-        } else {
-            contextLabel = selectedProject?.name
-        }
+        let contextLabel = resolvedComposerContextLabel(mockDefaultContextLabel: mockBacking?.defaultContextLabel)
 
         let isBusy: Bool
         if isMock {
@@ -503,7 +491,7 @@ final class AppModel {
            activeThreadStore.threadId == id,
            let thread = activeThreadStore.thread
         {
-            let project = threadsStore?.projectsByID[thread.projectId].map(SwftAdapters.projectRef(from:))
+            let project = nonScratchProjectsByID[thread.projectId].map(SwftAdapters.projectRef(from:))
             let provider = threadsStore?.provider(for: thread.providerInstanceId)
             let location: ThreadLocation? = thread.branch.flatMap { $0.isEmpty ? nil : .branch($0) }
                 ?? (threadsStore?.environment?.label ?? threadsStore?.hostname).map { .host($0) }
@@ -716,6 +704,13 @@ final class AppModel {
 
         if isMock {
             composerText = ""
+            if selectedThreadID == nil && selectedProject == nil {
+                let created = makeMockNoProjectThread(text: text)
+                mockBacking?.threads.insert(created.summary, at: 0)
+                mockBacking?.details[created.summary.id] = created
+                destination = .thread(created.summary.id)
+                return
+            }
             let id = selectedThreadID ?? MockData.threadDetail.summary.id
             var existing = detail(for: id) ?? MockData.threadDetail
             existing.items.append(TranscriptItem(id: UUID().uuidString, kind: .user(text)))
@@ -751,9 +746,10 @@ final class AppModel {
             return
         }
 
-        // Home composer: create a new thread in the selected project and send the first message.
-        guard let project = selectedProject else {
-            actionError = "Select or add a project first to start a thread."
+        // Home composer: create a new thread in the selected project (or scratch when no project is chosen).
+        let launchResolution = resolveHomeLaunchTarget()
+        guard case .ready(let launchTarget) = launchResolution else {
+            if case .unavailable(let reason) = launchResolution { actionError = reason }
             return
         }
         guard let modelOption = selectedModel else {
@@ -775,8 +771,9 @@ final class AppModel {
 
         Task {
             do {
+                let projectId = try await resolveLaunchProjectID(for: launchTarget, using: threadsStore)
                 let input = LaunchThreadInput(
-                    projectId: project.id,
+                    projectId: projectId,
                     title: initialTitle,
                     generateTitle: true,
                     modelSelection: modelSelection,

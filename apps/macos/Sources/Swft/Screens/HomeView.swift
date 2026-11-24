@@ -77,11 +77,7 @@ struct ComposerView: View {
             onSend: model.send,
             onStop: model.stopActiveRun
         ) {
-            if model.selectedThreadID == nil {
-                projectPicker(contextLabel: composer.contextLabel)
-            } else if let context = composer.contextLabel {
-                ComposerChip(context, systemName: "folder")
-            }
+            ComposerProjectSlot(contextLabel: composer.contextLabel)
         } trailing: {
             modelPickerTrigger(composer: composer)
         }
@@ -94,43 +90,6 @@ struct ComposerView: View {
                     .transition(reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.94, anchor: pickerOpensBelow ? .topTrailing : .bottomTrailing)).combined(with: .offset(y: pickerOpensBelow ? -6 : 6)))
             }
         }
-    }
-
-    @ViewBuilder
-    private func projectPicker(contextLabel: String?) -> some View {
-        let label = contextLabel ?? (model.projects.isEmpty ? "Add project" : "Select project")
-        Menu {
-            if !model.projects.isEmpty {
-                let selection = Binding<String>(
-                    get: { model.selectedProject?.id ?? "" },
-                    set: { model.selectProject($0) }
-                )
-                Picker("Project", selection: selection) {
-                    ForEach(model.projects) { project in
-                        Text(project.name).tag(project.id)
-                    }
-                }
-                .pickerStyle(.inline)
-                Divider()
-            }
-            Button("Add Project…") {
-                model.pickAndAddProject()
-            }
-        } label: {
-            HStack(spacing: 6) {
-                Image(systemName: "folder").font(.system(size: 12, weight: .medium))
-                Text(label).font(SwftType.label).lineLimit(1)
-            }
-            .foregroundStyle(model.projects.isEmpty && !model.isMock ? SwftColor.textSecondary : SwftColor.textPrimary)
-            .padding(.horizontal, 10)
-            .frame(height: 30)
-            .contentShape(Capsule())
-            .accessibilityElement(children: .combine)
-        }
-        .menuStyle(.button)
-        .buttonStyle(HoverFillStyle(shape: Capsule()))
-        .menuIndicator(.hidden)
-        .fixedSize()
     }
 
     @ViewBuilder
