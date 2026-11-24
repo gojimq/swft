@@ -518,7 +518,9 @@ final class AppModel {
                 ),
                 providerDisplayName: provider?.label,
                 activity: activeThreadStore.isRunning ? .running : .idle,
-                updatedAt: thread.updatedAt
+                updatedAt: thread.updatedAt,
+                providerDriver: SwftAdapters.providerDriverIdentifier(driver: provider?.driver, instanceId: thread.providerInstanceId),
+                providerIconUrl: provider?.iconUrl
             )
         }
         return nil

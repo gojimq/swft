@@ -163,23 +163,55 @@ public struct ProjectChip: View {
     }
 }
 
-/// A provider identity glyph: neutral SF Symbol in a tint, never a vendor logo.
+/// A provider identity glyph resolving to the real provider mark, with a neutral fallback.
 public struct ProviderGlyph: View {
+    let provider: String?
+    let acpAgentID: String?
+    let iconURL: String?
     let symbol: String
     let tint: Color
     let name: String
+    let size: CGFloat
 
     public init(symbol: String, tint: Color, name: String) {
+        self.provider = nil
+        self.acpAgentID = nil
+        self.iconURL = nil
         self.symbol = symbol
         self.tint = tint
         self.name = name
+        self.size = 13.5
+    }
+
+    public init(
+        provider: String?,
+        acpAgentID: String? = nil,
+        iconURL: String? = nil,
+        symbol: String = "circle.dashed",
+        tint: Color = SwftColor.textSecondary,
+        name: String,
+        size: CGFloat = 13.5
+    ) {
+        self.provider = provider
+        self.acpAgentID = acpAgentID
+        self.iconURL = iconURL
+        self.symbol = symbol
+        self.tint = tint
+        self.name = name
+        self.size = size
     }
 
     public var body: some View {
-        Image(systemName: symbol)
-            .font(.system(size: 11, weight: .semibold))
-            .foregroundStyle(tint)
-            .frame(width: 16, height: 16)
+        let resolved = ProviderIconKind.resolve(
+            driver: provider,
+            acpAgentID: acpAgentID,
+            iconURL: iconURL,
+            name: name,
+            legacySymbol: symbol
+        )
+        ProviderIcon(resolved: resolved, size: size)
+            .foregroundStyle(resolved == .mark(.generic) ? SwftColor.textTertiary : SwftColor.textSecondary)
+            .frame(width: max(16, size), height: max(16, size))
             .help(name)
             .accessibilityLabel(name)
     }
