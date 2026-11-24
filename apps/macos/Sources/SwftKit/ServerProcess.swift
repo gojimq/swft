@@ -84,9 +84,9 @@ public enum ServerProcessError: Error, Sendable, LocalizedError {
         case .forbiddenBaseDirectory(let path):
             return "Refusing to launch server against live T3 userdata directory: \(path)"
         case .nodeNotFound:
-            return "Could not locate a Node.js executable."
+            return "Could not locate a Node.js executable (v22.16+ or v24+ required). Install Node or set SWFT_NODE_PATH."
         case .entrypointNotFound:
-            return "Could not locate server entrypoint (dist/bin.mjs or src/bin.ts)."
+            return "Could not locate the Swft server entrypoint (apps/server/dist/bin.mjs or apps/server/src/bin.ts). Set SWFT_REPO_ROOT or SWFT_SERVER_ENTRY."
         case .portAllocationFailed(let code):
             return "Failed to allocate a free loopback TCP port (errno \(code))."
         case .randomTokenGenerationFailed:
@@ -159,7 +159,18 @@ public actor ServerProcess {
     }
 
     deinit {
-        if let pid = trackedPID.withLock({ $0 }), pid > 0 {
+        terminateImmediately()
+    }
+
+    /// Synchronously sends SIGTERM to ONLY the exact PID spawned by this instance.
+    /// Intended as a last-resort hook for synchronous process exit (`applicationWillTerminate`).
+    public nonisolated func terminateImmediately() {
+        let pid = trackedPID.withLock { current -> Int32? in
+            let captured = current
+            current = nil
+            return captured
+        }
+        if let pid, pid > 0 {
             _ = Darwin.kill(pid, SIGTERM)
         }
     }
@@ -362,9 +373,10 @@ public actor ServerProcess {
         if let explicit = configuration.nodeExecutable, fm.isExecutableFile(atPath: explicit.path) {
             return explicit
         }
-        if let envPath = ProcessInfo.processInfo.environment["SWFT_NODE_PATH"],
-           fm.isExecutableFile(atPath: envPath)
-        {
+        if let envPath = ProcessInfo.processInfo.environment["SWFT_NODE_PATH"], !envPath.isEmpty {
+            guard fm.isExecutableFile(atPath: envPath) else {
+                throw ServerProcessError.nodeNotFound
+            }
             return URL(fileURLWithPath: envPath)
         }
 
@@ -378,21 +390,32 @@ public actor ServerProcess {
             }
         }
 
+        let home = fm.homeDirectoryForCurrentUser
         let fallbacks = [
+            home.appendingPathComponent(".local/bin/node").path,
             "/opt/homebrew/bin/node",
             "/usr/local/bin/node",
+            home.appendingPathComponent(".volta/bin/node").path,
+            home.appendingPathComponent(".fnm/current/bin/node").path,
+            home.appendingPathComponent(".mise/shims/node").path,
+            home.appendingPathComponent(".asdf/shims/node").path,
         ]
         for path in fallbacks where fm.isExecutableFile(atPath: path) {
             return URL(fileURLWithPath: path)
         }
 
-        // Check vite-plus managed node installations under ~/.local/node/*/bin/node.
-        let localNodeRoot = fm.homeDirectoryForCurrentUser.appendingPathComponent(".local/node", isDirectory: true)
-        if let entries = try? fm.contentsOfDirectory(at: localNodeRoot, includingPropertiesForKeys: nil) {
-            for entry in entries.sorted(by: { $0.lastPathComponent > $1.lastPathComponent }) {
-                let candidate = entry.appendingPathComponent("bin/node")
-                if fm.isExecutableFile(atPath: candidate.path) {
-                    return candidate
+        // Check version-managed Node installations under ~/.local/node/*/bin/node and ~/.nvm/versions/node/*/bin/node.
+        let versionRoots = [
+            home.appendingPathComponent(".local/node", isDirectory: true),
+            home.appendingPathComponent(".nvm/versions/node", isDirectory: true),
+        ]
+        for root in versionRoots {
+            if let entries = try? fm.contentsOfDirectory(at: root, includingPropertiesForKeys: nil) {
+                for entry in entries.sorted(by: { $0.lastPathComponent > $1.lastPathComponent }) {
+                    let candidate = entry.appendingPathComponent("bin/node")
+                    if fm.isExecutableFile(atPath: candidate.path) {
+                        return candidate
+                    }
                 }
             }
         }
@@ -405,10 +428,20 @@ public actor ServerProcess {
         if let explicit = configuration.serverEntrypoint, fm.fileExists(atPath: explicit.path) {
             return explicit
         }
-        if let envEntry = ProcessInfo.processInfo.environment["SWFT_SERVER_ENTRY"],
-           fm.fileExists(atPath: envEntry)
-        {
+        if let envEntry = ProcessInfo.processInfo.environment["SWFT_SERVER_ENTRY"], !envEntry.isEmpty {
+            guard fm.fileExists(atPath: envEntry) else {
+                throw ServerProcessError.entrypointNotFound
+            }
             return URL(fileURLWithPath: envEntry)
+        }
+        if let envRepoRoot = ProcessInfo.processInfo.environment["SWFT_REPO_ROOT"], !envRepoRoot.isEmpty {
+            guard let entry = Self.findServerEntrypoint(
+                under: URL(fileURLWithPath: envRepoRoot, isDirectory: true),
+                fileManager: fm
+            ) else {
+                throw ServerProcessError.entrypointNotFound
+            }
+            return entry
         }
         if let bundled = Bundle.main.resourceURL?.appendingPathComponent("server/bin.mjs"),
            fm.fileExists(atPath: bundled.path)
@@ -421,17 +454,16 @@ public actor ServerProcess {
             searchRoots.append(cwd)
         }
         searchRoots.append(URL(fileURLWithPath: fm.currentDirectoryPath, isDirectory: true))
+        searchRoots.append(Bundle.main.bundleURL)
+        // Build-time checkout fallback so a locally bundled Swft.app launched via Finder/open
+        // (where cwd is `/`) still locates apps/server in the checkout it was compiled from.
+        searchRoots.append(URL(fileURLWithPath: #filePath).deletingLastPathComponent())
 
         for start in searchRoots {
             var current = start.standardizedFileURL
             for _ in 0..<8 {
-                let distEntry = current.appendingPathComponent("apps/server/dist/bin.mjs")
-                if fm.fileExists(atPath: distEntry.path) {
-                    return distEntry
-                }
-                let srcEntry = current.appendingPathComponent("apps/server/src/bin.ts")
-                if fm.fileExists(atPath: srcEntry.path) {
-                    return srcEntry
+                if let entry = Self.findServerEntrypoint(under: current, fileManager: fm) {
+                    return entry
                 }
                 let parent = current.deletingLastPathComponent()
                 if parent.path == current.path { break }
@@ -440,6 +472,18 @@ public actor ServerProcess {
         }
 
         throw ServerProcessError.entrypointNotFound
+    }
+
+    private static func findServerEntrypoint(under root: URL, fileManager: FileManager) -> URL? {
+        let distEntry = root.appendingPathComponent("apps/server/dist/bin.mjs")
+        if fileManager.fileExists(atPath: distEntry.path) {
+            return distEntry
+        }
+        let srcEntry = root.appendingPathComponent("apps/server/src/bin.ts")
+        if fileManager.fileExists(atPath: srcEntry.path) {
+            return srcEntry
+        }
+        return nil
     }
 
     private static func allocateLoopbackPort() throws -> Int {

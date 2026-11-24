@@ -16,7 +16,11 @@ struct RootView: View {
                 case .thread(let id):
                     if let detail = model.detail(for: id) {
                         ThreadView(detail: detail).id(id)
+                    } else {
+                        HomeView()
                     }
+                case .projects:
+                    ProjectsView()
                 default:
                     HomeView()
                 }
@@ -34,6 +38,7 @@ struct RootView: View {
 /// Window-top row of the content area: sidebar toggle (when collapsed) and the right-hand pill group.
 struct TopBar: View {
     @Environment(AppModel.self) private var model
+    @State private var showingServerPopover = false
 
     var body: some View {
         HStack(spacing: 8) {
@@ -41,9 +46,9 @@ struct TopBar: View {
                 // Leave room for the traffic lights.
                 Color.clear.frame(width: 68, height: 1)
                 IconButton("sidebar.left", help: "Show sidebar", action: model.toggleSidebar)
-                IconButton("square.and.pencil", help: "New thread") { model.destination = .home }
+                IconButton("square.and.pencil", help: "New thread", action: model.goHome)
             }
-            if case .thread(let id) = model.destination, let summary = model.sidebar.threads.first(where: { $0.id == id }) {
+            if case .thread(let id) = model.destination, let summary = model.threadSummary(for: id) {
                 VStack(alignment: .leading, spacing: 0) {
                     Text(summary.title).font(SwftType.labelStrong).foregroundStyle(SwftColor.textPrimary).lineLimit(1)
                     Text(summary.project?.name ?? "No project").font(SwftType.caption).foregroundStyle(SwftColor.textTertiary)
@@ -68,6 +73,9 @@ struct TopBar: View {
 
     @ViewBuilder private var trailingPills: some View {
         if case .thread(let id) = model.destination, let detail = model.detail(for: id) {
+            if !model.serverStatus.isConnected {
+                serverStatusPill
+            }
             if case .branch(let branch) = detail.summary.location {
                 ToolbarPill {
                     PillTextButton(branch, systemName: "arrow.triangle.branch")
@@ -88,20 +96,113 @@ struct TopBar: View {
                 IconButton("clock.arrow.circlepath", help: "History")
                 IconButton("arrow.down.right.and.arrow.up.left", help: "Compact window")
             }
-            ToolbarPill {
-                Button {} label: {
-                    HStack(spacing: 7) {
-                        Circle().fill(SwftColor.success).frame(width: 7, height: 7)
-                        Text("Local server").font(SwftType.label)
-                    }
-                    .padding(.horizontal, 10)
-                    .frame(height: 28)
-                    .contentShape(Capsule())
+            serverStatusPill
+        }
+    }
+
+    private var serverStatusPill: some View {
+        ToolbarPill {
+            Button {
+                showingServerPopover.toggle()
+            } label: {
+                HStack(spacing: 7) {
+                    Circle().fill(model.serverStatus.dotColor).frame(width: 7, height: 7)
+                    Text(model.serverStatus.pillTitle).font(SwftType.label)
                 }
-                .buttonStyle(HoverFillStyle(shape: Capsule()))
-                .foregroundStyle(SwftColor.textPrimary)
+                .padding(.horizontal, 10)
+                .frame(height: 28)
+                .contentShape(Capsule())
+            }
+            .buttonStyle(HoverFillStyle(shape: Capsule()))
+            .foregroundStyle(SwftColor.textPrimary)
+            .popover(isPresented: $showingServerPopover, arrowEdge: .bottom) {
+                ServerStatusPopover(dismiss: { showingServerPopover = false })
+            }
+
+            if model.serverStatus.needsRetry {
+                PillTextButton("Retry", systemName: "arrow.clockwise") {
+                    model.retryConnection()
+                }
             }
         }
+    }
+}
+
+/// Compact popover explaining local server connection status, active providers, or startup errors.
+struct ServerStatusPopover: View {
+    @Environment(AppModel.self) private var model
+    let dismiss: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Circle().fill(model.serverStatus.dotColor).frame(width: 8, height: 8)
+                Text(model.serverStatus.pillTitle)
+                    .font(SwftType.labelStrong)
+                    .foregroundStyle(SwftColor.textPrimary)
+                Spacer(minLength: 12)
+                if case .connected(_, _, let port) = model.serverStatus, let port {
+                    Text(":\(port)")
+                        .font(SwftType.monoSmall)
+                        .foregroundStyle(SwftColor.textTertiary)
+                }
+            }
+
+            switch model.serverStatus {
+            case .starting:
+                Text("Launching local Swft server…")
+                    .font(SwftType.caption)
+                    .foregroundStyle(SwftColor.textSecondary)
+            case .connecting:
+                Text("Authenticating and opening WebSocket connection…")
+                    .font(SwftType.caption)
+                    .foregroundStyle(SwftColor.textSecondary)
+            case .connected(let label, let count, _):
+                Text("\(label) · \(count) \(count == 1 ? "provider" : "providers") ready")
+                    .font(SwftType.caption)
+                    .foregroundStyle(SwftColor.textSecondary)
+                let names = model.readyProviderNames
+                if !names.isEmpty {
+                    Text(names.joined(separator: ", "))
+                        .font(SwftType.caption)
+                        .foregroundStyle(SwftColor.textTertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            case .reconnecting(let attempt, let message):
+                Text("Reconnecting (attempt \(attempt)): \(message)")
+                    .font(SwftType.caption)
+                    .foregroundStyle(SwftColor.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            case .failed(let message):
+                Text(message)
+                    .font(SwftType.caption)
+                    .foregroundStyle(SwftColor.danger)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            HStack(spacing: 8) {
+                Spacer()
+                if model.serverStatus.isConnected && !model.isMock {
+                    Button("Refresh providers") {
+                        model.refreshProviders()
+                        dismiss()
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+                if !model.isMock {
+                    Button(model.serverStatus.isConnected ? "Reconnect" : "Retry") {
+                        model.retryConnection()
+                        dismiss()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                }
+            }
+        }
+        .padding(14)
+        .frame(width: 300)
     }
 }
 

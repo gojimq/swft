@@ -21,7 +21,16 @@ struct ThreadView: View {
             }
             .defaultScrollAnchor(.bottom)
 
-            ComposerView(placeholder: "Reply to \(detail.summary.provider.displayName)…")
+            if let actionError = model.actionError {
+                ActionErrorBanner(message: actionError) {
+                    model.actionError = nil
+                }
+                .frame(maxWidth: SwftLayout.composerMaxWidth)
+                .padding(.horizontal, 32)
+                .padding(.bottom, 8)
+            }
+
+            ComposerView(placeholder: "Reply to \(detail.summary.providerLabel)…")
                 .frame(maxWidth: SwftLayout.composerMaxWidth)
                 .padding(.horizontal, 32)
                 .padding(.bottom, 20)
@@ -71,7 +80,46 @@ struct ThreadView: View {
                 onDeny: { model.resolveApproval(itemID: item.id, in: detail.summary.id, approved: false) }
             )
             .padding(.leading, 38)
+        case .notice(let title, let message, let isError):
+            TranscriptNoticeCard(title: title, message: message, isError: isError)
+                .padding(.leading, 38)
         }
+    }
+}
+
+struct TranscriptNoticeCard: View {
+    let title: String
+    let message: String
+    let isError: Bool
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: isError ? "exclamationmark.circle.fill" : "info.circle")
+                .font(.system(size: 12.5))
+                .foregroundStyle(isError ? SwftColor.danger : SwftColor.textSecondary)
+                .padding(.top, 2)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(SwftType.labelStrong)
+                    .foregroundStyle(SwftColor.textPrimary)
+                Text(message)
+                    .font(SwftType.label)
+                    .foregroundStyle(SwftColor.textSecondary)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(
+            RoundedRectangle(cornerRadius: SwftRadius.m, style: .continuous)
+                .fill(isError ? SwftColor.dangerSoft : SwftColor.surfaceMuted)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: SwftRadius.m, style: .continuous)
+                .strokeBorder(isError ? SwftColor.danger.opacity(0.28) : SwftColor.borderSubtle)
+        )
     }
 }
 

@@ -10,11 +10,11 @@ No T3 names, logos or icons may appear in the app (see /TRADEMARK.md).
 
 ## Layout
 
-| Path | Owner | Contents |
-|---|---|---|
-| `Sources/SwftKit` | engineering track | WebSocket/RPC client, Codable models mirroring `packages/contracts`, server process launcher, stores |
-| `Sources/SwftDesign` | design track | tokens (color, type, spacing, radius, motion), bundled Google Sans Flex font, reusable components |
-| `Sources/Swft` | design track builds screens with mock data; engineering track wires real data | app, windows, screens, view models |
+| Path                 | Owner                                                                         | Contents                                                                                             |
+| -------------------- | ----------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `Sources/SwftKit`    | engineering track                                                             | WebSocket/RPC client, Codable models mirroring `packages/contracts`, server process launcher, stores |
+| `Sources/SwftDesign` | design track                                                                  | tokens (color, type, spacing, radius, motion), bundled Google Sans Flex font, reusable components    |
+| `Sources/Swft`       | design track builds screens with mock data; engineering track wires real data | app, windows, screens, view models                                                                   |
 
 ## Build / run
 
@@ -40,13 +40,48 @@ per-process at launch (`SwftFonts.register()`); every type token falls back to t
 
 ## UI state and screenshots
 
-Screens render plain value types from `Sources/Swft/ViewState`, seeded today by `Sources/Swft/Preview/MockData.swift`
-through `AppModel`. Wiring real data means filling those types from SwftKit, not changing the views.
+Screens render plain value types from `Sources/Swft/ViewState`, adapted from `SwftKit` stores via
+`Sources/Swft/Adapters/SwftKitAdapters.swift`. By default the app boots the local Node server under
+`~/Library/Application Support/Swft`, authenticates, and connects over WebSocket.
 
-Launch flags (handy for screenshots): `-SwftScreen thread` opens the sample thread, `-SwftAppearance light|dark`
-pins the appearance. Current captures live in `docs/screens/`.
+Mock data (`Sources/Swft/Preview/MockData.swift`) is used only for SwiftUI previews and screenshot flags:
+
+- `-SwftMock` (or `-SwftMock YES`): force mock mode without starting a server (`-SwftMock NO` forces live mode).
+- `-SwftScreen thread`: open the sample mock thread.
+- `-SwftAppearance light|dark`: pin the appearance for screenshot runs.
+
+Current mock captures live in `docs/screens/`.
+
+## Running the local server (dev vs packaged `.app`)
+
+During development, `ServerProcess` launches `apps/server` with a system `node` binary (v22.16+ or v24+).
+Resolution order:
+
+- **Node binary:** `SWFT_NODE_PATH` → `PATH` → common macOS paths (`~/.local/bin/node`, `/opt/homebrew/bin/node`,
+  `/usr/local/bin/node`, `~/.local/node/*/bin/node`, `~/.nvm/versions/node/*/bin/node`).
+- **Server entrypoint:** `SWFT_SERVER_ENTRY` → `SWFT_REPO_ROOT` (`apps/server/dist/bin.mjs` or `apps/server/src/bin.ts`)
+  → bundled `Contents/Resources/server/bin.mjs` → ancestor walk from working directory, `.app` bundle, and the
+  compile-time checkout path.
+- **Data directory:** `SWFT_HOME` if set, otherwise `~/Library/Application Support/Swft` (`~/.t3` is rejected).
+
+### Future packaged `.app` distribution (not yet built)
+
+Shipping a standalone `Swft.app` without requiring a checkout or system Node install will require bundling the
+runtime inside `Swft.app/Contents/Resources/`:
+
+1. **Bundled Node runtime:** copy a signed, universal or per-arch `node` binary (matching `apps/server`'s engine
+   requirement, Node 24+) into `Contents/Resources/node/bin/node` (or bundle a Node SEA executable) and point
+   `ServerProcess` at it before falling back to system `PATH`.
+2. **Built server bundle:** run `vp run --filter t3 build:bundle` (`apps/server/dist/bin.mjs`) and stage
+   `dist/bin.mjs` plus required runtime assets and native addons (`node-pty` prebuilds, `@napi-rs/keyring`,
+   `playwright-core` if used, etc.) into `Contents/Resources/server/`. `ServerProcess` already probes
+   `Bundle.main.resourceURL/server/bin.mjs`.
+3. **Codesigning & notarization:** sign the bundled `node` binary and every `.node` native addon inside
+   `Contents/Resources/server/` with Hardened Runtime entitlements (`com.apple.security.cs.allow-jit`,
+   `allow-unsigned-executable-memory` as needed by V8) before signing and notarizing `Swft.app`.
 
 ## Safety
 
-Never start a dev server against `~/.t3/userdata` (the user's live install). Use a temp `T3CODE_HOME`/base dir.
-Never kill processes by name pattern.
+Never start a dev server against `~/.t3/userdata` (the user's live install). Swft defaults to
+`~/Library/Application Support/Swft` and refuses any path under `~/.t3`.
+Never kill processes by name pattern — `ServerProcess` terminates only the exact PID it spawned.

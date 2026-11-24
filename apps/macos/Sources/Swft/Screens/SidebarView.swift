@@ -3,6 +3,7 @@ import SwiftUI
 
 struct SidebarView: View {
     @Environment(AppModel.self) private var model
+    @State private var showingStatusPopover = false
 
     var body: some View {
         @Bindable var model = model
@@ -25,23 +26,29 @@ struct SidebarView: View {
 
             VStack(spacing: 2) {
                 SidebarNavRow("New thread", systemName: "square.and.pencil", isSelected: model.destination == .home, isProminent: true) {
-                    model.destination = .home
+                    model.goHome()
                 }
-                SidebarNavRow("Projects", systemName: "folder", isSelected: model.destination == .projects) { model.destination = .projects }
-                SidebarNavRow("Scheduled", systemName: "clock", isSelected: model.destination == .scheduled) { model.destination = .scheduled }
-                SidebarNavRow("Settings", systemName: "gearshape", isSelected: model.destination == .settings) { model.destination = .settings }
+                SidebarNavRow("Projects", systemName: "folder", isSelected: model.destination == .projects) {
+                    model.destination = .projects
+                }
+                SidebarNavRow("Scheduled", systemName: "clock", isSelected: model.destination == .scheduled) {
+                    model.destination = .scheduled
+                }
+                SidebarNavRow("Settings", systemName: "gearshape", isSelected: model.destination == .settings) {
+                    model.destination = .settings
+                }
             }
             .padding(.horizontal, 8)
 
             SidebarSectionHeader("Threads") {
                 Menu {
-                    Picker("Show", selection: $model.sidebar.filter) {
+                    Picker("Show", selection: $model.filter) {
                         ForEach(ThreadFilter.allCases, id: \.self) { Text($0.rawValue).tag($0) }
                     }
                     .pickerStyle(.inline)
                 } label: {
                     HStack(spacing: 3) {
-                        Text(model.sidebar.filter.rawValue).font(SwftType.label)
+                        Text(model.filter.rawValue).font(SwftType.label)
                         Image(systemName: "chevron.down").font(.system(size: 8.5, weight: .bold))
                     }
                     .foregroundStyle(SwftColor.textSecondary)
@@ -71,9 +78,18 @@ struct SidebarView: View {
             }
             .scrollIndicators(.automatic)
 
-            AccountRow(name: model.sidebar.account.name, detail: model.sidebar.account.detail)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 8)
+            AccountRow(name: model.sidebar.account.name, detail: model.sidebar.account.detail) {
+                if model.serverStatus.needsRetry {
+                    model.retryConnection()
+                } else {
+                    showingStatusPopover.toggle()
+                }
+            }
+            .popover(isPresented: $showingStatusPopover, arrowEdge: .top) {
+                ServerStatusPopover(dismiss: { showingStatusPopover = false })
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 8)
         }
         .background(SwftColor.sidebar)
     }

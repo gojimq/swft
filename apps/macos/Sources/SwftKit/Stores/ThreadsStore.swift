@@ -315,7 +315,9 @@ public final class ThreadsStore {
             createWorkspaceRootIfMissing: createIfMissing,
             defaultModelSelection: defaultModelSelection
         )
-        return try await connection.call(tag: RPCMethod.projectsMutate, payload: mutation)
+        let project: ProjectShell = try await connection.call(tag: RPCMethod.projectsMutate, payload: mutation)
+        upsert(project, into: &projects)
+        return project
     }
 
     @discardableResult
@@ -352,13 +354,13 @@ public final class ThreadsStore {
         try await connection.call(tag: RPCMethod.orchestrationLaunchThread, payload: input)
     }
 
-    public func markVisited(threadId: String, opened: Bool = true) async throws {
-        let visitedAt = threads.first(where: { $0.id == threadId })?.updatedAt ?? Date()
+    public func markVisited(threadId: String, visitedAt: Date? = nil, opened: Bool = true) async throws {
+        let resolvedVisitedAt = visitedAt ?? threads.first(where: { $0.id == threadId })?.updatedAt ?? Date()
         let _: DispatchCommandResult = try await connection.call(
             tag: RPCMethod.orchestrationDispatchCommand,
             payload: OrchestrationCommand.visitThread(
                 threadId: threadId,
-                visitedAt: visitedAt,
+                visitedAt: resolvedVisitedAt,
                 opened: opened
             )
         )
