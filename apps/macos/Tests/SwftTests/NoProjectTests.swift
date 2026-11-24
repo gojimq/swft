@@ -254,7 +254,7 @@ struct NoProjectTests {
         #expect(filtered.keys.sorted() == ["p-real"])
     }
 
-    @Test @MainActor func appModelMockClearsReselectsAndLaunchesProjectlessThread() {
+    @Test @MainActor func appModelMockClearsReselectsAndLaunchesProjectlessThread() async {
         let model = AppModel.mock()
         #expect(model.selectedProject?.id == MockData.swft.id)
         #expect(model.composer.contextLabel == "Swft · main")
@@ -279,6 +279,8 @@ struct NoProjectTests {
 
         #expect(model.composerText.isEmpty)
         #expect(model.sidebar.threads.count == beforeCount + 1)
+        if let token = model.newThread.launchingToken { model.newThread.dockSettled(token: token) }
+        for _ in 0..<1000 where model.destination == .home { await Task.yield() }
         let openedID = model.selectedThreadID
         #expect(openedID != nil)
         let createdSummary = openedID.flatMap(model.threadSummary(for:))
