@@ -6,8 +6,8 @@ public struct UserBubble: View {
     let text: String
     public init(_ text: String) { self.text = text }
 
-    /// The reference bubble is 61pt tall for one line; derive padding from this font's natural line height.
-    private static let verticalPadding = max(10, (61 - SwftFonts.lineHeight(SwftType.bodySize)) / 2)
+    /// One line of text sits in a 44pt-tall bubble; derive padding from this font's natural line height.
+    private static let verticalPadding = max(8, (44 - SwftFonts.lineHeight(SwftType.bodySize)) / 2)
 
     public var body: some View {
         HStack {
@@ -17,29 +17,24 @@ public struct UserBubble: View {
                 .foregroundStyle(SwftColor.textPrimary)
                 .lineSpacing(SwftType.bodyLineSpacing)
                 .textSelection(.enabled)
-                .padding(.horizontal, 20)
+                .padding(.horizontal, 18)
                 .padding(.vertical, Self.verticalPadding)
-                .background(RoundedRectangle(cornerRadius: 28, style: .continuous).fill(SwftColor.userBubble))
+                .background(RoundedRectangle(cornerRadius: 22, style: .continuous).fill(SwftColor.userBubble))
         }
     }
 }
 
-/// Assistant message: a small avatar column with free-flowing content (no bubble), like the reference.
+/// Assistant message: free-flowing content in the reading column, no avatar and no bubble.
 public struct AssistantMessage<Content: View>: View {
-    let avatar: AnyView
     let content: Content
 
-    public init(@ViewBuilder avatar: () -> some View, @ViewBuilder content: () -> Content) {
-        self.avatar = AnyView(avatar())
+    public init(@ViewBuilder content: () -> Content) {
         self.content = content()
     }
 
     public var body: some View {
-        HStack(alignment: .top, spacing: 14) {
-            avatar.frame(width: 24, height: 24)
-            VStack(alignment: .leading, spacing: 14) { content }
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
+        VStack(alignment: .leading, spacing: 12) { content }
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -78,13 +73,13 @@ public struct MessageText: View {
         case .listItem(let marker, let depth, let text):
             HStack(alignment: .firstTextBaseline, spacing: 0) {
                 Text(marker.display(depth: depth))
-                    .font(marker.isOrdered ? SwftType.body : SwftFonts.flex(13))
+                    .font(marker.isOrdered ? SwftType.body : SwftFonts.flex(12))
                     .foregroundStyle(SwftColor.textPrimary)
-                    .frame(width: 22, alignment: marker.isOrdered ? .trailing : .center)
+                    .frame(width: 20, alignment: marker.isOrdered ? .trailing : .center)
                     .padding(.trailing, marker.isOrdered ? 8 : 6)
                 styledText(text, base: .body, caret: caret)
             }
-            .padding(.leading, 6 + CGFloat(depth) * 22)
+            .padding(.leading, 4 + CGFloat(depth) * 20)
         }
     }
 
@@ -119,8 +114,8 @@ public enum MarkdownProse {
         var strongFont: Font {
             switch self {
             case .body: SwftType.bodyStrong
-            case .heading: SwftFonts.flex(20, weight: 620)
-            case .subheading: SwftFonts.flex(17, weight: 700)
+            case .heading: SwftType.headingStrong
+            case .subheading: SwftType.subheadingStrong
             }
         }
     }
@@ -146,10 +141,10 @@ public enum MarkdownProse {
 
         func spacingBefore(after previous: Block) -> CGFloat {
             switch (previous, self) {
-            case (_, .heading): 26
-            case (.heading, _): 10
-            case (.listItem, .listItem): 8
-            default: 14
+            case (_, .heading): 22
+            case (.heading, _): 8
+            case (.listItem, .listItem): 6
+            default: 12
             }
         }
     }
@@ -285,110 +280,13 @@ public struct CodeBlock: View {
     }
 }
 
-/// Outcome of a tool call.
-public enum ToolCallStatus: Sendable {
-    case running, succeeded, failed
-}
-
-/// Collapsible tool-call card: one quiet line when collapsed, monospace output when expanded.
-public struct ToolCallCard: View {
-    let title: String
-    let detail: String
-    let systemName: String
-    let status: ToolCallStatus
-    let duration: String?
-    let output: String?
-    @State private var expanded: Bool
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    public init(title: String, detail: String, systemName: String, status: ToolCallStatus, duration: String? = nil, output: String? = nil, expanded: Bool = false) {
-        self.title = title
-        self.detail = detail
-        self.systemName = systemName
-        self.status = status
-        self.duration = duration
-        self.output = output
-        self._expanded = State(initialValue: expanded)
-    }
-
-    public var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Button {
-                guard output != nil else { return }
-                withAnimation(SwftMotion.resolve(SwftMotion.spring, reduceMotion: reduceMotion)) { expanded.toggle() }
-            } label: {
-                HStack(spacing: 10) {
-                    Image(systemName: systemName)
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(SwftColor.textSecondary)
-                        .frame(width: 16)
-                    Text(title).font(SwftType.labelStrong).foregroundStyle(SwftColor.textPrimary)
-                    Text(detail)
-                        .font(SwftType.monoSmall)
-                        .foregroundStyle(SwftColor.textSecondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                    Spacer(minLength: 8)
-                    if let duration {
-                        Text(duration).font(SwftType.caption).monospacedDigit().foregroundStyle(SwftColor.textTertiary)
-                    }
-                    statusIcon
-                        .id(status)
-                        .transition(.swftPop(reduceMotion: reduceMotion, scale: 0.5))
-                    if output != nil {
-                        Image(systemName: "chevron.right")
-                            .font(.system(size: 10, weight: .semibold))
-                            .foregroundStyle(SwftColor.textTertiary)
-                            .rotationEffect(.degrees(expanded ? 90 : 0))
-                    }
-                }
-                .padding(.horizontal, 12)
-                .frame(height: 38)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-
-            if expanded, let output {
-                VStack(spacing: 0) {
-                Divider().overlay(SwftColor.borderSubtle)
-                ScrollView(.horizontal, showsIndicators: false) {
-                    Text(output)
-                        .font(SwftType.monoSmall)
-                        .foregroundStyle(SwftColor.textSecondary)
-                        .lineSpacing(2)
-                        .textSelection(.enabled)
-                        .fixedSize()
-                        .padding(12)
-                }
-                .background(SwftColor.codeBackground)
-                }
-                .transition(reduceMotion ? .opacity : .opacity.combined(with: .move(edge: .top)))
-            }
-        }
-        .background(SwftColor.surface)
-        .clipShape(RoundedRectangle(cornerRadius: SwftRadius.m, style: .continuous))
-        .animation(SwftMotion.resolve(SwftMotion.pop, reduceMotion: reduceMotion), value: status)
-        .overlay(RoundedRectangle(cornerRadius: SwftRadius.m, style: .continuous).strokeBorder(SwftColor.border))
-    }
-
-    @ViewBuilder private var statusIcon: some View {
-        switch status {
-        case .running:
-            ProgressView().controlSize(.mini).frame(width: 14, height: 14)
-        case .succeeded:
-            Image(systemName: "checkmark").font(.system(size: 10.5, weight: .bold)).foregroundStyle(SwftColor.success)
-        case .failed:
-            Image(systemName: "xmark").font(.system(size: 10.5, weight: .bold)).foregroundStyle(SwftColor.danger)
-        }
-    }
-}
-
 /// Resolution state of an approval request.
 public enum ApprovalStatus: Sendable {
     case pending, approved, denied
 }
 
-/// Approval request card with Deny / Approve.
+/// Approval request: the one thing in a turn that needs the reader, so it keeps a soft surface and a clear action,
+/// without warning colors or icons.
 public struct ApprovalCard: View {
     let title: String
     let message: String
@@ -408,45 +306,41 @@ public struct ApprovalCard: View {
     }
 
     public var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 8) {
-                Image(systemName: "hand.raised.fill")
-                    .font(.system(size: 12))
-                    .foregroundStyle(SwftColor.warning)
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline) {
                 Text(title).font(SwftType.labelStrong).foregroundStyle(SwftColor.textPrimary)
                 Spacer()
                 if status != .pending {
-                    Label(status == .approved ? "Approved" : "Denied", systemImage: status == .approved ? "checkmark" : "xmark")
+                    Text(status == .approved ? "Approved" : "Denied")
                         .font(SwftType.caption)
-                        .foregroundStyle(status == .approved ? SwftColor.success : SwftColor.danger)
-                        .transition(.swftPop(reduceMotion: reduceMotion, scale: 0.7))
+                        .foregroundStyle(SwftColor.textTertiary)
+                        .transition(.swftPop(reduceMotion: reduceMotion, scale: 0.8))
                 }
             }
             Text(message).font(SwftType.label).foregroundStyle(SwftColor.textSecondary).fixedSize(horizontal: false, vertical: true)
             if let command {
                 Text(command)
-                    .font(SwftType.mono)
+                    .font(SwftType.monoSmall)
                     .foregroundStyle(SwftColor.textPrimary)
                     .textSelection(.enabled)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 9)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 7)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(RoundedRectangle(cornerRadius: SwftRadius.s, style: .continuous).fill(SwftColor.surface))
+                    .background(RoundedRectangle(cornerRadius: SwftRadius.s, style: .continuous).fill(SwftColor.canvas.opacity(0.7)))
             }
             if status == .pending {
                 HStack(spacing: 8) {
                     Spacer()
                     Button(action: onDeny) {
-                        Text("Deny").font(SwftType.labelStrong).padding(.horizontal, 16).frame(height: 32).contentShape(Capsule())
+                        Text("Deny").font(SwftType.label).padding(.horizontal, 14).frame(height: 28).contentShape(Capsule())
                     }
                     .buttonStyle(HoverFillStyle(shape: Capsule()))
-                    .overlay(Capsule().strokeBorder(SwftColor.border))
-                    .foregroundStyle(SwftColor.textPrimary)
+                    .foregroundStyle(SwftColor.textSecondary)
                     .keyboardShortcut(.escape, modifiers: [])
 
                     Button(action: onApprove) {
-                        Text("Approve").font(SwftType.labelStrong).padding(.horizontal, 16).frame(height: 32)
-                            .background(Capsule().fill(SwftColor.accent))
+                        Text("Approve").font(SwftType.labelStrong).padding(.horizontal, 14).frame(height: 28)
+                            .background(Capsule().fill(SwftColor.textPrimary))
                             .foregroundStyle(SwftColor.canvas)
                             .contentShape(Capsule())
                     }
@@ -457,7 +351,6 @@ public struct ApprovalCard: View {
         }
         .animation(SwftMotion.resolve(SwftMotion.spring, reduceMotion: reduceMotion), value: status)
         .padding(14)
-        .background(RoundedRectangle(cornerRadius: SwftRadius.l, style: .continuous).fill(SwftColor.warningSoft))
-        .overlay(RoundedRectangle(cornerRadius: SwftRadius.l, style: .continuous).strokeBorder(SwftColor.warningBorder))
+        .background(RoundedRectangle(cornerRadius: SwftRadius.l, style: .continuous).fill(SwftColor.surfaceMuted))
     }
 }

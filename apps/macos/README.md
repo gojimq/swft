@@ -54,7 +54,12 @@ Mock data (`Sources/Swft/Preview/MockData.swift`) is used only for SwiftUI previ
 - `-SwftAppearance light|dark`: pin the appearance for screenshot runs.
 - `-SwftWindowSize 1924x1052`: pin the window size (for side-by-side comparisons with the reference).
 
-Current mock captures live in `docs/screens/`.
+Current mock captures live in `docs/screens/`. To regenerate them without launching the app (offscreen, light and
+dark, plus open work folds, an approval and a mid-switch frame): `SWFT_SNAPSHOT_DIR=/tmp/shots swift test --filter Snapshots`.
+
+Each settled turn folds its intermediate work (thoughts, tool calls, interim commentary, resolved approvals, notices)
+into one "Worked for 12s" row above the answer; a running turn shows its current step over a muted summary. The
+folding is pure logic in `Sources/Swft/Adapters/TranscriptLayout.swift`.
 
 ## Running the local server (dev vs packaged `.app`)
 

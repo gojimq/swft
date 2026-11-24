@@ -39,8 +39,12 @@ public enum SwftMotion {
     public static let spring = Animation.spring(response: 0.34, dampingFraction: 0.86)
     /// Slightly lively spring for things that pop in (send button, scroll-to-bottom, approval card).
     public static let pop = Animation.spring(response: 0.3, dampingFraction: 0.72)
-    /// Screen and sidebar changes.
+    /// Sidebar collapse and long scrolls.
     public static let screen = Animation.spring(response: 0.42, dampingFraction: 0.9)
+    /// Switching screens or threads: short and critically damped, so a new click retargets instead of queueing.
+    public static let screenSwitch = Animation.snappy(duration: 0.18)
+    /// Work folds opening and closing.
+    public static let disclosure = Animation.spring(response: 0.28, dampingFraction: 0.92)
     /// Selection pill gliding between rows.
     public static let glide = Animation.spring(response: 0.36, dampingFraction: 0.82)
 
@@ -59,12 +63,27 @@ extension AnyTransition {
     public static func swftPop(reduceMotion: Bool, scale: CGFloat = 0.9) -> AnyTransition {
         reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: scale))
     }
+}
 
-    /// Screen swap: incoming screen settles from a hair below and slightly scaled; outgoing fades.
-    public static func swftScreen(reduceMotion: Bool) -> AnyTransition {
-        reduceMotion ? .opacity : .asymmetric(
-            insertion: .opacity.combined(with: .scale(scale: 0.985)).combined(with: .offset(y: 8)),
-            removal: .opacity
-        )
+extension View {
+    /// One-shot entrance for a freshly inserted screen: it settles from a hair below while fading in.
+    /// Screens swap without a transition (the old one leaves at once), so rapid switching never stacks two screens,
+    /// and a click mid-entrance simply starts the next screen's entrance.
+    public func swftEntrance(reduceMotion: Bool) -> some View {
+        modifier(SwftEntrance(reduceMotion: reduceMotion))
+    }
+}
+
+private struct SwftEntrance: ViewModifier {
+    let reduceMotion: Bool
+    @State private var shown = false
+
+    func body(content: Content) -> some View {
+        content
+            .opacity(shown ? 1 : 0)
+            .offset(y: shown || reduceMotion ? 0 : 6)
+            .onAppear {
+                withAnimation(SwftMotion.resolve(SwftMotion.screenSwitch, reduceMotion: reduceMotion)) { shown = true }
+            }
     }
 }

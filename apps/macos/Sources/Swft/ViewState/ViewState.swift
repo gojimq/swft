@@ -264,6 +264,15 @@ struct TranscriptItem: Identifiable, Hashable {
     }
     let id: String
     var kind: Kind
+    var startedAt: Date?
+    var completedAt: Date?
+
+    init(id: String, kind: Kind, startedAt: Date? = nil, completedAt: Date? = nil) {
+        self.id = id
+        self.kind = kind
+        self.startedAt = startedAt
+        self.completedAt = completedAt
+    }
 }
 
 struct ThreadDetailState {
@@ -271,4 +280,52 @@ struct ThreadDetailState {
     var items: [TranscriptItem]
     /// e.g. "+142 −38"; nil hides the diff pill.
     var diffStat: String?
+    /// The thread has an active run, so its latest turn renders as live work.
+    var isRunning: Bool = false
+
+    var rows: [TranscriptRow] { TranscriptLayout.rows(for: items, isRunning: isRunning) }
+}
+
+/// One step inside a work fold: a tool call, a thought, interim commentary, a resolved approval or a quiet notice.
+struct WorkStep: Identifiable, Hashable {
+    enum Kind: Hashable {
+        case tool(ToolCallItem)
+        case thought(String)
+        case commentary([MessageBlock])
+        case approval(ApprovalItem)
+        case note(title: String, message: String)
+    }
+    let id: String
+    var kind: Kind
+}
+
+/// A turn's intermediate work folded into one quiet row.
+struct WorkFold: Identifiable, Hashable {
+    let id: String
+    var steps: [WorkStep]
+    /// The turn is still working: `title` is the current step and `subtitle` the running summary.
+    var isLive: Bool
+    var title: String
+    var subtitle: String?
+    var failedCount: Int
+}
+
+/// What the thread screen renders, after folding each turn's work.
+enum TranscriptRow: Identifiable, Hashable {
+    case user(id: String, text: String)
+    case assistant(id: String, blocks: [MessageBlock], streaming: Bool)
+    case work(WorkFold)
+    case approval(id: String, ApprovalItem)
+    case note(id: String, title: String, message: String, isError: Bool)
+
+    var id: String {
+        switch self {
+        case .user(let id, _), .assistant(let id, _, _), .approval(let id, _), .note(let id, _, _, _): id
+        case .work(let fold): fold.id
+        }
+    }
+
+    var workFoldID: String? {
+        if case .work(let fold) = self { fold.id } else { nil }
+    }
 }

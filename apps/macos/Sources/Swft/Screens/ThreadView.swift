@@ -8,12 +8,16 @@ struct ThreadView: View {
     @State private var scrollPosition = ScrollPosition()
     @State private var isAtBottom = true
     @State private var composerHeight: CGFloat = 110
+    /// Rows animate in only once the transcript has content; its first population (or a snapshot arriving after a
+    /// thread switch) lands in place instead of every row rising at once.
+    @State private var populated = false
 
     var body: some View {
+        let rows = detail.rows
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 18) {
-                ForEach(detail.items) { item in
-                    row(item)
+            LazyVStack(alignment: .leading, spacing: 16) {
+                ForEach(rows) { row in
+                    self.row(row)
                         .transition(.swftRise(reduceMotion: reduceMotion))
                 }
             }
@@ -23,8 +27,9 @@ struct ThreadView: View {
             // Room for the floating composer, so the latest message rests above it rather than under the glass.
             .padding(.bottom, composerHeight + 28)
             .frame(maxWidth: .infinity)
-            .animation(SwftMotion.resolve(SwftMotion.spring, reduceMotion: reduceMotion), value: detail.items.map(\.id))
+            .animation(populated ? SwftMotion.resolve(SwftMotion.spring, reduceMotion: reduceMotion) : nil, value: rows.map(\.id))
         }
+        .task(id: rows.isEmpty) { if !rows.isEmpty { populated = true } }
         .scrollPosition($scrollPosition)
         // Open at the latest message and follow growth, but keep short threads top-aligned like the reference.
         .defaultScrollAnchor(.top, for: .alignment)
@@ -86,14 +91,12 @@ struct ThreadView: View {
         .animation(SwftMotion.resolve(SwftMotion.spring, reduceMotion: reduceMotion), value: model.actionError)
     }
 
-    @ViewBuilder private func row(_ item: TranscriptItem) -> some View {
-        switch item.kind {
-        case .user(let text):
-            UserBubble(text).padding(.vertical, 6)
-        case .assistant(let blocks, let streaming):
+    @ViewBuilder private func row(_ row: TranscriptRow) -> some View {
+        switch row {
+        case .user(_, let text):
+            UserBubble(text).padding(.vertical, 4)
+        case .assistant(_, let blocks, let streaming):
             AssistantMessage {
-                ProviderAvatar(provider: detail.summary.provider)
-            } content: {
                 ForEach(Array(blocks.enumerated()), id: \.offset) { index, block in
                     switch block {
                     case .text(let text):
@@ -103,77 +106,23 @@ struct ThreadView: View {
                     }
                 }
             }
-        case .toolCall(let call):
-            ToolCallCard(
-                title: call.title,
-                detail: call.detail,
-                systemName: call.symbol,
-                status: call.status.cardStatus,
-                duration: call.durationText,
-                output: call.output
-            )
-            .padding(.leading, 38)
-        case .approval(let approval):
+        case .work(let fold):
+            WorkFoldView(fold: fold, isExpanded: model.expandedWorkFolds.contains(fold.id)) {
+                withAnimation(SwftMotion.resolve(SwftMotion.disclosure, reduceMotion: reduceMotion)) {
+                    model.toggleWorkFold(fold.id)
+                }
+            }
+        case .approval(let id, let approval):
             ApprovalCard(
                 title: approval.title,
                 message: approval.message,
                 command: approval.command,
                 status: approval.status.cardStatus,
-                onApprove: { model.resolveApproval(itemID: item.id, in: detail.summary.id, approved: true) },
-                onDeny: { model.resolveApproval(itemID: item.id, in: detail.summary.id, approved: false) }
+                onApprove: { model.resolveApproval(itemID: id, in: detail.summary.id, approved: true) },
+                onDeny: { model.resolveApproval(itemID: id, in: detail.summary.id, approved: false) }
             )
-            .padding(.leading, 38)
-        case .notice(let title, let message, let isError):
-            TranscriptNoticeCard(title: title, message: message, isError: isError)
-                .padding(.leading, 38)
+        case .note(_, let title, let message, let isError):
+            QuietNote(title: title, message: message, isError: isError)
         }
-    }
-}
-
-struct TranscriptNoticeCard: View {
-    let title: String
-    let message: String
-    let isError: Bool
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            Image(systemName: isError ? "exclamationmark.circle.fill" : "info.circle")
-                .font(.system(size: 12.5))
-                .foregroundStyle(isError ? SwftColor.danger : SwftColor.textSecondary)
-                .padding(.top, 2)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                    .font(SwftType.labelStrong)
-                    .foregroundStyle(SwftColor.textPrimary)
-                Text(message)
-                    .font(SwftType.label)
-                    .foregroundStyle(SwftColor.textSecondary)
-                    .textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-        .background(
-            RoundedRectangle(cornerRadius: SwftRadius.m, style: .continuous)
-                .fill(isError ? SwftColor.dangerSoft : SwftColor.surfaceMuted)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: SwftRadius.m, style: .continuous)
-                .strokeBorder(isError ? SwftColor.danger.opacity(0.28) : SwftColor.borderSubtle)
-        )
-    }
-}
-
-struct ProviderAvatar: View {
-    let provider: ProviderKind
-    var body: some View {
-        Circle()
-            .fill(SwftColor.surfaceMuted)
-            .overlay(Image(systemName: provider.symbol).font(.system(size: 11, weight: .semibold)).foregroundStyle(provider.tint))
-            .overlay(Circle().strokeBorder(SwftColor.borderSubtle))
-            .frame(width: 24, height: 24)
-            .padding(.top, 1)
     }
 }

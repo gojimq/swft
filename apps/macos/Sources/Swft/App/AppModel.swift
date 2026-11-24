@@ -20,6 +20,8 @@ final class AppModel {
     var selectedReasoningChoiceId: String?
     var now: Date
     var actionError: String?
+    /// Work folds the reader has opened, by fold id (ids are unique per turn, so this spans threads).
+    var expandedWorkFolds: Set<String> = []
 
     // MARK: - Mode & Live SwftKit Backing
 
@@ -33,6 +35,7 @@ final class AppModel {
     private var launchPhase: LaunchPhase = .idle
     private var isSubmitting = false
     private var optimisticApprovals: [String: ApprovalItem.Status] = [:]
+    @ObservationIgnored private var recentProjections = RecentProjections()
 
     private enum LaunchPhase: Equatable {
         case idle
@@ -89,7 +92,7 @@ final class AppModel {
             account: MockData.sidebar.account,
             home: MockData.home,
             models: MockData.models,
-            details: [MockData.threadDetail.summary.id: MockData.threadDetail],
+            details: [MockData.threadDetail.summary.id: MockData.threadDetail, MockData.approvalDetail.summary.id: MockData.approvalDetail],
             defaultContextLabel: "Swft · main"
         )
         let model = AppModel(isMock: true, now: MockData.now, mockBacking: backing)
@@ -559,6 +562,10 @@ final class AppModel {
         evaluateActiveThreadVisit()
     }
 
+    func toggleWorkFold(_ id: String) {
+        if expandedWorkFolds.remove(id) == nil { expandedWorkFolds.insert(id) }
+    }
+
     func toggleSidebar() {
         withAnimation(.snappy(duration: 0.22)) { sidebarVisible.toggle() }
     }
@@ -820,16 +827,21 @@ final class AppModel {
         if activeThreadStore?.threadId == threadID {
             return
         }
-        activeThreadStore?.stop()
+        if let previous = activeThreadStore {
+            previous.stop()
+            recentProjections.remember(previous.projection)
+        }
         optimisticApprovals.removeAll()
         guard let connection else {
             activeThreadStore = nil
             return
         }
+        // Start from the last projection seen for this thread so a revisit shows its transcript at once; the
+        // subscription's snapshot replaces it moments later.
         let store = ThreadStore(
             connection: connection,
             threadId: threadID,
-            initialProjection: initialProjection
+            initialProjection: initialProjection ?? recentProjections.projection(for: threadID)
         )
         activeThreadStore = store
         store.start()
@@ -837,6 +849,7 @@ final class AppModel {
 
     private func detachActiveThread() {
         activeThreadStore?.stop()
+        recentProjections.remember(activeThreadStore?.projection)
         activeThreadStore = nil
         optimisticApprovals.removeAll()
         visitPolicy.selectThread(nil)

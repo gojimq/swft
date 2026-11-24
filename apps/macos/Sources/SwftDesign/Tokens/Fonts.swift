@@ -82,16 +82,18 @@ public enum SwftFonts {
 public enum SwftType {
     public static let greeting = SwftFonts.flex(32.5, weight: 400)
     public static let title = SwftFonts.flex(20, weight: 500)
-    /// Assistant markdown headings (`#`–`###`).
-    public static let heading = SwftFonts.flex(20, weight: 450)
-    public static let subheading = SwftFonts.flex(17, weight: 600)
+    /// Assistant markdown headings (`#`–`##`); `###` and below use `subheading`.
+    public static let heading = SwftFonts.flex(18, weight: 470)
+    public static let headingStrong = SwftFonts.flex(18, weight: 620)
+    public static let subheading = SwftFonts.flex(15.5, weight: 600)
+    public static let subheadingStrong = SwftFonts.flex(15.5, weight: 700)
     public static let headline = SwftFonts.flex(15, weight: 560)
-    /// Transcript prose and the user bubble.
-    public static let bodySize: CGFloat = 17
+    /// Transcript prose and the user bubble: a calm reading column, a notch under Gemini's 17pt.
+    public static let bodySize: CGFloat = 15
     public static let body = SwftFonts.flex(bodySize, weight: 400)
     public static let bodyStrong = SwftFonts.flex(bodySize, weight: 620)
-    /// Pitch between transcript lines; the reference runs ~1.5x the point size.
-    public static let bodyLineSpacing: CGFloat = max(0, 25.5 - SwftFonts.lineHeight(bodySize))
+    /// Pitch between transcript lines, ~1.5x the point size.
+    public static let bodyLineSpacing: CGFloat = max(0, 22.5 - SwftFonts.lineHeight(bodySize))
     public static let composer = SwftFonts.flex(17, weight: 400)
     public static let suggestion = SwftFonts.flex(15.5, weight: 400)
     public static let sidebar = SwftFonts.flex(13.75, weight: 400)
@@ -105,7 +107,7 @@ public enum SwftType {
     public static let captionStrong = SwftFonts.flex(12, weight: 580)
     public static let micro = SwftFonts.flex(10, weight: 700)
     public static let brand = SwftFonts.flex(19, weight: 500, rounded: 40)
-    public static let inlineCode = Font.system(size: 15.5, design: .monospaced)
-    public static let mono = Font.system(size: 13.5, design: .monospaced)
+    public static let inlineCode = Font.system(size: 13.5, design: .monospaced)
+    public static let mono = Font.system(size: 12.5, design: .monospaced)
     public static let monoSmall = Font.system(size: 12, design: .monospaced)
 }

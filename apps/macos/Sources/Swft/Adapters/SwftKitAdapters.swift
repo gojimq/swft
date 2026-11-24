@@ -359,11 +359,13 @@ enum SwftAdapters {
                 break
             }
 
-            if let mapped = transcriptItem(
+            if var mapped = transcriptItem(
                 from: item,
                 requestsByID: requestsByID,
                 optimisticApprovals: optimisticApprovals
             ) {
+                mapped.startedAt = item.startedAt ?? item.updatedAt
+                mapped.completedAt = item.completedAt
                 items.append(mapped)
             }
         }
@@ -398,7 +400,12 @@ enum SwftAdapters {
             ? "+\(totalAdditions) −\(totalDeletions)"
             : nil
 
-        return ThreadDetailState(summary: resolvedSummary, items: items, diffStat: diffStat)
+        return ThreadDetailState(
+            summary: resolvedSummary,
+            items: items,
+            diffStat: diffStat,
+            isRunning: projection.runs.contains { $0.status.isActive }
+        )
     }
 
     static let workspacePreparationInput = "Preparing workspace"
