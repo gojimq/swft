@@ -40,6 +40,56 @@ struct Snapshots {
         try Self.capture(AppModel.mock(), appearance: appearance, name: "home-\(appearance)")
     }
 
+    @Test(arguments: ["light", "dark"])
+    func pickerRail(appearance: String) throws {
+        let model = AppModel.mock()
+        model.destination = .thread(MockData.threadDetail.summary.id)
+        model.toggleModelPicker()
+        try Self.capture(model, appearance: appearance, name: "picker-rail-\(appearance)")
+    }
+
+    @Test(arguments: ["light", "dark"])
+    func pickerSearch(appearance: String) throws {
+        let model = AppModel.mock()
+        model.destination = .thread(MockData.threadDetail.summary.id)
+        model.toggleModelPicker()
+        model.modelPicker?.setQuery("gpt")
+        model.handleModelPickerKey(.down)
+        try Self.capture(model, appearance: appearance, name: "picker-search-\(appearance)")
+    }
+
+    /// Browsing the two Codex accounts with the keyboard on the thinking slider.
+    @Test(arguments: ["light", "dark"])
+    func pickerThinking(appearance: String) throws {
+        let model = AppModel.mock()
+        model.destination = .thread(MockData.threadDetail.summary.id)
+        model.selectReasoningChoice("xhigh")
+        model.toggleModelPicker()
+        model.modelPicker?.focus = .rail
+        model.handleModelPickerKey(.down)
+        model.modelPicker?.focus = .thinking
+        try Self.capture(model, appearance: appearance, name: "picker-thinking-\(appearance)")
+    }
+
+    @Test func pickerHome() throws {
+        let model = AppModel.mock()
+        model.toggleModelPicker()
+        model.modelPicker?.selectGroup("opencode", in: ModelPickerLogic.groups(model.pickerCatalog.harnesses))
+        try Self.capture(model, appearance: "light", name: "picker-home-light")
+    }
+
+    /// The trigger swapping models mid-animation: one label, never two overlapping.
+    @Test func triggerSwap() throws {
+        let model = AppModel.mock()
+        model.destination = .thread(MockData.threadDetail.summary.id)
+        try Self.capture(model, appearance: "light", name: "trigger-swap") {
+            if let luna = MockData.models.first(where: { $0.id == "codex::luna" }) {
+                withAnimation(SwftMotion.spring) { model.selectModel(luna) }
+            }
+            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        }
+    }
+
     /// Mid-switch frame after clicking through threads faster than the screen animation: one transcript, one title.
     @Test func rapidThreadSwitch() throws {
         let model = AppModel.mock()

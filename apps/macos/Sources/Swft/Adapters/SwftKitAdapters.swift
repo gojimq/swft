@@ -64,12 +64,79 @@ enum SwftAdapters {
                         reasoningOptionLabel: reasoning?.label,
                         reasoningChoices: reasoning?.choices ?? [],
                         defaultReasoningChoiceId: reasoning?.defaultChoiceId,
-                        isDefault: model.isDefault == true
+                        isDefault: model.isDefault == true,
+                        subProvider: model.subProvider,
+                        isNew: model.badge == "new"
                     )
                 )
             }
         }
         return options
+    }
+
+    /// The model picker's catalog: every enabled provider instance (with why it can't be used, if so) and the models
+    /// usable now. Mirrors Studio's `catalogOf`.
+    static func pickerCatalog(from providers: [ServerProvider]) -> PickerCatalog {
+        PickerCatalog(harnesses: providers.filter(\.enabled).map(pickerHarness(from:)), models: modelOptions(from: providers))
+    }
+
+    static func pickerHarness(from provider: ServerProvider) -> PickerHarness {
+        let unauthenticated = provider.auth.status == .unauthenticated
+        let ready = isPickerReady(provider) || provider.subProviders != nil
+        let reason: String? = if !provider.enabled {
+            "Turned off"
+        } else if !provider.installed {
+            "Not installed"
+        } else if ready {
+            nil
+        } else {
+            nonEmpty(provider.unavailableReason) ?? nonEmpty(provider.message) ?? (unauthenticated ? "Not signed in" : "Not ready")
+        }
+        return PickerHarness(
+            id: provider.instanceId,
+            driver: provider.driver,
+            label: nonEmpty(provider.displayName) ?? provider.label,
+            kind: providerKind(driver: provider.driver, instanceId: provider.instanceId),
+            accentHex: normalizedAccentHex(provider.accentColor),
+            account: providerAccount(provider.auth),
+            unauthenticated: unauthenticated,
+            unavailableReason: reason,
+            subProviders: provider.subProviders?.map { PickerSubProvider(name: $0.name, unavailableReason: $0.unavailableReason) }
+        )
+    }
+
+    /// "Auth label · email" for a signed-in provider.
+    static func providerAccount(_ auth: ServerProviderAuth) -> String? {
+        guard auth.status == .authenticated else { return nil }
+        let authLabel = auth.type == "customEndpoint" ? "Custom API endpoint" : nonEmpty(auth.label) ?? nonEmpty(auth.type)
+        let parts = [authLabel, nonEmpty(auth.email)].compactMap { $0 }
+        if parts.count == 2 && parts[0] == parts[1] { return parts[0] }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    /// `#rrggbb` (lowercased) or nil.
+    static func normalizedAccentHex(_ value: String?) -> String? {
+        guard let trimmed = value?.trimmingCharacters(in: .whitespaces).lowercased(),
+              trimmed.count == 7, trimmed.first == "#",
+              trimmed.dropFirst().allSatisfy(\.isHexDigit)
+        else { return nil }
+        return trimmed
+    }
+
+    private static func isPickerReady(_ provider: ServerProvider) -> Bool {
+        guard provider.enabled, provider.isAvailable else { return false }
+        if provider.status == .ready { return true }
+        if provider.status == .warning {
+            let usable = Set((provider.subProviders ?? []).filter { $0.unavailableReason == nil }.map(\.name))
+            if provider.models.contains(where: { $0.subProvider.map(usable.contains) == true }) { return true }
+        }
+        if provider.subProviders != nil { return false }
+        return provider.status == .warning && provider.installed && provider.auth.status == .authenticated && !provider.models.isEmpty
+    }
+
+    private static func nonEmpty(_ value: String?) -> String? {
+        guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines), !trimmed.isEmpty else { return nil }
+        return trimmed
     }
 
     static func modelOptionID(instanceId: String, slug: String) -> String {
@@ -150,7 +217,9 @@ enum SwftAdapters {
             reasoningOptionLabel: reasoning?.label,
             reasoningChoices: reasoning?.choices ?? [],
             defaultReasoningChoiceId: reasoning?.defaultChoiceId,
-            isDefault: model?.isDefault == true
+            isDefault: model?.isDefault == true,
+            subProvider: model?.subProvider,
+            isNew: model?.badge == "new"
         )
     }
 

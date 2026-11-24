@@ -161,6 +161,9 @@ struct ModelOption: Identifiable, Hashable {
     var reasoningChoices: [ReasoningChoice]
     var defaultReasoningChoiceId: String?
     var isDefault: Bool
+    /// Section the model sits under inside its provider (e.g. OpenRouter inside OpenCode).
+    var subProvider: String?
+    var isNew: Bool
 
     init(
         id: String,
@@ -173,7 +176,9 @@ struct ModelOption: Identifiable, Hashable {
         reasoningOptionLabel: String? = nil,
         reasoningChoices: [ReasoningChoice] = [],
         defaultReasoningChoiceId: String? = nil,
-        isDefault: Bool = false
+        isDefault: Bool = false,
+        subProvider: String? = nil,
+        isNew: Bool = false
     ) {
         self.id = id
         self.instanceId = instanceId ?? provider.rawValue
@@ -186,7 +191,39 @@ struct ModelOption: Identifiable, Hashable {
         self.reasoningChoices = reasoningChoices
         self.defaultReasoningChoiceId = defaultReasoningChoiceId
         self.isDefault = isDefault
+        self.subProvider = subProvider
+        self.isNew = isNew
     }
+}
+
+/// One provider instance as the model picker shows it (Studio's "harness").
+struct PickerHarness: Identifiable, Hashable {
+    let id: String
+    var driver: String
+    /// Groups clones of the same ACP registry agent; the server does not send it yet, so it is usually nil.
+    var acpAgentId: String? = nil
+    var label: String
+    var kind: ProviderKind
+    /// Normalised `#rrggbb`.
+    var accentHex: String? = nil
+    /// "Auth label · email" when signed in.
+    var account: String? = nil
+    var unauthenticated = false
+    var unavailableReason: String? = nil
+    var subProviders: [PickerSubProvider]? = nil
+}
+
+struct PickerSubProvider: Hashable {
+    var name: String
+    var unavailableReason: String? = nil
+}
+
+/// Everything the model picker lists: provider instances in server order, and the models usable right now.
+struct PickerCatalog: Hashable {
+    var harnesses: [PickerHarness]
+    var models: [ModelOption]
+
+    static let empty = PickerCatalog(harnesses: [], models: [])
 }
 
 struct ComposerState {
