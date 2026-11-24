@@ -6,15 +6,17 @@ public struct PillComposer<Leading: View, Trailing: View>: View {
     let placeholder: String
     var isBusy: Bool
     let onSend: () -> Void
+    let onStop: (() -> Void)?
     let leading: Leading
     let trailing: Trailing
     @FocusState private var focused: Bool
 
-    public init(text: Binding<String>, placeholder: String, isBusy: Bool = false, onSend: @escaping () -> Void, @ViewBuilder leading: () -> Leading, @ViewBuilder trailing: () -> Trailing) {
+    public init(text: Binding<String>, placeholder: String, isBusy: Bool = false, onSend: @escaping () -> Void, onStop: (() -> Void)? = nil, @ViewBuilder leading: () -> Leading, @ViewBuilder trailing: () -> Trailing) {
         self._text = text
         self.placeholder = placeholder
         self.isBusy = isBusy
         self.onSend = onSend
+        self.onStop = onStop
         self.leading = leading()
         self.trailing = trailing()
     }
@@ -39,7 +41,7 @@ public struct PillComposer<Leading: View, Trailing: View>: View {
                 Spacer(minLength: 8)
                 trailing
                 IconButton("mic", help: "Dictate", size: 30)
-                SendButton(state: isBusy ? .stop : (canSend ? .ready : .idle), action: onSend)
+                SendButton(state: isBusy ? .stop : (canSend ? .ready : .idle), action: isBusy ? (onStop ?? onSend) : onSend)
             }
         }
         .padding(.leading, 12)
@@ -61,8 +63,8 @@ public struct PillComposer<Leading: View, Trailing: View>: View {
 }
 
 extension PillComposer where Leading == EmptyView {
-    public init(text: Binding<String>, placeholder: String, isBusy: Bool = false, onSend: @escaping () -> Void, @ViewBuilder trailing: () -> Trailing) {
-        self.init(text: text, placeholder: placeholder, isBusy: isBusy, onSend: onSend, leading: { EmptyView() }, trailing: trailing)
+    public init(text: Binding<String>, placeholder: String, isBusy: Bool = false, onSend: @escaping () -> Void, onStop: (() -> Void)? = nil, @ViewBuilder trailing: () -> Trailing) {
+        self.init(text: text, placeholder: placeholder, isBusy: isBusy, onSend: onSend, onStop: onStop, leading: { EmptyView() }, trailing: trailing)
     }
 }
 

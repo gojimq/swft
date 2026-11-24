@@ -5,10 +5,11 @@ import SwiftUI
 @main
 struct SwftApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
-    @State private var model = AppModel.mock()
+    @State private var model: AppModel
 
     init() {
         SwftFonts.register()
+        _model = State(initialValue: AppModel.makeForLaunch())
     }
 
     var body: some Scene {
@@ -16,12 +17,17 @@ struct SwftApp: App {
             RootView()
                 .environment(model)
                 .frame(minWidth: 900, minHeight: 600)
+                .onAppear {
+                    appDelegate.onTerminate = { await model.shutdown() }
+                    appDelegate.onWillTerminateSync = { model.terminateServerImmediately() }
+                    model.startIfNeeded()
+                }
         }
         .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 1360, height: 860)
         .commands {
             CommandGroup(replacing: .newItem) {
-                Button("New Thread") { model.destination = .home }
+                Button("New Thread") { model.goHome() }
                     .keyboardShortcut("n")
             }
             CommandGroup(after: .sidebar) {
@@ -32,7 +38,12 @@ struct SwftApp: App {
     }
 }
 
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    var onTerminate: (@MainActor () async -> Void)?
+    var onWillTerminateSync: (@MainActor () -> Void)?
+    private var isTerminating = false
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         // `swift run` launches a bare executable; make it a regular foreground app.
         NSApp.setActivationPolicy(.regular)
@@ -43,6 +54,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         default: break
         }
         NSApp.activate()
+    }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard !isTerminating, let onTerminate else { return .terminateNow }
+        isTerminating = true
+        Task { @MainActor in
+            await onTerminate()
+            sender.reply(toApplicationShouldTerminate: true)
+        }
+        return .terminateLater
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        onWillTerminateSync?()
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }

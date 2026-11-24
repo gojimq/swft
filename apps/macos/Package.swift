@@ -17,5 +17,6 @@ let package = Package(
         // App: windows, screens, view models.
         .executableTarget(name: "Swft", dependencies: ["SwftKit", "SwftDesign"]),
         .testTarget(name: "SwftKitTests", dependencies: ["SwftKit"]),
+        .testTarget(name: "SwftTests", dependencies: ["Swft", "SwftKit"]),
     ]
 )

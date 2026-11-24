@@ -1,15 +1,17 @@
 import Foundation
 
-/// Mock view state for building and screenshotting the UI before SwftKit is wired in.
+/// Mock view state for SwiftUI previews and `-SwftMock`/`-SwftScreen`/`-SwftAppearance` screenshot runs.
 enum MockData {
     static let now = Date()
     static func ago(_ minutes: Double) -> Date { now.addingTimeInterval(-minutes * 60) }
 
-    static let swft = ProjectRef(id: "p-swft", name: "Swft", initials: "SW", tint: 0)
-    static let studio = ProjectRef(id: "p-studio", name: "Studio", initials: "ST", tint: 1)
-    static let api = ProjectRef(id: "p-api", name: "Ledger API", initials: "LA", tint: 2)
-    static let site = ProjectRef(id: "p-site", name: "Marketing site", initials: "MS", tint: 3)
+    static let swft = ProjectRef(id: "p-swft", name: "Swft", initials: "SW", tint: 0, workspaceRoot: "/Users/dev/swft")
+    static let studio = ProjectRef(id: "p-studio", name: "Studio", initials: "ST", tint: 1, workspaceRoot: "/Users/dev/studio")
+    static let api = ProjectRef(id: "p-api", name: "Ledger API", initials: "LA", tint: 2, workspaceRoot: "/Users/dev/ledger-api")
+    static let site = ProjectRef(id: "p-site", name: "Marketing site", initials: "MS", tint: 3, workspaceRoot: "/Users/dev/marketing")
     static let none = ProjectRef(id: "p-none", name: "No project", initials: nil, tint: 0)
+
+    static let projects: [ProjectRef] = [swft, studio, api, site]
 
     static let threads: [ThreadSummary] = [
         .init(id: "t1", title: "Build Swift desktop frontend", project: swft, location: .branch("swft/design-system"), provider: .claude, activity: .running, updatedAt: ago(2)),
@@ -25,21 +27,30 @@ enum MockData {
 
     static let sidebar = SidebarState(threads: threads, filter: .all, account: AccountSummary(name: "Jimwell Quevedo", detail: "Local server · 3 providers"))
 
-    static let home = HomeState(greetingName: "Jimwell", suggestions: [
+    static let home = HomeState(greetingName: "Jimwell", suggestions: defaultSuggestions)
+
+    static let defaultSuggestions: [Suggestion] = [
         Suggestion(id: "s1", symbol: "magnifyingglass", text: "Explain how this repo is structured"),
         Suggestion(id: "s2", symbol: "ladybug", text: "Find and fix the failing test"),
         Suggestion(id: "s3", symbol: "arrow.triangle.branch", text: "Review my uncommitted changes"),
-    ])
+    ]
+
+    static let reasoningChoices: [ReasoningChoice] = [
+        .init(id: "low", label: "Low"),
+        .init(id: "medium", label: "Medium"),
+        .init(id: "high", label: "High"),
+        .init(id: "max", label: "Max"),
+    ]
 
     static let models: [ModelOption] = [
-        .init(id: "opus", name: "Opus 5.5", provider: .claude),
-        .init(id: "sonnet", name: "Sonnet 5.5", provider: .claude),
-        .init(id: "gpt", name: "GPT-6.1", provider: .codex),
-        .init(id: "composer", name: "Composer 2", provider: .cursor),
+        .init(id: "claudeAgent::opus", instanceId: "claudeAgent", slug: "opus", name: "Opus 5.5", provider: .claude, reasoningOptionId: "effort", reasoningOptionLabel: "Thinking", reasoningChoices: reasoningChoices, defaultReasoningChoiceId: "high", isDefault: true),
+        .init(id: "claudeAgent::sonnet", instanceId: "claudeAgent", slug: "sonnet", name: "Sonnet 5.5", provider: .claude, reasoningOptionId: "effort", reasoningOptionLabel: "Thinking", reasoningChoices: reasoningChoices, defaultReasoningChoiceId: "medium"),
+        .init(id: "codex::gpt", instanceId: "codex", slug: "gpt", name: "GPT-6.1", provider: .codex, reasoningOptionId: "reasoningEffort", reasoningOptionLabel: "Thinking", reasoningChoices: reasoningChoices, defaultReasoningChoiceId: "high"),
+        .init(id: "cursor::composer", instanceId: "cursor", slug: "composer", name: "Composer 2", provider: .cursor),
     ]
 
     static func composer(context: String? = "Swft · main") -> ComposerState {
-        ComposerState(model: models[0], effort: .high, availableModels: models, contextLabel: context)
+        ComposerState(model: models[0], selectedReasoningChoiceId: "high", availableModels: models, contextLabel: context)
     }
 
     static let threadDetail = ThreadDetailState(
@@ -57,7 +68,7 @@ enum MockData {
                 .code(language: "swift", source: "PillComposer(text: $draft, placeholder: \"Ask Swft\", onSend: send) {\n    ModelPicker(model: \"Opus 5.5\", effort: \"High\") { modelMenu }\n}"),
                 .text("Next I want to clear the stale build products so the bundle picks up the new font resources."),
             ], streaming: false)),
-            .init(id: "i7", kind: .approval(.init(title: "Run command?", message: "Claude wants to delete the build directory before re-bundling the app.", command: "rm -rf apps/macos/build && scripts/bundle.sh", status: .pending))),
+            .init(id: "i7", kind: .approval(.init(requestId: "mock-req-1", title: "Run command?", message: "Claude wants to delete the build directory before re-bundling the app.", command: "rm -rf apps/macos/build && scripts/bundle.sh", status: .pending))),
             .init(id: "i8", kind: .assistant(blocks: [
                 .text("While that’s pending, I’m checking the dark-mode contrast of the composer border against the canvas"),
             ], streaming: true)),

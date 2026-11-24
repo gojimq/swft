@@ -17,9 +17,14 @@ public final class ThreadStore {
     private var stateMonitorTask: Task<Void, Never>?
     private var subscriptionTask: Task<Void, Never>?
 
-    public init(connection: ServerConnection, threadId: String) {
+    public init(
+        connection: ServerConnection,
+        threadId: String,
+        initialProjection: ThreadProjection? = nil
+    ) {
         self.connection = connection
         self.threadId = threadId
+        self.projection = initialProjection
     }
 
     // MARK: - Derived State

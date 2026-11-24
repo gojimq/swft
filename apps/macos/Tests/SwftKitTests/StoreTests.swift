@@ -324,4 +324,25 @@ struct StoreTests {
             FileManager.default.temporaryDirectory.appendingPathComponent("swft-test-dir", isDirectory: true)
         )
     }
+
+    @Test @MainActor func threadStoreAcceptsInitialProjectionForInstantDisplay() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let thread = AppThread(
+            id: "thr-launch",
+            projectId: "proj-1",
+            title: "Instant thread",
+            providerInstanceId: "codex",
+            modelSelection: ModelSelection(instanceId: "codex", model: "gpt-6-astra"),
+            createdAt: now,
+            updatedAt: now
+        )
+        let projection = ThreadProjection(thread: thread, updatedAt: now)
+        let store = ThreadStore(
+            connection: Self.makeDummyConnection(),
+            threadId: "thr-launch",
+            initialProjection: projection
+        )
+        #expect(store.thread?.title == "Instant thread")
+        #expect(store.lastSequence == nil)
+    }
 }

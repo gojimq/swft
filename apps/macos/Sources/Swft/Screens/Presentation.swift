@@ -27,6 +27,33 @@ extension ProviderKind {
     }
 }
 
+extension ServerStatus {
+    var pillTitle: String {
+        switch self {
+        case .starting: "Starting server…"
+        case .connecting: "Connecting…"
+        case .connected: "Local server"
+        case .reconnecting: "Reconnecting…"
+        case .failed: "Server error"
+        }
+    }
+
+    var dotColor: Color {
+        switch self {
+        case .starting, .connecting, .reconnecting: SwftColor.warning
+        case .connected: SwftColor.success
+        case .failed: SwftColor.danger
+        }
+    }
+
+    var needsRetry: Bool {
+        switch self {
+        case .failed, .reconnecting: true
+        case .starting, .connecting, .connected: false
+        }
+    }
+}
+
 extension ThreadSummary {
     func inboxModel(now: Date) -> ThreadInboxRow.Model {
         let (locationText, locationSymbol): (String?, String) = switch location {
@@ -45,7 +72,7 @@ extension ThreadSummary {
             status: activity.inboxStatus,
             providerSymbol: provider.symbol,
             providerTint: provider.tint,
-            providerName: provider.displayName
+            providerName: providerLabel
         )
     }
 }
@@ -89,6 +116,7 @@ extension ToolCallItem {
         case .read: "doc.text"
         case .edit: "pencil"
         case .search: "magnifyingglass"
+        case .thinking: "brain"
         }
     }
 

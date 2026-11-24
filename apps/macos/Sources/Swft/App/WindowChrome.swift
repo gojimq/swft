@@ -16,9 +16,7 @@ struct WindowChrome: NSViewRepresentable {
             window.styleMask.insert(.fullSizeContentView)
             window.titlebarSeparatorStyle = .none
             if window.toolbar == nil {
-                let toolbar = NSToolbar(identifier: "swft.main")
-                toolbar.showsBaselineSeparator = false
-                window.toolbar = toolbar
+                window.toolbar = NSToolbar(identifier: "swft.main")
             }
             window.toolbarStyle = .unified
             window.isMovableByWindowBackground = false
