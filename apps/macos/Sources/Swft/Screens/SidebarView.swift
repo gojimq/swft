@@ -75,7 +75,7 @@ struct SidebarView: View {
                         ThreadInboxRow(thread.inboxModel(now: model.now), isSelected: model.selectedThreadID == thread.id) {
                             model.open(thread.id)
                         }
-                        .transition(.swftRise(reduceMotion: reduceMotion, distance: -6))
+                        .transition(.swftListInsert(reduceMotion: reduceMotion))
                     }
                 }
                 .padding(.horizontal, 8)

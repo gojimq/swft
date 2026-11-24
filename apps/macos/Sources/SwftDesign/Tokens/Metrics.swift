@@ -81,11 +81,13 @@ extension View {
 private struct SwftEntrance: ViewModifier {
     let reduceMotion: Bool
     @State private var shown = false
+    @Environment(\.swftScreenHandoff) private var screenHandoff
 
     func body(content: Content) -> some View {
+        let handoff = screenHandoff && !reduceMotion
         content
-            .opacity(shown ? 1 : 0)
-            .offset(y: shown || reduceMotion ? 0 : 6)
+            .opacity(shown || handoff ? 1 : 0)
+            .offset(y: shown || reduceMotion || handoff ? 0 : 6)
             .onAppear {
                 withAnimation(SwftMotion.resolve(SwftMotion.screenSwitch, reduceMotion: reduceMotion)) { shown = true }
             }
