@@ -20,6 +20,7 @@ public struct UserBubble: View {
                 .padding(.horizontal, 18)
                 .padding(.vertical, Self.verticalPadding)
                 .background(RoundedRectangle(cornerRadius: 22, style: .continuous).fill(SwftColor.userBubble))
+                .sendFlightBubbleAnchor()
         }
     }
 }
