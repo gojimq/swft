@@ -70,12 +70,13 @@ extension AppModel {
     }
 
     func resolveHomeLaunchTarget() -> HomeLaunchResolution {
-        NoProjectLogic.resolveHomeLaunch(
+        let store = resolvedComposerStore(localStore: threadsStore)
+        return NoProjectLogic.resolveHomeLaunch(
             selectedProject: selectedProject,
             isMock: isMock,
             serverStatus: serverStatus,
-            environmentLabel: threadsStore?.environment?.label,
-            scratchWorkspaceRoot: threadsStore?.availableScratchWorkspaceRoot
+            environmentLabel: store?.environment?.label,
+            scratchWorkspaceRoot: store?.availableScratchWorkspaceRoot
         )
     }
 

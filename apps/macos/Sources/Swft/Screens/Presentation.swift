@@ -56,10 +56,22 @@ extension ServerStatus {
 
 extension ThreadSummary {
     func inboxModel(now: Date) -> ThreadInboxRow.Model {
+        let hostSymbol = environmentMachineSymbol ?? "laptopcomputer"
         let (locationText, locationSymbol): (String?, String) = switch location {
-        case .branch(let b): (b, "arrow.triangle.branch")
-        case .host(let h): (h, "laptopcomputer")
-        case nil: (nil, "")
+        case .branch(let b):
+            if let envLabel = environmentLabel, !envLabel.isEmpty {
+                ("\(envLabel) · \(b)", isRemoteEnvironment ? hostSymbol : "arrow.triangle.branch")
+            } else {
+                (b, "arrow.triangle.branch")
+            }
+        case .host(let h):
+            (environmentLabel ?? h, hostSymbol)
+        case nil:
+            if let envLabel = environmentLabel, !envLabel.isEmpty {
+                (envLabel, hostSymbol)
+            } else {
+                (nil, "")
+            }
         }
         return ThreadInboxRow.Model(
             projectName: project?.name ?? "No project",

@@ -32,13 +32,15 @@ struct ProjectRef: Identifiable, Hashable {
     /// Stable index into the chip palette.
     var tint: Int
     var workspaceRoot: String?
+    var environmentID: String?
 
-    init(id: String, name: String, initials: String?, tint: Int, workspaceRoot: String? = nil) {
+    init(id: String, name: String, initials: String?, tint: Int, workspaceRoot: String? = nil, environmentID: String? = nil) {
         self.id = id
         self.name = name
         self.initials = initials
         self.tint = tint
         self.workspaceRoot = workspaceRoot
+        self.environmentID = environmentID
     }
 }
 
@@ -81,6 +83,10 @@ struct ThreadSummary: Identifiable, Hashable {
     var providerIconUrl: String?
     var activity: ThreadActivity
     var updatedAt: Date
+    var environmentID: String?
+    var environmentLabel: String?
+    var isRemoteEnvironment: Bool
+    var environmentMachineSymbol: String?
 
     var providerLabel: String { providerDisplayName ?? provider.displayName }
 
@@ -94,7 +100,11 @@ struct ThreadSummary: Identifiable, Hashable {
         activity: ThreadActivity,
         updatedAt: Date,
         providerDriver: String? = nil,
-        providerIconUrl: String? = nil
+        providerIconUrl: String? = nil,
+        environmentID: String? = nil,
+        environmentLabel: String? = nil,
+        isRemoteEnvironment: Bool = false,
+        environmentMachineSymbol: String? = nil
     ) {
         self.id = id
         self.title = title
@@ -106,6 +116,10 @@ struct ThreadSummary: Identifiable, Hashable {
         self.providerIconUrl = providerIconUrl
         self.activity = activity
         self.updatedAt = updatedAt
+        self.environmentID = environmentID
+        self.environmentLabel = environmentLabel
+        self.isRemoteEnvironment = isRemoteEnvironment
+        self.environmentMachineSymbol = environmentMachineSymbol
     }
 }
 

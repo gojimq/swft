@@ -85,6 +85,9 @@ struct ComposerView: View {
             onSend: model.send,
             onStop: model.stopActiveRun
         ) {
+            if model.selectedThreadID == nil {
+                ComposerEnvironmentPicker()
+            }
             ComposerProjectSlot(contextLabel: composer.contextLabel)
         } trailing: {
             modelPickerTrigger(composer: composer)
