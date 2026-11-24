@@ -95,6 +95,7 @@ enum SwftAdapters {
         return PickerHarness(
             id: provider.instanceId,
             driver: provider.driver,
+            iconUrl: provider.iconUrl,
             label: nonEmpty(provider.displayName) ?? provider.label,
             kind: providerKind(driver: provider.driver, instanceId: provider.instanceId),
             accentHex: normalizedAccentHex(provider.accentColor),
@@ -360,7 +361,9 @@ enum SwftAdapters {
             provider: kind,
             providerDisplayName: provider?.label,
             activity: threadActivity(from: shell, activelyViewingThreadID: activelyViewingThreadID),
-            updatedAt: shell.updatedAt
+            updatedAt: shell.updatedAt,
+            providerDriver: providerDriverIdentifier(driver: provider?.driver, instanceId: shell.providerInstanceId),
+            providerIconUrl: provider?.iconUrl
         )
     }
 

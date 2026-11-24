@@ -147,7 +147,7 @@ struct ComposerView: View {
         let catalog = model.pickerCatalog
         let harness = current.map { ModelPickerLogic.harness($0.instanceId, in: catalog) }
         let mark = harness.map { harness in
-            PickerRailItem(id: harness.id, symbol: harness.kind.pickerSymbol, monogram: harness.label, tint: harness.kind.tint, accent: harness.accentColor, tooltip: harness.label, inUse: true)
+            PickerRailItem(id: harness.id, provider: harness.driver, acpAgentID: harness.acpAgentId, iconURL: harness.iconUrl, symbol: harness.kind.pickerSymbol, monogram: harness.label, tint: harness.kind.tint, accent: harness.accentColor, tooltip: harness.label, inUse: true)
         }
         let effort = (current?.reasoningChoices.count ?? 0) > 1 ? composer.selectedReasoningChoice?.label : nil
         ModelPickerTrigger(

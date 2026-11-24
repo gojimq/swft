@@ -42,27 +42,53 @@ private struct SwapOnChange<Key: Hashable>: ViewModifier {
     }
 }
 
-/// A provider identity tile: an SF Symbol, or a one-letter monogram for providers without one. Never a vendor logo.
+/// A provider identity mark: renders the real provider vector icon, with a neutral fallback.
 public struct ProviderMark: View {
+    let provider: String?
+    let acpAgentID: String?
+    let iconURL: String?
     let symbol: String?
     let monogram: String
     let size: CGFloat
+    let renderingMode: ProviderIconRenderingMode
 
     public init(symbol: String?, monogram: String, size: CGFloat = 14) {
+        self.provider = nil
+        self.acpAgentID = nil
+        self.iconURL = nil
         self.symbol = symbol
         self.monogram = monogram
         self.size = size
+        self.renderingMode = .original
+    }
+
+    public init(
+        provider: String?,
+        acpAgentID: String? = nil,
+        iconURL: String? = nil,
+        symbol: String? = nil,
+        monogram: String = "",
+        size: CGFloat = 14,
+        renderingMode: ProviderIconRenderingMode = .original
+    ) {
+        self.provider = provider
+        self.acpAgentID = acpAgentID
+        self.iconURL = iconURL
+        self.symbol = symbol
+        self.monogram = monogram
+        self.size = size
+        self.renderingMode = renderingMode
     }
 
     public var body: some View {
-        if let symbol {
-            Image(systemName: symbol).font(.system(size: size * 0.86, weight: .semibold))
-        } else {
-            Text(monogram.prefix(1).uppercased())
-                .font(SwftFonts.flex(size * 0.78, weight: 700))
-                .frame(width: size + 2, height: size + 2)
-                .background(RoundedRectangle(cornerRadius: 4, style: .continuous).strokeBorder(.secondary.opacity(0.5), lineWidth: 1))
-        }
+        let resolved = ProviderIconKind.resolve(
+            driver: provider,
+            acpAgentID: acpAgentID,
+            iconURL: iconURL,
+            name: monogram,
+            legacySymbol: symbol
+        )
+        ProviderIcon(resolved: resolved, size: size, renderingMode: renderingMode)
     }
 }
 
@@ -129,6 +155,9 @@ public struct PickerSearchField: View {
 
 public struct PickerRailItem: Identifiable, Hashable {
     public let id: String
+    public var provider: String?
+    public var acpAgentID: String?
+    public var iconURL: String?
     public var symbol: String?
     public var monogram: String
     public var tint: Color
@@ -138,6 +167,33 @@ public struct PickerRailItem: Identifiable, Hashable {
 
     public init(id: String, symbol: String?, monogram: String, tint: Color, accent: Color?, tooltip: String, inUse: Bool) {
         self.id = id
+        self.provider = nil
+        self.acpAgentID = nil
+        self.iconURL = nil
+        self.symbol = symbol
+        self.monogram = monogram
+        self.tint = tint
+        self.accent = accent
+        self.tooltip = tooltip
+        self.inUse = inUse
+    }
+
+    public init(
+        id: String,
+        provider: String?,
+        acpAgentID: String? = nil,
+        iconURL: String? = nil,
+        symbol: String? = nil,
+        monogram: String,
+        tint: Color,
+        accent: Color?,
+        tooltip: String,
+        inUse: Bool
+    ) {
+        self.id = id
+        self.provider = provider
+        self.acpAgentID = acpAgentID
+        self.iconURL = iconURL
         self.symbol = symbol
         self.monogram = monogram
         self.tint = tint
@@ -193,8 +249,16 @@ public struct PickerRail: View {
         var body: some View {
             let shape = RoundedRectangle(cornerRadius: 11, style: .continuous)
             Button(action: action) {
-                ProviderMark(symbol: item.symbol, monogram: item.monogram, size: 14)
+                let resolved = ProviderIconKind.resolve(
+                    driver: item.provider,
+                    acpAgentID: item.acpAgentID,
+                    iconURL: item.iconURL,
+                    name: item.monogram,
+                    legacySymbol: item.symbol
+                )
+                ProviderIcon(resolved: resolved, size: 15)
                     .foregroundStyle(selected ? SwftColor.accent : (hovering ? SwftColor.textPrimary : SwftColor.textTertiary))
+                    .opacity(selected || hovering || !resolved.hasBrandColor ? 1 : 0.78)
                     .frame(width: 36, height: 36)
                     .background {
                         ZStack {
@@ -255,7 +319,7 @@ public struct PickerModelRow: View {
         Button(action: action) {
             HStack(spacing: 8) {
                 if let leading {
-                    ProviderMark(symbol: leading.symbol, monogram: leading.monogram, size: 12)
+                    ProviderMark(provider: leading.provider, acpAgentID: leading.acpAgentID, iconURL: leading.iconURL, symbol: leading.symbol, monogram: leading.monogram, size: 13)
                         .foregroundStyle(SwftColor.textTertiary)
                         .frame(width: 16)
                     if let accent = leading.accent { AccentDot(accent) }
@@ -347,7 +411,11 @@ public struct PickerSectionHeader: View {
     public var body: some View {
         HStack(spacing: 12) {
             HStack(spacing: 6) {
-                Image(systemName: "square.stack.3d.up").font(.system(size: 10, weight: .medium))
+                if ProviderIconKind.resolveSubProvider(title) != nil {
+                    SubProviderIcon(name: title, size: 11.5)
+                } else {
+                    Image(systemName: "square.stack.3d.up").font(.system(size: 10, weight: .medium))
+                }
                 Text(title).lineLimit(1)
             }
             Spacer(minLength: 8)
@@ -620,8 +688,8 @@ public struct ModelPickerTrigger: View {
     private var label: some View {
         HStack(spacing: 5) {
             if let mark {
-                ProviderMark(symbol: mark.symbol, monogram: mark.monogram, size: 11)
-                    .foregroundStyle(mark.tint)
+                ProviderMark(provider: mark.provider, acpAgentID: mark.acpAgentID, iconURL: mark.iconURL, symbol: mark.symbol, monogram: mark.monogram, size: 13)
+                    .foregroundStyle(SwftColor.textSecondary)
                 if let accent = mark.accent { AccentDot(accent) }
             }
             if let disambiguator {

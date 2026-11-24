@@ -20,7 +20,7 @@ extension ProviderKind {
         case .claude: Color(red: 0.85, green: 0.47, blue: 0.34)
         case .codex: SwftColor.textSecondary
         case .cursor: SwftColor.textSecondary
-        case .opencode: SwftColor.success
+        case .opencode: SwftColor.textSecondary
         case .gemini: SwftColor.accent
         case .other: SwftColor.textTertiary
         }
@@ -72,7 +72,9 @@ extension ThreadSummary {
             status: activity.inboxStatus,
             providerSymbol: provider.symbol,
             providerTint: provider.tint,
-            providerName: providerLabel
+            providerName: providerLabel,
+            providerDriver: providerDriver ?? provider.driverIdentifier,
+            providerIconURL: providerIconUrl
         )
     }
 }

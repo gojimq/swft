@@ -89,6 +89,9 @@ public struct ThreadInboxRow: View {
         public var providerSymbol: String
         public var providerTint: Color
         public var providerName: String
+        public var providerDriver: String?
+        public var providerAcpAgentID: String?
+        public var providerIconURL: String?
 
         public init(projectName: String, projectInitials: String?, projectTint: Int, time: String, title: String, location: String?, locationSymbol: String, status: InboxRowStatus, providerSymbol: String, providerTint: Color, providerName: String) {
             self.projectName = projectName
@@ -102,6 +105,26 @@ public struct ThreadInboxRow: View {
             self.providerSymbol = providerSymbol
             self.providerTint = providerTint
             self.providerName = providerName
+            self.providerDriver = nil
+            self.providerAcpAgentID = nil
+            self.providerIconURL = nil
+        }
+
+        public init(projectName: String, projectInitials: String?, projectTint: Int, time: String, title: String, location: String?, locationSymbol: String, status: InboxRowStatus, providerSymbol: String, providerTint: Color, providerName: String, providerDriver: String?, providerAcpAgentID: String? = nil, providerIconURL: String? = nil) {
+            self.projectName = projectName
+            self.projectInitials = projectInitials
+            self.projectTint = projectTint
+            self.time = time
+            self.title = title
+            self.location = location
+            self.locationSymbol = locationSymbol
+            self.status = status
+            self.providerSymbol = providerSymbol
+            self.providerTint = providerTint
+            self.providerName = providerName
+            self.providerDriver = providerDriver
+            self.providerAcpAgentID = providerAcpAgentID
+            self.providerIconURL = providerIconURL
         }
     }
 
@@ -148,7 +171,7 @@ public struct ThreadInboxRow: View {
                     statusView
                         .id(model.status)
                         .transition(.opacity.combined(with: .scale(scale: 0.6)))
-                    ProviderGlyph(symbol: model.providerSymbol, tint: model.providerTint, name: model.providerName)
+                    ProviderGlyph(provider: model.providerDriver, acpAgentID: model.providerAcpAgentID, iconURL: model.providerIconURL, symbol: model.providerSymbol, tint: model.providerTint, name: model.providerName)
                 }
                 .foregroundStyle(SwftColor.textTertiary)
                 .frame(height: 16)

@@ -77,6 +77,8 @@ struct ThreadSummary: Identifiable, Hashable {
     var location: ThreadLocation?
     var provider: ProviderKind
     var providerDisplayName: String?
+    var providerDriver: String?
+    var providerIconUrl: String?
     var activity: ThreadActivity
     var updatedAt: Date
 
@@ -90,7 +92,9 @@ struct ThreadSummary: Identifiable, Hashable {
         provider: ProviderKind,
         providerDisplayName: String? = nil,
         activity: ThreadActivity,
-        updatedAt: Date
+        updatedAt: Date,
+        providerDriver: String? = nil,
+        providerIconUrl: String? = nil
     ) {
         self.id = id
         self.title = title
@@ -98,6 +102,8 @@ struct ThreadSummary: Identifiable, Hashable {
         self.location = location
         self.provider = provider
         self.providerDisplayName = providerDisplayName
+        self.providerDriver = providerDriver
+        self.providerIconUrl = providerIconUrl
         self.activity = activity
         self.updatedAt = updatedAt
     }
@@ -202,6 +208,7 @@ struct PickerHarness: Identifiable, Hashable {
     var driver: String
     /// Groups clones of the same ACP registry agent; the server does not send it yet, so it is usually nil.
     var acpAgentId: String? = nil
+    var iconUrl: String? = nil
     var label: String
     var kind: ProviderKind
     /// Normalised `#rrggbb`.

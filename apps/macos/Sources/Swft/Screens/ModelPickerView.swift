@@ -17,6 +17,9 @@ extension ModelPickerContent {
             let first = group.harnesses[0]
             return PickerRailItem(
                 id: group.id,
+                provider: first.driver,
+                acpAgentID: first.acpAgentId,
+                iconURL: first.iconUrl,
                 symbol: first.kind.pickerSymbol,
                 monogram: group.label,
                 tint: first.kind.tint,
@@ -123,7 +126,7 @@ struct ModelPickerPanel: View {
                             isCurrent: option.id == content.currentModelID,
                             isNew: option.isNew,
                             isHighlighted: session.focus == rowIndex(option).map { .row($0) },
-                            leading: PickerRailItem(id: harness.id, symbol: harness.kind.pickerSymbol, monogram: harness.label, tint: harness.kind.tint, accent: harness.accentColor, tooltip: harness.label, inUse: false),
+                            leading: PickerRailItem(id: harness.id, provider: harness.driver, acpAgentID: harness.acpAgentId, iconURL: harness.iconUrl, symbol: harness.kind.pickerSymbol, monogram: harness.label, tint: harness.kind.tint, accent: harness.accentColor, tooltip: harness.label, inUse: false),
                             detail: ModelPickerLogic.locationLabel(option, in: catalog)
                         ) { pick(option) }
                         .id(option.id)
