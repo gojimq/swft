@@ -73,11 +73,12 @@ extension ThreadSummary {
                 (nil, "")
             }
         }
+        let displayDate = isSettled ? (settledAt ?? updatedAt) : updatedAt
         return ThreadInboxRow.Model(
             projectName: project?.name ?? "No project",
             projectInitials: project?.initials,
             projectTint: project?.tint ?? 0,
-            time: RelativeTime.short(from: updatedAt, to: now),
+            time: RelativeTime.short(from: displayDate, to: now),
             title: title,
             location: locationText,
             locationSymbol: locationSymbol,
@@ -86,7 +87,8 @@ extension ThreadSummary {
             providerTint: provider.tint,
             providerName: providerLabel,
             providerDriver: providerDriver ?? provider.driverIdentifier,
-            providerIconURL: providerIconUrl
+            providerIconURL: providerIconUrl,
+            isSettled: isSettled
         )
     }
 }

@@ -87,6 +87,8 @@ struct ThreadSummary: Identifiable, Hashable {
     var environmentLabel: String?
     var isRemoteEnvironment: Bool
     var environmentMachineSymbol: String?
+    var isSettled: Bool = false
+    var settledAt: Date? = nil
 
     var providerLabel: String { providerDisplayName ?? provider.displayName }
 
@@ -104,7 +106,9 @@ struct ThreadSummary: Identifiable, Hashable {
         environmentID: String? = nil,
         environmentLabel: String? = nil,
         isRemoteEnvironment: Bool = false,
-        environmentMachineSymbol: String? = nil
+        environmentMachineSymbol: String? = nil,
+        isSettled: Bool = false,
+        settledAt: Date? = nil
     ) {
         self.id = id
         self.title = title
@@ -120,6 +124,8 @@ struct ThreadSummary: Identifiable, Hashable {
         self.environmentLabel = environmentLabel
         self.isRemoteEnvironment = isRemoteEnvironment
         self.environmentMachineSymbol = environmentMachineSymbol
+        self.isSettled = isSettled
+        self.settledAt = settledAt
     }
 }
 

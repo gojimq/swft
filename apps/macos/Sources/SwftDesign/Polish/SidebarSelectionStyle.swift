@@ -67,11 +67,18 @@ public struct SidebarSelectionButtonStyle<S: Shape>: ButtonStyle {
     let shape: S
     let selected: Bool
     let pressScale: CGFloat
+    let externalHover: Bool?
 
-    public init(shape: S, selected: Bool = false, pressScale: CGFloat = SidebarSelectionMotion.rowPressScale) {
+    public init(
+        shape: S,
+        selected: Bool = false,
+        pressScale: CGFloat = SidebarSelectionMotion.rowPressScale,
+        externalHover: Bool? = nil
+    ) {
         self.shape = shape
         self.selected = selected
         self.pressScale = pressScale
+        self.externalHover = externalHover
     }
 
     public func makeBody(configuration: Configuration) -> some View {
@@ -79,7 +86,8 @@ public struct SidebarSelectionButtonStyle<S: Shape>: ButtonStyle {
             configuration: configuration,
             shape: shape,
             selected: selected,
-            pressScale: pressScale
+            pressScale: pressScale,
+            externalHover: externalHover
         )
     }
 
@@ -88,17 +96,19 @@ public struct SidebarSelectionButtonStyle<S: Shape>: ButtonStyle {
         let shape: S
         let selected: Bool
         let pressScale: CGFloat
+        let externalHover: Bool?
         @State private var hovering = false
         @State private var pillOpacity: Double
         @State private var pillScale: CGFloat = 1
         @State private var pulseGeneration = 0
         @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-        init(configuration: Configuration, shape: S, selected: Bool, pressScale: CGFloat) {
+        init(configuration: Configuration, shape: S, selected: Bool, pressScale: CGFloat, externalHover: Bool?) {
             self.configuration = configuration
             self.shape = shape
             self.selected = selected
             self.pressScale = pressScale
+            self.externalHover = externalHover
             let initial = SidebarSelectionMotion.visualState(
                 for: SidebarSelectionMotion.initialPhase(isSelected: selected),
                 reduceMotion: false
@@ -106,6 +116,8 @@ public struct SidebarSelectionButtonStyle<S: Shape>: ButtonStyle {
             _pillOpacity = State(initialValue: initial.opacity)
             _pillScale = State(initialValue: initial.scale)
         }
+
+        private var effectiveHover: Bool { externalHover ?? hovering }
 
         var body: some View {
             configuration.label
@@ -118,7 +130,7 @@ public struct SidebarSelectionButtonStyle<S: Shape>: ButtonStyle {
                     }
                 }
                 .scaleEffect(configuration.isPressed && !reduceMotion ? pressScale : 1)
-                .animation(SwftMotion.resolve(SwftMotion.quick, reduceMotion: reduceMotion), value: hovering)
+                .animation(SwftMotion.resolve(SwftMotion.quick, reduceMotion: reduceMotion), value: effectiveHover)
                 .animation(SwftMotion.resolve(SwftMotion.spring, reduceMotion: reduceMotion), value: configuration.isPressed)
                 .onHover { hovering = $0 }
                 .onChange(of: selected) { _, isNowSelected in
@@ -129,7 +141,7 @@ public struct SidebarSelectionButtonStyle<S: Shape>: ButtonStyle {
         private var hoverFill: Color {
             if selected { return .clear }
             if configuration.isPressed { return SwftColor.pressed }
-            return hovering ? SwftColor.hover : .clear
+            return effectiveHover ? SwftColor.hover : .clear
         }
 
         private func animateSelection(_ isNowSelected: Bool) {

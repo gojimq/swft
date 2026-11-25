@@ -363,7 +363,9 @@ enum SwftAdapters {
             activity: threadActivity(from: shell, activelyViewingThreadID: activelyViewingThreadID),
             updatedAt: shell.updatedAt,
             providerDriver: providerDriverIdentifier(driver: provider?.driver, instanceId: shell.providerInstanceId),
-            providerIconUrl: provider?.iconUrl
+            providerIconUrl: provider?.iconUrl,
+            isSettled: shell.isSettled,
+            settledAt: shell.settledAt
         )
     }
 

@@ -3,7 +3,6 @@ import SwiftUI
 
 struct SidebarView: View {
     @Environment(AppModel.self) private var model
-    @State private var showingStatusPopover = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -71,11 +70,24 @@ struct SidebarView: View {
             ScrollView {
                 LazyVStack(spacing: 2) {
                     ForEach(model.visibleThreads) { thread in
-                        ThreadInboxRow(thread.inboxModel(now: model.now), isSelected: model.selectedThreadID == thread.id) {
+                        ThreadInboxRow(
+                            thread.inboxModel(now: model.now),
+                            isSelected: model.selectedThreadID == thread.id,
+                            hoverAction: .settle { model.settleThread(thread.id) }
+                        ) {
                             model.open(thread.id)
+                        }
+                        .contextMenu {
+                            Button {
+                                model.settleThread(thread.id)
+                            } label: {
+                                Label("Settle thread", systemImage: "checkmark")
+                            }
                         }
                         .transition(.swftListInsert(reduceMotion: reduceMotion))
                     }
+
+                    SidebarSettledSection()
                 }
                 .padding(.horizontal, 8)
                 .padding(.bottom, 8)
@@ -83,20 +95,20 @@ struct SidebarView: View {
             .scrollIndicators(.automatic)
             .scrollEdgeSoftIfAvailable()
 
-            AccountRow(name: model.sidebar.account.name, detail: model.sidebar.account.detail) {
-                if model.serverStatus.needsRetry {
+            // Reserved bottom footer area (upcoming usage widget); only shows a quiet retry pill when offline.
+            if model.serverStatus.needsRetry {
+                OfflineRetryPill(title: model.serverStatus.pillTitle, dotColor: model.serverStatus.dotColor) {
                     model.retryConnection()
-                } else {
-                    showingStatusPopover.toggle()
                 }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .transition(.swftPop(reduceMotion: reduceMotion, scale: 0.92))
+            } else {
+                Color.clear.frame(height: 8)
             }
-            .popover(isPresented: $showingStatusPopover, arrowEdge: .top) {
-                ServerStatusPopover(dismiss: { showingStatusPopover = false })
-            }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 8)
         }
         .animation(SwftMotion.resolve(SwftMotion.spring, reduceMotion: reduceMotion), value: model.visibleThreads.map(\.id))
+        .animation(SwftMotion.resolve(SwftMotion.spring, reduceMotion: reduceMotion), value: model.serverStatus.needsRetry)
         .background(SwftColor.sidebar)
     }
 }
