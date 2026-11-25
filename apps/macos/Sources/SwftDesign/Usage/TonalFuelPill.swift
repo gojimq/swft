@@ -114,7 +114,7 @@ public struct TonalFuelPill: View {
     @ViewBuilder
     private var pillBackground: some View {
         switch model.status {
-        case .healthy(let remaining, let paceRemaining, let paceTone, let secondaryRemaining):
+        case .healthy(let remaining, let paceRemaining, let paceTone, _):
             GeometryReader { geo in
                 let width = geo.size.width
                 let clamped = max(0, min(100, remaining))
@@ -162,28 +162,6 @@ public struct TonalFuelPill: View {
                             .position(x: tickX, y: 3.5)
                             .allowsHitTesting(false)
                     }
-
-                    if let secondaryRemaining {
-                        let secondaryClamped = max(0, min(100, secondaryRemaining))
-                        let barInset: CGFloat = 10
-                        let barMaxWidth = max(0, width - barInset * 2)
-                        let barFillWidth: CGFloat = secondaryClamped == 0 ? 0 : max(4, barMaxWidth * CGFloat(secondaryClamped) / 100.0)
-                        let barColor = secondaryClamped <= 10 ? SwftColor.danger : SwftUsageColor.secondaryFill
-
-                        ZStack(alignment: .leading) {
-                            Capsule()
-                                .fill(SwftUsageColor.secondaryTrack)
-                                .frame(width: barMaxWidth, height: 2)
-                            if barFillWidth > 0 {
-                                Capsule()
-                                    .fill(barColor)
-                                    .frame(width: barFillWidth, height: 2)
-                            }
-                        }
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-                        .padding(.bottom, 2)
-                        .allowsHitTesting(false)
-                    }
                 }
             }
         case .expired, .notSignedIn, .unavailable:
@@ -194,7 +172,7 @@ public struct TonalFuelPill: View {
     @ViewBuilder
     private var pillForeground: some View {
         switch model.status {
-        case .healthy(let remaining, _, _, let secondaryRemaining):
+        case .healthy(let remaining, _, _, _):
             HStack(spacing: 4) {
                 ProviderMark(
                     provider: model.providerDriver,
@@ -222,7 +200,6 @@ public struct TonalFuelPill: View {
                 }
             }
             .padding(.horizontal, 6)
-            .padding(.bottom, secondaryRemaining != nil ? 2 : 0)
 
         case .expired(let isRenewing):
             HStack(spacing: 4) {
