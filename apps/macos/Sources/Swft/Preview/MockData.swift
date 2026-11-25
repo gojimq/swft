@@ -21,8 +21,8 @@ enum MockData {
         .init(id: "t5", title: "Investigate flaky ledger reconciliation test", project: api, location: .branch("fix/recon-flake"), provider: .codex, activity: .failed, updatedAt: ago(16 * 60)),
         .init(id: "t6", title: "Sketch onboarding copy", project: none, location: .host("Jim’s MacBook Pro"), provider: .opencode, activity: .idle, updatedAt: ago(26 * 60)),
         .init(id: "t7", title: "Hero section performance pass", project: site, location: .branch("perf/hero"), provider: .claude, activity: .idle, updatedAt: ago(3 * 24 * 60)),
-        .init(id: "t8", title: "Migrate auth tokens to keychain", project: api, location: .branch("auth/keychain"), provider: .codex, activity: .idle, updatedAt: ago(5 * 24 * 60)),
-        .init(id: "t9", title: "Dark mode token audit", project: swft, location: .branch("main"), provider: .gemini, activity: .idle, updatedAt: ago(9 * 24 * 60)),
+        .init(id: "t8", title: "Migrate auth tokens to keychain", project: api, location: .branch("auth/keychain"), provider: .codex, activity: .idle, updatedAt: ago(5 * 24 * 60), isSettled: true, settledAt: ago(4 * 24 * 60)),
+        .init(id: "t9", title: "Dark mode token audit", project: swft, location: .branch("main"), provider: .gemini, activity: .idle, updatedAt: ago(9 * 24 * 60), isSettled: true, settledAt: ago(8 * 24 * 60)),
     ]
 
     static let sidebar = SidebarState(threads: threads, filter: .all, account: AccountSummary(name: "Jimwell Quevedo", detail: "Local server · 3 providers"))

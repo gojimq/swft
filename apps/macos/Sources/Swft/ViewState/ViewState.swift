@@ -79,6 +79,8 @@ struct ThreadSummary: Identifiable, Hashable {
     var providerDisplayName: String?
     var activity: ThreadActivity
     var updatedAt: Date
+    var isSettled: Bool = false
+    var settledAt: Date? = nil
 
     var providerLabel: String { providerDisplayName ?? provider.displayName }
 
@@ -90,7 +92,9 @@ struct ThreadSummary: Identifiable, Hashable {
         provider: ProviderKind,
         providerDisplayName: String? = nil,
         activity: ThreadActivity,
-        updatedAt: Date
+        updatedAt: Date,
+        isSettled: Bool = false,
+        settledAt: Date? = nil
     ) {
         self.id = id
         self.title = title
@@ -100,6 +104,8 @@ struct ThreadSummary: Identifiable, Hashable {
         self.providerDisplayName = providerDisplayName
         self.activity = activity
         self.updatedAt = updatedAt
+        self.isSettled = isSettled
+        self.settledAt = settledAt
     }
 }
 

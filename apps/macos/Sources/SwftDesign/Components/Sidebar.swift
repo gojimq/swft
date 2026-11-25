@@ -89,8 +89,22 @@ public struct ThreadInboxRow: View {
         public var providerSymbol: String
         public var providerTint: Color
         public var providerName: String
+        public var isSettled: Bool
 
-        public init(projectName: String, projectInitials: String?, projectTint: Int, time: String, title: String, location: String?, locationSymbol: String, status: InboxRowStatus, providerSymbol: String, providerTint: Color, providerName: String) {
+        public init(
+            projectName: String,
+            projectInitials: String?,
+            projectTint: Int,
+            time: String,
+            title: String,
+            location: String?,
+            locationSymbol: String,
+            status: InboxRowStatus,
+            providerSymbol: String,
+            providerTint: Color,
+            providerName: String,
+            isSettled: Bool = false
+        ) {
             self.projectName = projectName
             self.projectInitials = projectInitials
             self.projectTint = projectTint
@@ -102,64 +116,108 @@ public struct ThreadInboxRow: View {
             self.providerSymbol = providerSymbol
             self.providerTint = providerTint
             self.providerName = providerName
+            self.isSettled = isSettled
         }
     }
 
     let model: Model
     var isSelected: Bool
+    let hoverAction: ThreadRowHoverAction?
     let action: () -> Void
 
-    public init(_ model: Model, isSelected: Bool, action: @escaping () -> Void = {}) {
+    @State private var isRowHovered = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    public init(
+        _ model: Model,
+        isSelected: Bool,
+        hoverAction: ThreadRowHoverAction? = nil,
+        action: @escaping () -> Void = {}
+    ) {
         self.model = model
         self.isSelected = isSelected
+        self.hoverAction = hoverAction
         self.action = action
     }
 
-    private var emphasized: Bool { model.status != .none || isSelected }
+    private var emphasized: Bool { !model.isSettled && (model.status != .none || isSelected) }
+    private var quietSettled: Bool { model.isSettled && !isSelected && !isRowHovered }
+    private var showsHoverAction: Bool { hoverAction != nil && isRowHovered }
+    private var timeColor: Color {
+        (!model.isSettled && model.status == .unread) ? SwftColor.accent : SwftColor.textTertiary
+    }
 
     public var body: some View {
-        Button(action: action) {
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 6) {
-                    ProjectChip(initials: model.projectInitials ?? "", tint: model.projectTint, size: 15, dashed: model.projectInitials == nil)
-                    Text(model.projectName)
-                        .font(SwftType.caption)
-                        .foregroundStyle(SwftColor.textSecondary)
-                        .lineLimit(1)
-                    Spacer(minLength: 4)
-                    Text(model.time)
-                        .font(SwftType.caption)
-                        .monospacedDigit()
-                        .foregroundStyle(model.status == .unread ? SwftColor.accent : SwftColor.textTertiary)
-                }
-                Text(model.title)
-                    .font(emphasized ? SwftType.rowTitle : SwftType.rowTitleRead)
-                    .foregroundStyle(SwftColor.textPrimary)
-                    .lineLimit(1)
-                HStack(spacing: 5) {
-                    if let location = model.location {
-                        Image(systemName: model.locationSymbol)
-                            .font(.system(size: 9.5, weight: .medium))
-                        Text(location)
+        ZStack(alignment: .topTrailing) {
+            Button(action: action) {
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 6) {
+                        ProjectChip(initials: model.projectInitials ?? "", tint: model.projectTint, size: 15, dashed: model.projectInitials == nil)
+                            .opacity(quietSettled ? 0.65 : 1)
+                        Text(model.projectName)
                             .font(SwftType.caption)
+                            .foregroundStyle(quietSettled ? SwftColor.textTertiary : SwftColor.textSecondary)
                             .lineLimit(1)
+                        Spacer(minLength: 4)
+                        Text(model.time)
+                            .font(SwftType.caption)
+                            .monospacedDigit()
+                            .foregroundStyle(timeColor)
+                            .frame(minWidth: 22, alignment: .trailing)
+                            .opacity(showsHoverAction ? 0 : 1)
                     }
-                    Spacer(minLength: 4)
-                    statusView
-                        .id(model.status)
-                        .transition(.opacity.combined(with: .scale(scale: 0.6)))
-                    ProviderGlyph(symbol: model.providerSymbol, tint: model.providerTint, name: model.providerName)
+                    Text(model.title)
+                        .font(emphasized ? SwftType.rowTitle : SwftType.rowTitleRead)
+                        .foregroundStyle(quietSettled ? SwftColor.textSecondary : SwftColor.textPrimary)
+                        .lineLimit(1)
+                    HStack(spacing: 5) {
+                        if let location = model.location {
+                            Image(systemName: model.locationSymbol)
+                                .font(.system(size: 9.5, weight: .medium))
+                            Text(location)
+                                .font(SwftType.caption)
+                                .lineLimit(1)
+                        }
+                        Spacer(minLength: 4)
+                        statusView
+                            .id(model.status)
+                            .transition(.opacity.combined(with: .scale(scale: 0.6)))
+                        ProviderGlyph(symbol: model.providerSymbol, tint: model.providerTint, name: model.providerName)
+                            .opacity(quietSettled ? 0.65 : 1)
+                    }
+                    .foregroundStyle(SwftColor.textTertiary)
+                    .frame(height: 16)
                 }
-                .foregroundStyle(SwftColor.textTertiary)
-                .frame(height: 16)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 9)
+                .contentShape(RoundedRectangle(cornerRadius: SwftRadius.l, style: .continuous))
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 9)
-            .contentShape(RoundedRectangle(cornerRadius: SwftRadius.l, style: .continuous))
+            .buttonStyle(
+                ExternalHoverFillStyle(
+                    shape: RoundedRectangle(cornerRadius: SwftRadius.l, style: .continuous),
+                    selected: isSelected,
+                    isHovering: isRowHovered,
+                    pressScale: 0.985
+                )
+            )
+            .animation(SwftMotion.pop, value: model.status)
+            .accessibilityElement(children: .combine)
+            .optionalAccessibilityAction(hoverAction)
+
+            if let hoverAction {
+                ThreadHoverActionButton(action: hoverAction) {
+                    isRowHovered = false
+                    hoverAction.perform()
+                }
+                .padding(.top, 7)
+                .padding(.trailing, 8)
+                .opacity(showsHoverAction ? 1 : 0)
+                .allowsHitTesting(showsHoverAction)
+            }
         }
-        .buttonStyle(HoverFillStyle(shape: RoundedRectangle(cornerRadius: SwftRadius.l, style: .continuous), selected: isSelected, pressScale: 0.985))
-        .animation(SwftMotion.pop, value: model.status)
-        .accessibilityElement(children: .combine)
+        .onHover { isRowHovered = $0 }
+        .onChange(of: model.isSettled) { isRowHovered = false }
+        .animation(SwftMotion.resolve(SwftMotion.quick, reduceMotion: reduceMotion), value: isRowHovered)
     }
 
     @ViewBuilder private var statusView: some View {

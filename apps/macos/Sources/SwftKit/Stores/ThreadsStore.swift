@@ -22,8 +22,57 @@ public struct SidebarThreadItem: Sendable, Equatable, Identifiable {
     public let needsUserInput: Bool
     public let isPinned: Bool
     public let isSettled: Bool
+    public let settledAt: Date?
     public let isSnoozed: Bool
     public let lastError: String?
+
+    public init(
+        id: String,
+        projectId: String,
+        projectTitle: String,
+        title: String,
+        updatedAt: Date,
+        branch: String?,
+        worktreePath: String?,
+        host: String,
+        providerInstanceId: String,
+        providerDisplayName: String,
+        modelSlug: String,
+        modelDisplayName: String,
+        status: ShellThreadStatus,
+        isRunning: Bool,
+        isUnread: Bool,
+        needsApproval: Bool,
+        needsUserInput: Bool,
+        isPinned: Bool,
+        isSettled: Bool,
+        settledAt: Date? = nil,
+        isSnoozed: Bool,
+        lastError: String?
+    ) {
+        self.id = id
+        self.projectId = projectId
+        self.projectTitle = projectTitle
+        self.title = title
+        self.updatedAt = updatedAt
+        self.branch = branch
+        self.worktreePath = worktreePath
+        self.host = host
+        self.providerInstanceId = providerInstanceId
+        self.providerDisplayName = providerDisplayName
+        self.modelSlug = modelSlug
+        self.modelDisplayName = modelDisplayName
+        self.status = status
+        self.isRunning = isRunning
+        self.isUnread = isUnread
+        self.needsApproval = needsApproval
+        self.needsUserInput = needsUserInput
+        self.isPinned = isPinned
+        self.isSettled = isSettled
+        self.settledAt = settledAt
+        self.isSnoozed = isSnoozed
+        self.lastError = lastError
+    }
 }
 
 /// Observable store for a server environment's providers, projects, and thread list.
@@ -94,6 +143,7 @@ public final class ThreadsStore {
                 needsUserInput: thread.needsUserInput,
                 isPinned: thread.isPinned,
                 isSettled: thread.isSettled,
+                settledAt: thread.settledAt,
                 isSnoozed: thread.isSnoozed(asOf: now),
                 lastError: thread.lastError
             )
@@ -384,6 +434,20 @@ public final class ThreadsStore {
         let _: DispatchCommandResult = try await connection.call(
             tag: RPCMethod.orchestrationDispatchCommand,
             payload: OrchestrationCommand.deleteThread(threadId: threadId)
+        )
+    }
+
+    public func settleThread(threadId: String) async throws {
+        let _: DispatchCommandResult = try await connection.call(
+            tag: RPCMethod.orchestrationDispatchCommand,
+            payload: OrchestrationCommand.settleThread(threadId: threadId)
+        )
+    }
+
+    public func unsettleThread(threadId: String) async throws {
+        let _: DispatchCommandResult = try await connection.call(
+            tag: RPCMethod.orchestrationDispatchCommand,
+            payload: OrchestrationCommand.unsettleThread(threadId: threadId)
         )
     }
 

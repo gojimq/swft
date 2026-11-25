@@ -360,7 +360,9 @@ enum SwftAdapters {
             provider: kind,
             providerDisplayName: provider?.label,
             activity: threadActivity(from: shell, activelyViewingThreadID: activelyViewingThreadID),
-            updatedAt: shell.updatedAt
+            updatedAt: shell.updatedAt,
+            isSettled: shell.isSettled,
+            settledAt: shell.settledAt
         )
     }
 

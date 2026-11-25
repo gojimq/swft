@@ -17,6 +17,11 @@ final class AppModel {
     var modelPicker: ModelPickerSession?
     var sidebarVisible = true
     var filter: ThreadFilter = .all
+    var isSettledExpanded: Bool = false {
+        didSet {
+            defaults?.set(isSettledExpanded, forKey: SettledThreadsLogic.expandedDefaultsKey)
+        }
+    }
     var composerText = ""
     var composerMode: ComposerMode = .chat
     var selectedProjectID: String?
@@ -39,6 +44,8 @@ final class AppModel {
     private var launchPhase: LaunchPhase = .idle
     private var isSubmitting = false
     private var optimisticApprovals: [String: ApprovalItem.Status] = [:]
+    private var optimisticSettlements: [ThreadSummary.ID: OptimisticSettlement] = [:]
+    @ObservationIgnored private let defaults: UserDefaults?
     @ObservationIgnored private var recentProjections = RecentProjections()
 
     private enum LaunchPhase: Equatable {
@@ -73,10 +80,17 @@ final class AppModel {
 
     // MARK: - Initializers & Factories
 
-    private init(isMock: Bool, now: Date, mockBacking: MockBacking? = nil) {
+    private init(
+        isMock: Bool,
+        now: Date,
+        mockBacking: MockBacking? = nil,
+        defaults: UserDefaults? = nil
+    ) {
         self.isMock = isMock
         self.now = now
         self.mockBacking = mockBacking
+        self.defaults = defaults
+        self.isSettledExpanded = defaults?.bool(forKey: SettledThreadsLogic.expandedDefaultsKey) ?? false
     }
 
     static func makeForLaunch() -> AppModel {
@@ -87,10 +101,10 @@ final class AppModel {
     }
 
     static func live() -> AppModel {
-        AppModel(isMock: false, now: Date())
+        AppModel(isMock: false, now: Date(), defaults: .standard)
     }
 
-    static func mock() -> AppModel {
+    static func mock(defaults: UserDefaults? = nil) -> AppModel {
         let backing = MockBacking(
             projects: MockData.projects,
             threads: MockData.threads,
@@ -101,13 +115,17 @@ final class AppModel {
             details: [MockData.threadDetail.summary.id: MockData.threadDetail, MockData.approvalDetail.summary.id: MockData.approvalDetail],
             defaultContextLabel: "Swft · main"
         )
-        let model = AppModel(isMock: true, now: MockData.now, mockBacking: backing)
+        let model = AppModel(isMock: true, now: MockData.now, mockBacking: backing, defaults: defaults)
         model.selectedProjectID = MockData.swft.id
         model.selectedModelID = MockData.models.first?.id
         model.selectedReasoningChoiceId = MockData.models.first?.defaultReasoningChoiceId
         // `-SwftScreen thread` opens straight into the mock thread (used for screenshots).
         if UserDefaults.standard.string(forKey: "SwftScreen") == "thread" {
             model.destination = .thread(MockData.threadDetail.summary.id)
+        }
+        // `-SwftSettled expanded` opens the Settled shelf in mock mode (used for screenshots).
+        if defaults == nil, UserDefaults.standard.string(forKey: "SwftSettled") == "expanded" {
+            model.isSettledExpanded = true
         }
         // `-SwftPicker open|<query>` opens the model picker (optionally searching), for screenshots.
         if let picker = UserDefaults.standard.string(forKey: "SwftPicker") {
@@ -411,15 +429,18 @@ final class AppModel {
         let providersByID = Dictionary(
             uniqueKeysWithValues: (threadsStore?.providers ?? []).map { ($0.instanceId, $0) }
         )
-        let threads = (threadsStore?.listedThreads ?? []).map { shell in
-            SwftAdapters.threadSummary(
-                from: shell,
-                projectsByID: projectsByID,
-                providersByID: providersByID,
-                hostName: hostName,
-                activelyViewingThreadID: selectedThreadID
-            )
-        }
+        let threads = SettledThreadsLogic.applyOptimisticSettlements(
+            to: (threadsStore?.listedThreads ?? []).map { shell in
+                SwftAdapters.threadSummary(
+                    from: shell,
+                    projectsByID: projectsByID,
+                    providersByID: providersByID,
+                    hostName: hostName,
+                    activelyViewingThreadID: selectedThreadID
+                )
+            },
+            overrides: optimisticSettlements
+        )
         return SidebarState(threads: threads, filter: filter, account: liveAccountSummary)
     }
 
@@ -471,16 +492,25 @@ final class AppModel {
         )
     }
 
+    private var settledPartition: SettledPartition {
+        SettledThreadsLogic.partition(
+            threads: sidebar.threads,
+            filter: filter,
+            isSettledExpanded: isSettledExpanded,
+            selectedThreadID: selectedThreadID
+        )
+    }
+
     var visibleThreads: [ThreadSummary] {
-        let all = sidebar.threads
-        switch filter {
-        case .all:
-            return all
-        case .active:
-            return all.filter { $0.activity == .running || $0.activity == .needsApproval }
-        case .needsAttention:
-            return all.filter { $0.activity == .needsApproval || $0.activity == .failed || $0.activity == .unread }
-        }
+        settledPartition.active
+    }
+
+    var settledThreads: [ThreadSummary] {
+        settledPartition.settled
+    }
+
+    var visibleSettledThreads: [ThreadSummary] {
+        settledPartition.visibleSettled
     }
 
     var selectedThreadID: ThreadSummary.ID? {
@@ -507,6 +537,8 @@ final class AppModel {
             let provider = threadsStore?.provider(for: thread.providerInstanceId)
             let location: ThreadLocation? = thread.branch.flatMap { $0.isEmpty ? nil : .branch($0) }
                 ?? (threadsStore?.environment?.label ?? threadsStore?.hostname).map { .host($0) }
+            let isSettled = thread.settledOverride == "settled"
+                || (thread.settledAt != nil && thread.settledOverride != "active")
             return ThreadSummary(
                 id: thread.id,
                 title: thread.title,
@@ -518,7 +550,9 @@ final class AppModel {
                 ),
                 providerDisplayName: provider?.label,
                 activity: activeThreadStore.isRunning ? .running : .idle,
-                updatedAt: thread.updatedAt
+                updatedAt: thread.updatedAt,
+                isSettled: isSettled,
+                settledAt: thread.settledAt
             )
         }
         return nil
@@ -526,8 +560,12 @@ final class AppModel {
 
     func detail(for id: ThreadSummary.ID) -> ThreadDetailState? {
         if let mockBacking {
-            if let detail = mockBacking.details[id] { return detail }
-            guard let summary = mockBacking.threads.first(where: { $0.id == id }) else { return nil }
+            let liveSummary = mockBacking.threads.first(where: { $0.id == id })
+            if var detail = mockBacking.details[id] {
+                if let liveSummary { detail.summary = liveSummary }
+                return detail
+            }
+            guard let summary = liveSummary else { return nil }
             var sample = MockData.threadDetail
             sample.summary = summary
             return sample
@@ -587,6 +625,130 @@ final class AppModel {
 
     func toggleSidebar() {
         withAnimation(.snappy(duration: 0.22)) { sidebarVisible.toggle() }
+    }
+
+    func toggleSettledSection() {
+        isSettledExpanded.toggle()
+    }
+
+    func settleThread(_ id: ThreadSummary.ID) {
+        actionError = nil
+        let wasSelected = selectedThreadID == id
+        let nextThreadID: ThreadSummary.ID? = wasSelected
+            ? SettledThreadsLogic.nextActiveThreadID(afterSettling: id, activeThreads: visibleThreads)
+            : nil
+
+        if isMock {
+            guard let index = mockBacking?.threads.firstIndex(where: { $0.id == id }),
+                  mockBacking?.threads[index].isSettled == false
+            else { return }
+            mockBacking?.threads[index].isSettled = true
+            mockBacking?.threads[index].settledAt = now
+            if wasSelected {
+                advanceAfterSettlingSelectedThread(nextThreadID: nextThreadID)
+            }
+            return
+        }
+
+        guard let threadsStore, serverStatus.isConnected else {
+            actionError = "Local server is not connected yet."
+            return
+        }
+        if let current = sidebar.threads.first(where: { $0.id == id }), current.isSettled {
+            return
+        }
+
+        let token = UUID()
+        optimisticSettlements[id] = OptimisticSettlement(isSettled: true, settledAt: now, token: token)
+        if wasSelected {
+            advanceAfterSettlingSelectedThread(nextThreadID: nextThreadID)
+        }
+
+        Task {
+            do {
+                try await threadsStore.settleThread(threadId: id)
+                await self.reconcileOptimisticSettlement(id: id, expectedSettled: true, token: token)
+            } catch {
+                if self.optimisticSettlements[id]?.token == token {
+                    self.optimisticSettlements.removeValue(forKey: id)
+                }
+                self.actionError = error.localizedDescription
+            }
+        }
+    }
+
+    func unsettleThread(_ id: ThreadSummary.ID) {
+        actionError = nil
+
+        if isMock {
+            guard let index = mockBacking?.threads.firstIndex(where: { $0.id == id }),
+                  mockBacking?.threads[index].isSettled == true
+            else { return }
+            mockBacking?.threads[index].isSettled = false
+            mockBacking?.threads[index].settledAt = nil
+            return
+        }
+
+        guard let threadsStore, serverStatus.isConnected else {
+            actionError = "Local server is not connected yet."
+            return
+        }
+        if let current = sidebar.threads.first(where: { $0.id == id }), !current.isSettled {
+            return
+        }
+
+        let token = UUID()
+        optimisticSettlements[id] = OptimisticSettlement(isSettled: false, settledAt: nil, token: token)
+
+        Task {
+            do {
+                try await threadsStore.unsettleThread(threadId: id)
+                await self.reconcileOptimisticSettlement(id: id, expectedSettled: false, token: token)
+            } catch {
+                if self.optimisticSettlements[id]?.token == token {
+                    self.optimisticSettlements.removeValue(forKey: id)
+                }
+                self.actionError = error.localizedDescription
+            }
+        }
+    }
+
+    private func advanceAfterSettlingSelectedThread(nextThreadID: ThreadSummary.ID?) {
+        if let nextThreadID {
+            open(nextThreadID)
+        } else {
+            goHome()
+        }
+    }
+
+    private func reconcileOptimisticSettlement(
+        id: ThreadSummary.ID,
+        expectedSettled: Bool,
+        token: UUID
+    ) async {
+        guard let threadsStore else {
+            if optimisticSettlements[id]?.token == token {
+                optimisticSettlements.removeValue(forKey: id)
+            }
+            return
+        }
+        if threadsStore.threads.first(where: { $0.id == id })?.isSettled == expectedSettled {
+            if optimisticSettlements[id]?.token == token {
+                optimisticSettlements.removeValue(forKey: id)
+            }
+            return
+        }
+        for _ in 0..<20 {
+            try? await Task.sleep(for: .milliseconds(100))
+            guard !Task.isCancelled, optimisticSettlements[id]?.token == token else { return }
+            if threadsStore.threads.first(where: { $0.id == id })?.isSettled == expectedSettled {
+                optimisticSettlements.removeValue(forKey: id)
+                return
+            }
+        }
+        if optimisticSettlements[id]?.token == token {
+            optimisticSettlements.removeValue(forKey: id)
+        }
     }
 
     func selectProject(_ id: String) {

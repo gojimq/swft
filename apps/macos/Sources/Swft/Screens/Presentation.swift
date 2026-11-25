@@ -61,18 +61,20 @@ extension ThreadSummary {
         case .host(let h): (h, "laptopcomputer")
         case nil: (nil, "")
         }
+        let displayDate = isSettled ? (settledAt ?? updatedAt) : updatedAt
         return ThreadInboxRow.Model(
             projectName: project?.name ?? "No project",
             projectInitials: project?.initials,
             projectTint: project?.tint ?? 0,
-            time: RelativeTime.short(from: updatedAt, to: now),
+            time: RelativeTime.short(from: displayDate, to: now),
             title: title,
             location: locationText,
             locationSymbol: locationSymbol,
             status: activity.inboxStatus,
             providerSymbol: provider.symbol,
             providerTint: provider.tint,
-            providerName: providerLabel
+            providerName: providerLabel,
+            isSettled: isSettled
         )
     }
 }
