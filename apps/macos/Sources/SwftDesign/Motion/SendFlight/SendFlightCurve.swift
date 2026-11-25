@@ -14,6 +14,8 @@ public enum SendFlightTiming {
     public static let handoffDuration: TimeInterval = 0.22
     /// Delay (s) before showing the "Working" indicator after a composer send (`WORKING_DELAY_MS = 340`).
     public static let workingDelay: TimeInterval = 0.34
+    /// Fade-in duration (s) for the first user message when handing off from Home into a new thread.
+    public static let handoffFadeDuration: TimeInterval = 0.30
     /// Entrance stagger step per initial visible row (s) (`STAGGER_MS = 30`).
     public static let staggerStep: TimeInterval = 0.03
     /// Maximum initial stagger step index (`MAX_STAGGER_INDEX = 12`).
@@ -113,4 +115,6 @@ public extension SwftMotion {
     static let settle = CubicBezierCurve.settle.animation(duration: SendFlightTiming.settleDuration)
     /// Composer handoff transition (`220ms`, `cubic-bezier(0.2, 0.8, 0.2, 1)`).
     static let handoff = CubicBezierCurve.settle.animation(duration: SendFlightTiming.handoffDuration)
+    /// First-message fade-in as a new thread takes over from Home (`300ms`, `cubic-bezier(0.2, 0.8, 0.2, 1)`).
+    static let handoffFade = CubicBezierCurve.settle.animation(duration: SendFlightTiming.handoffFadeDuration)
 }

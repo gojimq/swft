@@ -79,7 +79,7 @@ extension Notification.Name {
     /// Posted on the main actor when a new thread is cleared to take over from Home (the composer has docked and the
     /// server has created the thread); the thread becomes the destination in the same or the next main-actor turn.
     /// `userInfo`: `"threadID"` (String) and `"text"` (String, the first message). `AppModel` then emits a handoff
-    /// `ThreadSendEvent`, and the thread's screen flies the first message out of the docked composer.
+    /// `ThreadSendEvent`, and the thread's screen fades the first message in cleanly as the composer settles.
     static let swftNewThreadDidHandOff = Notification.Name("SwftNewThreadDidHandOff")
 }
 
