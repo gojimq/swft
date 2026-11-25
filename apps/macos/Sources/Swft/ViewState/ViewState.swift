@@ -34,14 +34,25 @@ struct ProjectRef: Identifiable, Hashable {
     var tint: Int
     var workspaceRoot: String?
     var environmentID: String?
+    /// True only when a local environment project's folder no longer exists on disk.
+    var isWorkspaceMissing: Bool
 
-    init(id: String, name: String, initials: String?, tint: Int, workspaceRoot: String? = nil, environmentID: String? = nil) {
+    init(
+        id: String,
+        name: String,
+        initials: String?,
+        tint: Int,
+        workspaceRoot: String? = nil,
+        environmentID: String? = nil,
+        isWorkspaceMissing: Bool = false
+    ) {
         self.id = id
         self.name = name
         self.initials = initials
         self.tint = tint
         self.workspaceRoot = workspaceRoot
         self.environmentID = environmentID
+        self.isWorkspaceMissing = isWorkspaceMissing
     }
 }
 

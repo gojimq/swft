@@ -121,6 +121,7 @@ public struct ProjectShell: Codable, Sendable, Equatable, Identifiable {
     public let archivedAt: Date?
     public let createdAt: Date
     public let updatedAt: Date
+    public let deletedAt: Date?
 
     public init(
         id: String,
@@ -135,7 +136,8 @@ public struct ProjectShell: Codable, Sendable, Equatable, Identifiable {
         pinnedAt: Date? = nil,
         archivedAt: Date? = nil,
         createdAt: Date,
-        updatedAt: Date
+        updatedAt: Date,
+        deletedAt: Date? = nil
     ) {
         self.id = id
         self.title = title
@@ -150,6 +152,7 @@ public struct ProjectShell: Codable, Sendable, Equatable, Identifiable {
         self.archivedAt = archivedAt
         self.createdAt = createdAt
         self.updatedAt = updatedAt
+        self.deletedAt = deletedAt
     }
 
     public init(from decoder: any Decoder) throws {
@@ -167,10 +170,11 @@ public struct ProjectShell: Codable, Sendable, Equatable, Identifiable {
         self.archivedAt = try c.decodeIfPresent(Date.self, forKey: .archivedAt)
         self.createdAt = try c.decode(Date.self, forKey: .createdAt)
         self.updatedAt = try c.decode(Date.self, forKey: .updatedAt)
+        self.deletedAt = try c.decodeIfPresent(Date.self, forKey: .deletedAt)
     }
 }
 
-public enum ProjectMutation: Encodable, Sendable {
+public enum ProjectMutation: Encodable, Sendable, Equatable {
     case create(
         commandId: String,
         projectId: String,

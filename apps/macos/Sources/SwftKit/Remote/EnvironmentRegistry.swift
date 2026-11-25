@@ -310,6 +310,12 @@ public final class EnvironmentRegistry {
         entries.removeAll { $0.id == local.id }
     }
 
+    internal func insertEnvironmentForTesting(_ entry: ManagedEnvironment) {
+        entries.removeAll { $0.id == entry.id }
+        entries.append(entry)
+        sortEntries()
+    }
+
     // MARK: - Persistence & Saved Remotes
 
     /// Loads saved remote environments from disk + Keychain and optionally opens their connections.

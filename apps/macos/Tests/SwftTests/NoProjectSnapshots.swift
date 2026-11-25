@@ -46,6 +46,50 @@ struct NoProjectSnapshots {
         )
     }
 
+    @Test(arguments: ["light", "dark"])
+    func homeProjectPickerOpen(appearance: String) throws {
+        let model = AppModel.mock()
+        let localID = model.activeComposerEnvironmentID ?? "mock-local"
+        let missing = ProjectRef(
+            id: "p-missing",
+            name: "old-scratch",
+            initials: "OS",
+            tint: 4,
+            workspaceRoot: "/Users/dev/tmp/old-scratch",
+            environmentID: localID,
+            isWorkspaceMissing: true
+        )
+        model.mockProjectsByEnvironment[localID] = [missing] + MockData.projects
+        model.toggleProjectPicker()
+        try Self.capture(
+            model,
+            appearance: appearance,
+            name: "project-picker-open-\(appearance)"
+        )
+    }
+
+    @Test(arguments: ["light", "dark"])
+    func projectsViewWithMissingFolder(appearance: String) throws {
+        let model = AppModel.mock()
+        let localID = model.activeComposerEnvironmentID ?? "mock-local"
+        let missing = ProjectRef(
+            id: "p-missing",
+            name: "old-scratch",
+            initials: "OS",
+            tint: 4,
+            workspaceRoot: "/Users/dev/tmp/old-scratch",
+            environmentID: localID,
+            isWorkspaceMissing: true
+        )
+        model.mockProjectsByEnvironment[localID] = [missing] + MockData.projects
+        model.destination = .projects
+        try Self.capture(
+            model,
+            appearance: appearance,
+            name: "projects-view-\(appearance)"
+        )
+    }
+
     private static func capture(
         _ model: AppModel,
         appearance: String,

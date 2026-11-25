@@ -236,6 +236,7 @@ extension AppModel {
         let previousProjectName = selectedProject?.name
         selectedEnvironmentID = environmentID
         modelPicker = nil
+        isProjectPickerOpen = false
         actionError = nil
 
         let targetProjects = projects

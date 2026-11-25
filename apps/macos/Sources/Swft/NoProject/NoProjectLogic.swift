@@ -20,17 +20,20 @@ enum NoProjectLogic {
     static let noProjectMenuTag = "__swft_no_project__"
 
     /// Resolves which real project is selected on Home.
-    /// Returns `nil` when the user explicitly cleared the project or no real projects exist.
+    /// Returns `nil` when the user explicitly cleared the project or no valid local/remote projects exist.
     static func resolveSelectedProject(
         projects: [ProjectRef],
         selectedProjectID: String?,
         isNoProjectSelected: Bool
     ) -> ProjectRef? {
         if isNoProjectSelected { return nil }
-        if let selectedProjectID, let match = projects.first(where: { $0.id == selectedProjectID }) {
+        if let selectedProjectID,
+           let match = projects.first(where: { $0.id == selectedProjectID }),
+           !match.isWorkspaceMissing
+        {
             return match
         }
-        return projects.first
+        return projects.first(where: { !$0.isWorkspaceMissing })
     }
 
     /// Whether a thread has no real project attached (live scratch thread or mock no-project placeholder).

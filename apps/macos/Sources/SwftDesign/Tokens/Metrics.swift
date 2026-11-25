@@ -87,9 +87,18 @@ extension AnyTransition {
     }
 
     /// A floating panel growing out of its trigger's corner; `opensBelow` panels drop down, others rise up.
-    public static func swftPopover(reduceMotion: Bool, opensBelow: Bool) -> AnyTransition {
+    public static func swftPopover(
+        reduceMotion: Bool,
+        opensBelow: Bool,
+        horizontalEdge: HorizontalAlignment = .trailing
+    ) -> AnyTransition {
         if reduceMotion { return .opacity }
-        let anchor: UnitPoint = opensBelow ? .topTrailing : .bottomTrailing
+        let anchor: UnitPoint = switch (opensBelow, horizontalEdge) {
+        case (true, .leading): .topLeading
+        case (false, .leading): .bottomLeading
+        case (true, _): .topTrailing
+        case (false, _): .bottomTrailing
+        }
         return .opacity
             .combined(with: .scale(scale: SwftMotion.popoverScale, anchor: anchor))
             .combined(with: .offset(y: opensBelow ? -SwftMotion.popoverOffset : SwftMotion.popoverOffset))

@@ -15,12 +15,17 @@ final class AppModel {
         didSet {
             guard oldValue != destination else { return }
             modelPicker = nil
+            isProjectPickerOpen = false
             // A send belongs to the screen it was made on; a screen opened later must never replay it.
             latestThreadSend = nil
         }
     }
     /// The open model picker, or nil when it is closed.
     var modelPicker: ModelPickerSession?
+    /// Whether the Home composer's floating project picker is open.
+    var isProjectPickerOpen = false
+    /// Project IDs currently awaiting a `project.delete` RPC response.
+    var deletingProjectIDs: Set<String> = []
     var sidebarVisible = true
     var filter: ThreadFilter = .all
     var isSettledExpanded: Bool = false {
@@ -98,6 +103,9 @@ final class AppModel {
     /// Messages sent into the open thread, shown at once and kept under the same row id after the server echoes them.
     private var pendingUserMessages: [ThreadSummary.ID: [PendingUserMessage]] = [:]
     private var optimisticSettlements: [ThreadSummary.ID: OptimisticSettlement] = [:]
+    private var workspaceAvailabilityRevision = 0
+    @ObservationIgnored var localWorkspaceDirectoryExists: (String) -> Bool = ProjectDeletionLogic.localDirectoryExists
+    @ObservationIgnored private var localWorkspaceAvailabilityCache: [String: Bool] = [:]
     @ObservationIgnored private let defaults: UserDefaults?
     @ObservationIgnored private var recentProjections = RecentProjections()
     @ObservationIgnored private var imageLoaders: [String: SwftImageLoader] = [:]
@@ -140,7 +148,8 @@ final class AppModel {
         now: Date,
         mockBacking: MockBacking? = nil,
         defaults: UserDefaults? = nil,
-        updateServices: UpdateServices? = nil
+        updateServices: UpdateServices? = nil,
+        useInMemoryRegistry: Bool? = nil
     ) {
         self.isMock = isMock
         self.now = now
@@ -148,7 +157,8 @@ final class AppModel {
         self.defaults = defaults
         self.isSettledExpanded = defaults?.bool(forKey: SettledThreadsLogic.expandedDefaultsKey) ?? false
         let baseDir = Self.resolveBaseDirectory()
-        if isMock {
+        let ephemeralRegistry = useInMemoryRegistry ?? isMock
+        if ephemeralRegistry {
             self.environmentRegistry = EnvironmentRegistry(
                 credentialStore: InMemoryCredentialStore(),
                 recordStore: InMemoryEnvironmentRecordStore()
@@ -182,7 +192,7 @@ final class AppModel {
             self?.openSettings(section: .providers, providerID: instanceID)
         }
         self.settings.applyAppearance()
-        if !isMock {
+        if !ephemeralRegistry {
             self.selectedUsagePillIDs = UsagePillsStore.loadSelection()
             self.lastGoodUsageLimits = UsagePillsStore.loadLastGoodLimits()
         }
@@ -197,6 +207,22 @@ final class AppModel {
 
     static func live() -> AppModel {
         AppModel(isMock: false, now: Date(), defaults: .standard)
+    }
+
+    /// Ephemeral live-mode `AppModel` for unit tests (never touches Keychain, UserDefaults, or `~/.t3/userdata`).
+    static func testingLive(localStore: ThreadsStore? = nil) -> AppModel {
+        let model = AppModel(
+            isMock: false,
+            now: Date(),
+            defaults: nil,
+            updateServices: .inert,
+            useInMemoryRegistry: true
+        )
+        model.threadsStore = localStore
+        if localStore != nil {
+            model.launchPhase = .running
+        }
+        return model
     }
 
     static func mock(defaults: UserDefaults? = nil, updateServices: UpdateServices? = nil) -> AppModel {
@@ -486,18 +512,26 @@ final class AppModel {
     }
 
     var projects: [ProjectRef] {
+        _ = workspaceAvailabilityRevision
         if let mockBacking {
             return resolvedMockProjects(defaultProjects: mockBacking.projects)
         }
         guard let store = resolvedComposerStore(localStore: threadsStore) else { return [] }
         let envID = activeComposerEnvironmentID ?? store.environment?.environmentId
+        let isLocalEnv = activeComposerEnvironment?.isLocal ?? true
         return store.projects
-            .filter { $0.archivedAt == nil && !store.isScratchProject($0) }
+            .filter { $0.archivedAt == nil && $0.deletedAt == nil && !store.isScratchProject($0) }
             .map { project in
-                if let envID {
-                    return SwftAdapters.projectRef(from: project, environmentID: envID)
+                var ref = envID.map { SwftAdapters.projectRef(from: project, environmentID: $0) }
+                    ?? SwftAdapters.projectRef(from: project)
+                if isLocalEnv {
+                    ref.isWorkspaceMissing = ProjectDeletionLogic.isWorkspaceMissing(
+                        workspaceRoot: project.workspaceRoot,
+                        isLocalEnvironment: true,
+                        directoryExists: cachedLocalWorkspaceExists
+                    )
                 }
-                return SwftAdapters.projectRef(from: project)
+                return ref
             }
     }
 
@@ -507,6 +541,32 @@ final class AppModel {
             selectedProjectID: selectedProjectID,
             isNoProjectSelected: isNoProjectSelected
         )
+    }
+
+    /// Re-checks local project workspace folders on disk and notifies views if availability changed.
+    func refreshLocalProjectAvailability() {
+        guard !isMock else { return }
+        guard let localStore = environmentRegistry.localEnvironment?.threadsStore ?? threadsStore else { return }
+        var nextCache: [String: Bool] = [:]
+        for project in localStore.projects where project.archivedAt == nil && project.deletedAt == nil {
+            let trimmed = project.workspaceRoot.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { continue }
+            nextCache[trimmed] = localWorkspaceDirectoryExists(trimmed)
+        }
+        let changed = nextCache != localWorkspaceAvailabilityCache
+        localWorkspaceAvailabilityCache = nextCache
+        if changed {
+            workspaceAvailabilityRevision &+= 1
+        }
+    }
+
+    private func cachedLocalWorkspaceExists(_ path: String) -> Bool {
+        if let cached = localWorkspaceAvailabilityCache[path] {
+            return cached
+        }
+        let exists = localWorkspaceDirectoryExists(path)
+        localWorkspaceAvailabilityCache[path] = exists
+        return exists
     }
 
     var availableModels: [ModelOption] {
@@ -864,7 +924,28 @@ final class AppModel {
     }
 
     func threadCount(forProjectID projectID: String) -> Int {
-        sidebar.threads.filter { $0.project?.id == projectID }.count
+        if let match = projects.first(where: { $0.id == projectID }) {
+            return projectThreadCounts(for: match).listed
+        }
+        return sidebar.threads.filter { $0.project?.id == projectID }.count
+    }
+
+    func projectThreadCounts(for project: ProjectRef) -> ProjectThreadCounts {
+        if isMock {
+            let listed = sidebar.threads.filter { thread in
+                thread.project?.id == project.id
+                    && (project.environmentID == nil || thread.environmentID == nil || thread.environmentID == project.environmentID)
+            }.count
+            return ProjectThreadCounts(listed: listed, archived: 0)
+        }
+        guard let store = owningStore(forProject: project)?.store else {
+            return ProjectThreadCounts(listed: 0, archived: 0)
+        }
+        let listed = store.listedThreads.filter { $0.projectId == project.id }.count
+        let archived = store.archivedThreads.filter {
+            $0.projectId == project.id && $0.lineage.isListed && $0.deletedAt == nil
+        }.count
+        return ProjectThreadCounts(listed: listed, archived: archived)
     }
 
     // MARK: - Actions
@@ -1037,14 +1118,180 @@ final class AppModel {
         }
     }
 
-    func selectProject(_ id: String) {
+    @discardableResult
+    func selectProject(_ id: String) -> Bool {
+        if let target = projects.first(where: { $0.id == id }), target.isWorkspaceMissing {
+            actionError = "The folder for “\(target.name)” no longer exists on disk. Remove it or restore the folder."
+            return false
+        }
         selectedProjectID = id
+        isProjectPickerOpen = false
         actionError = nil
         if !isMock,
            let projectDefault = resolvedComposerStore(localStore: threadsStore)?.projectsByID[id]?.defaultModelSelection
         {
             syncComposerModel(to: projectDefault, in: resolvedComposerStore(localStore: threadsStore))
         }
+        return true
+    }
+
+    func toggleProjectPicker() {
+        if isProjectPickerOpen {
+            isProjectPickerOpen = false
+        } else {
+            modelPicker = nil
+            refreshLocalProjectAvailability()
+            isProjectPickerOpen = true
+        }
+    }
+
+    func closeProjectPicker() {
+        isProjectPickerOpen = false
+    }
+
+    /// Removes a project entry (and its threads on the server; never deletes files on disk).
+    /// Returns an error message on failure, or `nil` on success.
+    @discardableResult
+    func deleteProject(_ project: ProjectRef) async -> String? {
+        guard !deletingProjectIDs.contains(project.id) else { return nil }
+        let wasSelected = selectedProject?.id == project.id
+        let wasNoProjectSelected = isNoProjectSelected
+        let currentSelectedID = selectedProjectID
+
+        if isMock {
+            removeMockProject(project)
+            applyPostDeleteSelection(
+                deletedProjectID: project.id,
+                wasSelected: wasSelected,
+                wasNoProjectSelected: wasNoProjectSelected,
+                currentSelectedID: currentSelectedID
+            )
+            actionError = nil
+            return nil
+        }
+
+        guard let target = owningStore(forProject: project) else {
+            let message = "Connect to the server before removing a project."
+            actionError = message
+            return message
+        }
+        guard target.isConnected else {
+            let message = "Connect to \(target.label) before removing a project."
+            actionError = message
+            return message
+        }
+
+        let activeThreadBelongsToDeleted: Bool = {
+            guard let openThreadID = selectedThreadID else { return false }
+            if let activeThread = activeThreadStore?.thread,
+               activeThread.id == openThreadID,
+               activeThread.projectId == project.id,
+               target.environmentID == nil || activeThreadEnvironmentID == nil || activeThreadEnvironmentID == target.environmentID
+            {
+                return true
+            }
+            return target.store.threads.contains(where: { $0.id == openThreadID && $0.projectId == project.id })
+                || target.store.archivedThreads.contains(where: { $0.id == openThreadID && $0.projectId == project.id })
+        }()
+
+        deletingProjectIDs.insert(project.id)
+        defer { deletingProjectIDs.remove(project.id) }
+
+        do {
+            _ = try await target.store.deleteProject(projectId: project.id, force: true)
+            if let root = project.workspaceRoot?.trimmingCharacters(in: .whitespacesAndNewlines), !root.isEmpty {
+                localWorkspaceAvailabilityCache.removeValue(forKey: root)
+            }
+            if activeThreadBelongsToDeleted {
+                goHome()
+            }
+            if target.environmentID == nil || target.environmentID == activeComposerEnvironmentID {
+                applyPostDeleteSelection(
+                    deletedProjectID: project.id,
+                    wasSelected: wasSelected,
+                    wasNoProjectSelected: wasNoProjectSelected,
+                    currentSelectedID: currentSelectedID
+                )
+            }
+            actionError = nil
+            return nil
+        } catch {
+            let message = error.localizedDescription
+            actionError = message
+            return message
+        }
+    }
+
+    private func applyPostDeleteSelection(
+        deletedProjectID: String,
+        wasSelected: Bool,
+        wasNoProjectSelected: Bool,
+        currentSelectedID: String?
+    ) {
+        let next = ProjectDeletionLogic.nextSelectionAfterDeleting(
+            deletedProjectID: deletedProjectID,
+            wasSelected: wasSelected,
+            wasNoProjectSelected: wasNoProjectSelected,
+            currentSelectedProjectID: currentSelectedID,
+            remainingProjects: projects
+        )
+        selectedProjectID = next.selectedProjectID
+        isNoProjectSelected = next.isNoProjectSelected
+    }
+
+    private func removeMockProject(_ project: ProjectRef) {
+        if let envID = project.environmentID ?? activeComposerEnvironmentID,
+           mockProjectsByEnvironment[envID] != nil
+        {
+            mockProjectsByEnvironment[envID]?.removeAll { $0.id == project.id }
+        }
+        mockBacking?.projects.removeAll { $0.id == project.id }
+
+        let matchesDeletedThread: (ThreadSummary) -> Bool = { thread in
+            thread.project?.id == project.id
+                && (project.environmentID == nil || thread.environmentID == nil || thread.environmentID == project.environmentID)
+        }
+        var removedThreadIDs = Set<String>()
+        if let backingThreads = mockBacking?.threads {
+            for thread in backingThreads where matchesDeletedThread(thread) {
+                removedThreadIDs.insert(thread.id)
+            }
+            mockBacking?.threads.removeAll(where: matchesDeletedThread)
+        }
+        if let overrideThreads = mockThreadsOverride {
+            for thread in overrideThreads where matchesDeletedThread(thread) {
+                removedThreadIDs.insert(thread.id)
+            }
+            mockThreadsOverride?.removeAll(where: matchesDeletedThread)
+        }
+        for threadID in removedThreadIDs {
+            mockBacking?.details.removeValue(forKey: threadID)
+        }
+        if let openID = selectedThreadID, removedThreadIDs.contains(openID) {
+            goHome()
+        }
+    }
+
+    private func owningStore(
+        forProject project: ProjectRef
+    ) -> (store: ThreadsStore, environmentID: String?, label: String, isConnected: Bool)? {
+        if let envID = project.environmentID,
+           let env = environmentRegistry.environment(id: envID)
+        {
+            return (env.threadsStore, env.id, env.displayLabel, env.isConnected)
+        }
+        if let env = environmentRegistry.environment(
+            owningProjectID: project.id,
+            preferredEnvironmentID: activeComposerEnvironmentID
+        ) {
+            return (env.threadsStore, env.id, env.displayLabel, env.isConnected)
+        }
+        if let store = resolvedComposerStore(localStore: threadsStore) {
+            let label = activeComposerEnvironment?.label ?? store.environment?.label ?? "the server"
+            let connected = store.connectionState.isConnected || isTargetEnvironmentConnected(localConnected: serverStatus.isConnected)
+            return (store, activeComposerEnvironmentID, label, connected)
+        }
+        return nil
     }
 
     func selectModel(_ option: ModelOption) {
@@ -1074,6 +1321,7 @@ final class AppModel {
 
     func toggleModelPicker() {
         if modelPicker == nil {
+            isProjectPickerOpen = false
             modelPicker = ModelPickerSession(catalog: pickerCatalog, currentInstanceId: selectedModel?.instanceId)
         } else {
             modelPicker = nil
@@ -1165,6 +1413,7 @@ final class AppModel {
         }
         do {
             let created = try await targetStore.createProject(title: title, workspaceRoot: url.path)
+            localWorkspaceAvailabilityCache[created.workspaceRoot] = true
             selectedProjectID = created.id
             actionError = nil
         } catch {
@@ -1268,6 +1517,8 @@ final class AppModel {
         // Never dispatch an attachment whose bytes are still on their way up.
         guard !composerAttachments.isUploading else { return }
         guard !text.isEmpty || !composerAttachments.ready.isEmpty else { return }
+        isProjectPickerOpen = false
+        modelPicker = nil
 
         if isMock {
             let attachments = composerAttachments.takeReady(keepPinned: true)

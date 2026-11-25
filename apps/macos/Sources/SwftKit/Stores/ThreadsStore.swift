@@ -97,9 +97,17 @@ public final class ThreadsStore {
     private var stateMonitorTask: Task<Void, Never>?
     private var configSubscriptionTask: Task<Void, Never>?
     private var shellSubscriptionTask: Task<Void, Never>?
+    @ObservationIgnored internal var projectMutationOverride: (@MainActor (_ tag: String, _ mutation: ProjectMutation) async throws -> ProjectShell)?
 
     public init(connection: ServerConnection) {
         self.connection = connection
+    }
+
+    internal func applyConnectionState(_ state: ConnectionState) {
+        connectionState = state
+        if case .connected(let descriptor) = state {
+            environment = descriptor
+        }
     }
 
     // MARK: - Derived Sidebar Views
@@ -313,7 +321,7 @@ public final class ThreadsStore {
 
         case .projectRemoved(let sequence, let projectId):
             guard shouldApply(sequence: sequence) else { return }
-            projects.removeAll { $0.id == projectId }
+            removeProjectLocally(projectId: projectId)
             lastSequence = sequence
 
         case .threadUpdated(let sequence, let location, let thread):
@@ -362,6 +370,12 @@ public final class ThreadsStore {
         }
     }
 
+    private func removeProjectLocally(projectId: String) {
+        projects.removeAll { $0.id == projectId }
+        threads.removeAll { $0.projectId == projectId }
+        archivedThreads.removeAll { $0.projectId == projectId }
+    }
+
     // MARK: - Actions
 
     @discardableResult
@@ -379,9 +393,34 @@ public final class ThreadsStore {
             createWorkspaceRootIfMissing: createIfMissing,
             defaultModelSelection: defaultModelSelection
         )
-        let project: ProjectShell = try await connection.call(tag: RPCMethod.projectsMutate, payload: mutation)
+        let project: ProjectShell
+        if let override = projectMutationOverride {
+            project = try await override(RPCMethod.projectsMutate, mutation)
+        } else {
+            project = try await connection.call(tag: RPCMethod.projectsMutate, payload: mutation)
+        }
         upsert(project, into: &projects)
         return project
+    }
+
+    @discardableResult
+    public func deleteProject(
+        projectId: String,
+        force: Bool = false
+    ) async throws -> ProjectShell {
+        let mutation = ProjectMutation.delete(
+            commandId: UUID().uuidString,
+            projectId: projectId,
+            force: force
+        )
+        let deleted: ProjectShell
+        if let override = projectMutationOverride {
+            deleted = try await override(RPCMethod.projectsMutate, mutation)
+        } else {
+            deleted = try await connection.call(tag: RPCMethod.projectsMutate, payload: mutation)
+        }
+        removeProjectLocally(projectId: projectId)
+        return deleted
     }
 
     @discardableResult

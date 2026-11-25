@@ -101,7 +101,9 @@ struct ComposerView: View {
     let placeholder: String
     /// Home has room below the composer; a thread's composer sits at the bottom, so its picker opens above.
     var pickerOpensBelow = false
+    @State private var composerFrame: CGRect = .zero
     @State private var triggerFrame: CGRect = .zero
+    @State private var projectTriggerFrame: CGRect = .zero
     @State private var pasteToken = UUID()
 
     var body: some View {
@@ -126,8 +128,24 @@ struct ComposerView: View {
                 ComposerEnvironmentPicker()
             }
             ComposerProjectSlot(contextLabel: composer.contextLabel)
+                .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) { projectTriggerFrame = $0 }
         } trailing: {
             modelPickerTrigger(composer: composer)
+        }
+        .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) { composerFrame = $0 }
+        .overlay(alignment: pickerOpensBelow ? .bottomLeading : .topLeading) {
+            if model.selectedThreadID == nil, model.isProjectPickerOpen {
+                let leadingOffset = ProjectDeletionLogic.panelLeadingOffset(
+                    triggerFrame: projectTriggerFrame,
+                    composerFrame: composerFrame,
+                    panelWidth: ProjectPickerPanel.width
+                )
+                ProjectPickerPanel(triggerFrame: projectTriggerFrame)
+                    .padding(.leading, leadingOffset)
+                    .padding(pickerOpensBelow ? .top : .bottom, 8)
+                    .frame(height: 0, alignment: pickerOpensBelow ? .top : .bottom)
+                    .transition(.swftPopover(reduceMotion: reduceMotion, opensBelow: pickerOpensBelow, horizontalEdge: .leading))
+            }
         }
         .overlay(alignment: pickerOpensBelow ? .bottomTrailing : .topTrailing) {
             if let session = model.modelPicker, let content = model.modelPickerContent {
@@ -139,7 +157,7 @@ struct ComposerView: View {
             }
         }
         .onAppear {
-            ComposerPasteRouter.activate(token: pasteToken, shouldHandle: { model.modelPicker == nil }) { model.attach($0) }
+            ComposerPasteRouter.activate(token: pasteToken, shouldHandle: { model.modelPicker == nil && !model.isProjectPickerOpen }) { model.attach($0) }
         }
         .onDisappear {
             ComposerPasteRouter.deactivate(token: pasteToken)

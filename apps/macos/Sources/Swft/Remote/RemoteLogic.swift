@@ -142,19 +142,20 @@ enum RemoteLogic {
     }
 
     /// Finds the best matching project on a newly selected environment, preferring one with the
-    /// same name as the previous project before falling back to the first project on that host.
+    /// same name as the previous project and skipping projects whose local folder is missing.
     static func findProjectForEnvironment(
         projects: [ProjectRef],
         preferredName: String?
     ) -> ProjectRef? {
-        guard !projects.isEmpty else { return nil }
+        let eligible = projects.filter { !$0.isWorkspaceMissing }
+        guard !eligible.isEmpty else { return nil }
         if let preferred = preferredName?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
            !preferred.isEmpty,
-           let exact = projects.first(where: { $0.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == preferred })
+           let exact = eligible.first(where: { $0.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == preferred })
         {
             return exact
         }
-        return projects.first
+        return eligible.first
     }
 
     static func phase(from state: ConnectionState, hasMissingCredentials: Bool = false) -> RemoteEnvironmentPhase {

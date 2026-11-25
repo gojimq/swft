@@ -26,14 +26,16 @@ extension EnvironmentValues {
 }
 
 /// Composer project context chip with hover-to-clear (`×`) and a dashed "No project" state.
-/// Interactive instances wrap a `Menu` picker; display-only instances render the same pill without chrome.
+/// Interactive instances wrap either a popover trigger button or a `Menu` picker; display-only instances render the same pill without chrome.
 public struct ComposerProjectChip<MenuContent: View>: View {
     let state: ComposerProjectChipState
     let interactive: Bool
+    let isOpen: Bool
     let onClear: (() -> Void)?
     let clearHelp: String
     let chipHelp: String?
     let menuContent: (() -> MenuContent)?
+    let onToggle: (() -> Void)?
 
     @State private var isHovering = false
     @State private var isHoveringClear = false
@@ -49,10 +51,30 @@ public struct ComposerProjectChip<MenuContent: View>: View {
     ) {
         self.state = state
         self.interactive = true
+        self.isOpen = false
         self.onClear = onClear
         self.clearHelp = clearHelp
         self.chipHelp = chipHelp
         self.menuContent = menu
+        self.onToggle = nil
+    }
+
+    fileprivate init(
+        popover state: ComposerProjectChipState,
+        isOpen: Bool,
+        onClear: (() -> Void)?,
+        clearHelp: String,
+        chipHelp: String?,
+        onToggle: @escaping () -> Void
+    ) where MenuContent == EmptyView {
+        self.state = state
+        self.interactive = true
+        self.isOpen = isOpen
+        self.onClear = onClear
+        self.clearHelp = clearHelp
+        self.chipHelp = chipHelp
+        self.menuContent = nil
+        self.onToggle = onToggle
     }
 
     fileprivate init(
@@ -61,21 +83,26 @@ public struct ComposerProjectChip<MenuContent: View>: View {
     ) where MenuContent == EmptyView {
         self.state = state
         self.interactive = false
+        self.isOpen = false
         self.onClear = nil
         self.clearHelp = "Clear project"
         self.chipHelp = chipHelp
         self.menuContent = nil
+        self.onToggle = nil
     }
 
     private var showsClear: Bool {
-        interactive && !state.isNoProject && onClear != nil && (isHovering || forceClearVisible)
+        interactive && !state.isNoProject && onClear != nil && ((!isOpen && isHovering) || forceClearVisible)
     }
 
     private var showHoveredChrome: Bool {
-        interactive && (isHovering || forceClearVisible)
+        interactive && (isOpen || isHovering || forceClearVisible)
     }
 
     private var backgroundFill: Color {
+        if isOpen {
+            return SwftColor.selection
+        }
         if state.isNoProject {
             return showHoveredChrome ? SwftColor.hover : SwftColor.surfaceMuted.opacity(0.55)
         }
@@ -102,7 +129,14 @@ public struct ComposerProjectChip<MenuContent: View>: View {
 
     public var body: some View {
         HStack(spacing: 0) {
-            if interactive, let menuContent {
+            if interactive, let onToggle {
+                Button(action: onToggle) {
+                    chipLabel
+                }
+                .buttonStyle(ChipTriggerStyle(reduceMotion: reduceMotion))
+                .fixedSize()
+                .help(chipHelp ?? "")
+            } else if interactive, let menuContent {
                 Menu {
                     menuContent()
                 } label: {
@@ -168,6 +202,7 @@ public struct ComposerProjectChip<MenuContent: View>: View {
         }
         .animation(SwftMotion.resolve(SwftMotion.quick, reduceMotion: reduceMotion), value: isHovering)
         .animation(SwftMotion.resolve(SwftMotion.quick, reduceMotion: reduceMotion), value: isHoveringClear)
+        .animation(SwftMotion.resolve(SwftMotion.quick, reduceMotion: reduceMotion), value: isOpen)
         .animation(SwftMotion.resolve(SwftMotion.spring, reduceMotion: reduceMotion), value: showsClear)
         .animation(SwftMotion.resolve(SwftMotion.spring, reduceMotion: reduceMotion), value: state)
     }
@@ -194,6 +229,25 @@ public struct ComposerProjectChip<MenuContent: View>: View {
 }
 
 extension ComposerProjectChip where MenuContent == EmptyView {
+    /// Interactive chip triggering a custom floating popover picker.
+    public init(
+        state: ComposerProjectChipState,
+        isOpen: Bool,
+        onClear: (() -> Void)? = nil,
+        clearHelp: String = "Clear project",
+        chipHelp: String? = nil,
+        onToggle: @escaping () -> Void
+    ) {
+        self.init(
+            popover: state,
+            isOpen: isOpen,
+            onClear: onClear,
+            clearHelp: clearHelp,
+            chipHelp: chipHelp,
+            onToggle: onToggle
+        )
+    }
+
     /// Read-only chip for an active thread whose project is already fixed.
     public init(state: ComposerProjectChipState, chipHelp: String? = nil) {
         self.init(readOnly: state, chipHelp: chipHelp)

@@ -5,20 +5,22 @@ import SwftKit
 extension AppModel {
     /// Whether the active environment can start a thread without a project.
     var canStartWithoutProject: Bool {
-        NoProjectLogic.canStartWithoutProject(
+        let store = resolvedComposerStore(localStore: threadsStore)
+        return NoProjectLogic.canStartWithoutProject(
             isMock: isMock,
-            isConnected: serverStatus.isConnected,
-            scratchWorkspaceRoot: threadsStore?.availableScratchWorkspaceRoot
+            isConnected: isTargetEnvironmentConnected(localConnected: serverStatus.isConnected),
+            scratchWorkspaceRoot: store?.availableScratchWorkspaceRoot
         )
     }
 
     /// Reason why starting without a project is unavailable, or `nil` when supported.
     var noProjectUnavailableReason: String? {
-        NoProjectLogic.unavailableReason(
+        let store = resolvedComposerStore(localStore: threadsStore)
+        return NoProjectLogic.unavailableReason(
             isMock: isMock,
             serverStatus: serverStatus,
-            environmentLabel: threadsStore?.environment?.label,
-            scratchWorkspaceRoot: threadsStore?.availableScratchWorkspaceRoot
+            environmentLabel: activeComposerEnvironment?.label ?? store?.environment?.label,
+            scratchWorkspaceRoot: store?.availableScratchWorkspaceRoot
         )
     }
 
@@ -41,6 +43,7 @@ extension AppModel {
         }
         isNoProjectSelected = true
         selectedProjectID = nil
+        isProjectPickerOpen = false
         actionError = nil
     }
 
@@ -59,12 +62,13 @@ extension AppModel {
     /// Chip state rendered by `ComposerProjectSlot` on Home and inside active threads.
     func composerProjectChipState(contextLabel: String?) -> ComposerProjectChipState {
         let activeSummary = selectedThreadID.flatMap(threadSummary(for:))
+        let hasValidProjects = projects.contains { !$0.isWorkspaceMissing }
         return NoProjectLogic.composerChipState(
             selectedThread: activeSummary,
             contextLabel: contextLabel,
-            hasProjects: !projects.isEmpty,
+            hasProjects: hasValidProjects,
             canStartWithoutProject: canStartWithoutProject,
-            isConnected: serverStatus.isConnected || isMock,
+            isConnected: isTargetEnvironmentConnected(localConnected: serverStatus.isConnected) || isMock,
             isNoProjectSelected: isNoProjectSelected
         )
     }
