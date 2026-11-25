@@ -51,6 +51,7 @@ struct ThreadView: View {
             // Room for the floating composer, so the latest message rests above it rather than under the glass.
             .padding(.bottom, bottomInset)
             .frame(maxWidth: .infinity)
+            .swftOverlayScrollbars()
             .animation(populated && sendFlight.activeFlight == nil ? SwftMotion.resolve(SwftMotion.settle, reduceMotion: reduceMotion) : nil, value: rows.map(\.id))
         }
         .task(id: rows.isEmpty) { if !rows.isEmpty { populated = true } }

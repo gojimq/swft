@@ -39,6 +39,7 @@ struct SettingsView: View {
             .padding(.top, SwftLayout.titlebarHeight + 22)
             .padding(.bottom, 40)
             .frame(maxWidth: .infinity)
+            .swftOverlayScrollbars()
         }
         .scrollIndicators(.automatic)
         .scrollEdgeSoftIfAvailable()

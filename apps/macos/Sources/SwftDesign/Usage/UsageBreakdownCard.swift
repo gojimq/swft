@@ -167,6 +167,7 @@ public struct UsageBreakdownCard: View {
                         }
                     }
                     .padding(.vertical, 9)
+                    .swftOverlayScrollbars()
                 }
                 .scrollIndicators(.automatic)
                 .frame(maxHeight: 280)

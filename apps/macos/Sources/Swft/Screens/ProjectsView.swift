@@ -103,6 +103,7 @@ struct ProjectsView: View {
             .padding(.top, SwftLayout.titlebarHeight + 24)
             .padding(.bottom, 32)
             .frame(maxWidth: .infinity)
+            .swftOverlayScrollbars()
         }
     }
 }

@@ -99,7 +99,7 @@ struct ConnectionsSettingsView: View {
                         .transition(.swftRise(reduceMotion: reduceMotion, distance: -6))
                 }
 
-                if showAddForm {
+                SwftDisclosure(isExpanded: showAddForm) {
                     Divider()
                         .overlay(SwftColor.borderSubtle)
                         .padding(.horizontal, 16)
@@ -119,8 +119,8 @@ struct ConnectionsSettingsView: View {
                     )
                     .padding(16)
                     .background(SwftColor.surfaceMuted.opacity(0.55))
-                    .transition(.swftRise(reduceMotion: reduceMotion, distance: -6))
-                } else if environments.allSatisfy(\.isLocal) {
+                }
+                SwftDisclosure(isExpanded: !showAddForm && environments.allSatisfy(\.isLocal)) {
                     Divider()
                         .overlay(SwftColor.borderSubtle)
                         .padding(.horizontal, 16)
@@ -145,7 +145,7 @@ struct ConnectionsSettingsView: View {
         let isRepairing = repairingEnvironmentID == env.id
         let isRenaming = renamingEnvironmentID == env.id
 
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .center, spacing: 12) {
                 // Status dot + machine icon
                 ZStack(alignment: .bottomTrailing) {
@@ -267,8 +267,9 @@ struct ConnectionsSettingsView: View {
                 }
             }
 
-            if isRepairing {
+            SwftDisclosure(isExpanded: isRepairing) {
                 Divider().overlay(SwftColor.borderSubtle)
+                    .padding(.vertical, 12)
                 RemoteConnectForm(
                     expectedEnvironmentID: env.id,
                     submitLabel: "Update",
@@ -283,7 +284,6 @@ struct ConnectionsSettingsView: View {
                         }
                     }
                 )
-                .transition(.swftRise(reduceMotion: reduceMotion, distance: -6))
             }
         }
         .padding(.horizontal, 16)

@@ -145,9 +145,8 @@ private struct ProviderSettingsRowView: View {
         VStack(alignment: .leading, spacing: 0) {
             headerRow
 
-            if isExpanded {
+            SwftDisclosure(isExpanded: isExpanded) {
                 expandedContent
-                    .transition(reduceMotion ? .opacity : .opacity.combined(with: .move(edge: .top)))
             }
         }
     }
