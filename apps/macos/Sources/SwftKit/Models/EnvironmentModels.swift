@@ -564,6 +564,7 @@ public struct ServerProvider: Codable, Sendable, Equatable, Identifiable {
     public let unavailableReason: String?
     public let models: [ServerProviderModel]
     public let subProviders: [ServerProviderSubProvider]?
+    public let usageLimits: ServerProviderUsageLimits?
 
     public var id: String { instanceId }
     public var label: String { displayName ?? driver }
@@ -588,7 +589,8 @@ public struct ServerProvider: Codable, Sendable, Equatable, Identifiable {
         availability: String? = nil,
         unavailableReason: String? = nil,
         models: [ServerProviderModel],
-        subProviders: [ServerProviderSubProvider]? = nil
+        subProviders: [ServerProviderSubProvider]? = nil,
+        usageLimits: ServerProviderUsageLimits? = nil
     ) {
         self.instanceId = instanceId
         self.driver = driver
@@ -609,6 +611,78 @@ public struct ServerProvider: Codable, Sendable, Equatable, Identifiable {
         self.unavailableReason = unavailableReason
         self.models = models
         self.subProviders = subProviders
+        self.usageLimits = usageLimits
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case instanceId
+        case driver
+        case displayName
+        case accentColor
+        case iconUrl
+        case badgeLabel
+        case showInteractionModeToggle
+        case supportedRuntimeModes
+        case enabled
+        case installed
+        case version
+        case status
+        case auth
+        case checkedAt
+        case message
+        case availability
+        case unavailableReason
+        case models
+        case subProviders
+        case usageLimits
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.instanceId = try c.decode(String.self, forKey: .instanceId)
+        self.driver = try c.decode(String.self, forKey: .driver)
+        self.displayName = try c.decodeIfPresent(String.self, forKey: .displayName)
+        self.accentColor = try c.decodeIfPresent(String.self, forKey: .accentColor)
+        self.iconUrl = try c.decodeIfPresent(String.self, forKey: .iconUrl)
+        self.badgeLabel = try c.decodeIfPresent(String.self, forKey: .badgeLabel)
+        self.showInteractionModeToggle = try c.decodeIfPresent(Bool.self, forKey: .showInteractionModeToggle)
+        self.supportedRuntimeModes = try c.decodeIfPresent([RuntimeMode].self, forKey: .supportedRuntimeModes)
+        self.enabled = try c.decode(Bool.self, forKey: .enabled)
+        self.installed = try c.decode(Bool.self, forKey: .installed)
+        self.version = try c.decodeIfPresent(String.self, forKey: .version)
+        self.status = try c.decode(ServerProviderState.self, forKey: .status)
+        self.auth = try c.decode(ServerProviderAuth.self, forKey: .auth)
+        self.checkedAt = try c.decode(Date.self, forKey: .checkedAt)
+        self.message = try c.decodeIfPresent(String.self, forKey: .message)
+        self.availability = try c.decodeIfPresent(String.self, forKey: .availability)
+        self.unavailableReason = try c.decodeIfPresent(String.self, forKey: .unavailableReason)
+        self.models = try c.decode([ServerProviderModel].self, forKey: .models)
+        self.subProviders = try c.decodeIfPresent([ServerProviderSubProvider].self, forKey: .subProviders)
+        self.usageLimits = try c.decodeIfPresent(ServerProviderUsageLimits.self, forKey: .usageLimits)
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(instanceId, forKey: .instanceId)
+        try c.encode(driver, forKey: .driver)
+        try c.encodeIfPresent(displayName, forKey: .displayName)
+        try c.encodeIfPresent(accentColor, forKey: .accentColor)
+        try c.encodeIfPresent(iconUrl, forKey: .iconUrl)
+        try c.encodeIfPresent(badgeLabel, forKey: .badgeLabel)
+        try c.encodeIfPresent(showInteractionModeToggle, forKey: .showInteractionModeToggle)
+        try c.encodeIfPresent(supportedRuntimeModes, forKey: .supportedRuntimeModes)
+        try c.encode(enabled, forKey: .enabled)
+        try c.encode(installed, forKey: .installed)
+        try c.encodeIfPresent(version, forKey: .version)
+        try c.encode(status, forKey: .status)
+        try c.encode(auth, forKey: .auth)
+        try c.encode(checkedAt, forKey: .checkedAt)
+        try c.encodeIfPresent(message, forKey: .message)
+        try c.encodeIfPresent(availability, forKey: .availability)
+        try c.encodeIfPresent(unavailableReason, forKey: .unavailableReason)
+        try c.encode(models, forKey: .models)
+        try c.encodeIfPresent(subProviders, forKey: .subProviders)
+        try c.encodeIfPresent(usageLimits, forKey: .usageLimits)
     }
 }
 

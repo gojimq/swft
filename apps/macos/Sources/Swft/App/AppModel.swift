@@ -26,6 +26,20 @@ final class AppModel {
     var actionError: String?
     /// Work folds the reader has opened, by fold id (ids are unique per turn, so this spans threads).
     var expandedWorkFolds: Set<String> = []
+    /// Driver group IDs pinned in the sidebar usage footer (`nil` = automatic first 3 healthy/expired).
+    var selectedUsagePillIDs: [String]?
+    /// Last-good usage limits keyed by `"\(environmentID):\(instanceId)"`.
+    var lastGoodUsageLimits: [String: CachedUsageLimits] = [:]
+    /// Cache keys currently undergoing an explicit provider refresh from a usage pill.
+    var renewingUsageProviderKeys: Set<String> = []
+    /// Renewal errors keyed by `"\(environmentID):\(instanceId)"`.
+    var usageRenewalErrors: [String: String] = [:]
+    /// Provider instance ID requested via pill click, for deep-linking Settings → Providers.
+    var requestedSettingsProviderID: String?
+    /// Optional hook for Settings integration to deep-link straight to a specific provider row.
+    @ObservationIgnored var onOpenProviderSettings: ((String) -> Void)?
+    /// Optional preview-only override to pin a usage breakdown popover open for screenshots/tests.
+    var previewUsagePopoverGroupID: String?
 
     // MARK: - Mode & Live SwftKit Backing
 
@@ -65,6 +79,7 @@ final class AppModel {
         var home: HomeState
         var models: [ModelOption]
         var harnesses: [PickerHarness]
+        var usageProviders: [UsageProviderEntry]
         var details: [ThreadSummary.ID: ThreadDetailState]
         var defaultContextLabel: String?
     }
@@ -77,6 +92,10 @@ final class AppModel {
         self.isMock = isMock
         self.now = now
         self.mockBacking = mockBacking
+        if !isMock {
+            self.selectedUsagePillIDs = UsagePillsStore.loadSelection()
+            self.lastGoodUsageLimits = UsagePillsStore.loadLastGoodLimits()
+        }
     }
 
     static func makeForLaunch() -> AppModel {
@@ -98,6 +117,7 @@ final class AppModel {
             home: MockData.home,
             models: MockData.models,
             harnesses: MockData.harnesses,
+            usageProviders: MockData.usageProviders,
             details: [MockData.threadDetail.summary.id: MockData.threadDetail, MockData.approvalDetail.summary.id: MockData.approvalDetail],
             defaultContextLabel: "Swft · main"
         )
@@ -113,6 +133,10 @@ final class AppModel {
         if let picker = UserDefaults.standard.string(forKey: "SwftPicker") {
             model.toggleModelPicker()
             if picker != "open" { model.modelPicker?.setQuery(picker) }
+        }
+        // `-SwftUsagePopover <driverGroupID>` opens a usage pill breakdown card for screenshots.
+        if let popover = UserDefaults.standard.string(forKey: "SwftUsagePopover"), !popover.isEmpty {
+            model.previewUsagePopoverGroupID = popover
         }
         return model
     }
@@ -362,6 +386,125 @@ final class AppModel {
         }
         guard let threadsStore else { return .empty }
         return SwftAdapters.pickerCatalog(from: threadsStore.providers)
+    }
+
+    // MARK: - Usage Pills
+
+    var usageEnvironmentID: String {
+        if isMock { return "mock" }
+        return threadsStore?.environment?.environmentId ?? "default"
+    }
+
+    var usageProviders: [UsageProviderEntry] {
+        if let mockBacking {
+            return mockBacking.usageProviders
+        }
+        guard let threadsStore else { return [] }
+        return SwftAdapters.usageProviders(from: threadsStore.providers)
+    }
+
+    var usageCachedInstanceIDs: Set<String> {
+        UsagePillsStore.cachedInstanceIDs(in: lastGoodUsageLimits, environmentID: usageEnvironmentID)
+    }
+
+    var usagePillCandidateGroups: [UsagePillGroup] {
+        UsagePillsLogic.candidateGroups(from: usageProviders)
+    }
+
+    var visibleUsagePillGroups: [UsagePillGroup] {
+        UsagePillsLogic.visibleGroups(
+            from: usageProviders,
+            selected: selectedUsagePillIDs,
+            cachedInstanceIDs: usageCachedInstanceIDs
+        )
+    }
+
+    func cachedUsageLimits(for instanceId: String) -> CachedUsageLimits? {
+        let key = UsagePillsStore.cacheKey(environmentID: usageEnvironmentID, instanceID: instanceId)
+        return lastGoodUsageLimits[key]
+    }
+
+    func isRenewingUsageProvider(_ instanceId: String) -> Bool {
+        let key = UsagePillsStore.cacheKey(environmentID: usageEnvironmentID, instanceID: instanceId)
+        return renewingUsageProviderKeys.contains(key)
+    }
+
+    func usageRenewalError(for instanceId: String) -> String? {
+        let key = UsagePillsStore.cacheKey(environmentID: usageEnvironmentID, instanceID: instanceId)
+        return usageRenewalErrors[key]
+    }
+
+    func toggleUsagePill(groupID: String, isOn: Bool) {
+        let next = UsagePillsLogic.toggleSelection(
+            entries: usageProviders,
+            selected: selectedUsagePillIDs,
+            groupID: groupID,
+            isOn: isOn,
+            cachedInstanceIDs: usageCachedInstanceIDs
+        )
+        selectedUsagePillIDs = next
+        if !isMock {
+            UsagePillsStore.saveSelection(next)
+        }
+    }
+
+    func recordHealthyUsageLimitsIfNeeded() {
+        let entries = usageProviders
+        if !isMock, let selected = selectedUsagePillIDs, !entries.isEmpty,
+           let migrated = UsagePillsLogic.migrateSelection(selected, entries: entries),
+           migrated != selected
+        {
+            selectedUsagePillIDs = migrated
+            UsagePillsStore.saveSelection(migrated)
+        }
+        if let updated = UsagePillsStore.mergedLastGoodLimits(
+            lastGoodUsageLimits,
+            environmentID: usageEnvironmentID,
+            entries: entries
+        ) {
+            lastGoodUsageLimits = updated
+            if !isMock {
+                UsagePillsStore.saveLastGoodLimits(updated)
+            }
+        }
+    }
+
+    func openProviderSettings(instanceId: String) {
+        requestedSettingsProviderID = instanceId
+        destination = .settings
+        onOpenProviderSettings?(instanceId)
+    }
+
+    func refreshUsageProviders(instanceIds: [String]) {
+        let envID = usageEnvironmentID
+        for instanceId in instanceIds {
+            let key = UsagePillsStore.cacheKey(environmentID: envID, instanceID: instanceId)
+            guard !renewingUsageProviderKeys.contains(key) else { continue }
+            renewingUsageProviderKeys.insert(key)
+            usageRenewalErrors.removeValue(forKey: key)
+
+            if isMock {
+                Task { @MainActor [weak self] in
+                    try? await Task.sleep(for: .milliseconds(350))
+                    self?.renewingUsageProviderKeys.remove(key)
+                }
+                continue
+            }
+
+            guard let threadsStore else {
+                renewingUsageProviderKeys.remove(key)
+                continue
+            }
+            Task { @MainActor [weak self] in
+                do {
+                    _ = try await threadsStore.refreshProviders(instanceId: instanceId, fresh: true)
+                    self?.usageRenewalErrors.removeValue(forKey: key)
+                } catch {
+                    self?.usageRenewalErrors[key] = error.localizedDescription
+                }
+                self?.renewingUsageProviderKeys.remove(key)
+            }
+        }
     }
 
     var selectedModel: ModelOption? {

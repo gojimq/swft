@@ -80,6 +80,147 @@ enum MockData {
 
     static let pickerCatalog = PickerCatalog(harnesses: harnesses, models: models)
 
+    private static func inMinutes(_ minutes: Double) -> Date { now.addingTimeInterval(minutes * 60) }
+
+    /// Realistic usage limits for mock mode: Claude (2 accounts, 5h/weekly & pace), Codex (healthy on pace),
+    /// Antigravity (9% low quota ahead of pace), plus Cursor (4th candidate for Settings toggle testing).
+    static let usageProviders: [UsageProviderEntry] = [
+        UsageProviderEntry(
+            id: "claudeAgent",
+            driver: "claudeAgent",
+            label: "Claude Work",
+            kind: .claude,
+            accentHex: "#d97757",
+            account: "Claude Max · jim@work.dev",
+            usageLimits: UsageLimitsSnapshot(
+                checkedAt: ago(1),
+                windows: [
+                    UsageWindow(
+                        id: "claude-work-5h",
+                        kind: .session,
+                        label: "5-hour",
+                        usedPercent: 36,
+                        resetsAt: inMinutes(134),
+                        windowDurationMins: 300
+                    ),
+                    UsageWindow(
+                        id: "claude-work-weekly",
+                        kind: .weekly,
+                        label: "Weekly",
+                        usedPercent: 28,
+                        resetsAt: inMinutes(3 * 24 * 60 + 18 * 60),
+                        windowDurationMins: 7 * 24 * 60
+                    ),
+                ]
+            )
+        ),
+        UsageProviderEntry(
+            id: "claudeAgent_personal",
+            driver: "claudeAgent",
+            label: "Claude Personal",
+            kind: .claude,
+            accentHex: "#7c5cfa",
+            account: "Claude Pro · jim@example.com",
+            usageLimits: UsageLimitsSnapshot(
+                checkedAt: ago(1),
+                windows: [
+                    UsageWindow(
+                        id: "claude-personal-5h",
+                        kind: .session,
+                        label: "5-hour",
+                        usedPercent: 18,
+                        resetsAt: inMinutes(245),
+                        windowDurationMins: 300
+                    ),
+                    UsageWindow(
+                        id: "claude-personal-weekly",
+                        kind: .weekly,
+                        label: "Weekly",
+                        usedPercent: 9,
+                        resetsAt: inMinutes(5 * 24 * 60 + 12 * 60),
+                        windowDurationMins: 7 * 24 * 60
+                    ),
+                ]
+            )
+        ),
+        UsageProviderEntry(
+            id: "codex",
+            driver: "codex",
+            label: "Codex",
+            kind: .codex,
+            account: "ChatGPT Pro · jim@work.dev",
+            usageLimits: UsageLimitsSnapshot(
+                checkedAt: ago(2),
+                windows: [
+                    UsageWindow(
+                        id: "codex-5h",
+                        kind: .session,
+                        label: "5-hour",
+                        usedPercent: 22,
+                        resetsAt: inMinutes(228),
+                        windowDurationMins: 300
+                    ),
+                    UsageWindow(
+                        id: "codex-weekly",
+                        kind: .weekly,
+                        label: "Weekly",
+                        usedPercent: 14,
+                        resetsAt: inMinutes(4 * 24 * 60 + 6 * 60),
+                        windowDurationMins: 7 * 24 * 60
+                    ),
+                ]
+            )
+        ),
+        UsageProviderEntry(
+            id: "antigravity",
+            driver: "antigravity",
+            label: "Antigravity",
+            kind: .gemini,
+            account: "AI Ultra · jim@example.com",
+            usageLimits: UsageLimitsSnapshot(
+                checkedAt: ago(1),
+                windows: [
+                    UsageWindow(
+                        id: "antigravity-5h",
+                        kind: .session,
+                        label: "5-hour",
+                        usedPercent: 91,
+                        resetsAt: inMinutes(72),
+                        windowDurationMins: 300
+                    ),
+                    UsageWindow(
+                        id: "antigravity-weekly",
+                        kind: .weekly,
+                        label: "Weekly",
+                        usedPercent: 66,
+                        resetsAt: inMinutes(2 * 24 * 60 + 11 * 60),
+                        windowDurationMins: 7 * 24 * 60
+                    ),
+                ]
+            )
+        ),
+        UsageProviderEntry(
+            id: "cursor",
+            driver: "cursor",
+            label: "Cursor",
+            kind: .cursor,
+            account: "Cursor Pro · jim@work.dev",
+            usageLimits: UsageLimitsSnapshot(
+                checkedAt: ago(3),
+                windows: [
+                    UsageWindow(
+                        id: "cursor-monthly",
+                        kind: .monthly,
+                        label: "Monthly",
+                        usedPercent: 16,
+                        resetsAt: inMinutes(14 * 24 * 60 + 6 * 60),
+                        windowDurationMins: 30 * 24 * 60
+                    ),
+                ]
+            )
+        ),
+    ]
+
     static func composer(context: String? = "Swft · main") -> ComposerState {
         ComposerState(model: models[0], selectedReasoningChoiceId: "high", availableModels: models, contextLabel: context)
     }

@@ -96,6 +96,8 @@ struct SidebarView: View {
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 8)
+
+            SidebarUsageFooter()
         }
         .environment(\.swftSelectionNamespace, selectionNamespace)
         .animation(SwftMotion.resolve(SwftMotion.glide, reduceMotion: reduceMotion), value: model.destination)
