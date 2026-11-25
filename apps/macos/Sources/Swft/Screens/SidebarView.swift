@@ -86,14 +86,14 @@ struct SidebarView: View {
                         }
                         .transition(.swftListInsert(reduceMotion: reduceMotion))
                     }
-
-                    SidebarSettledSection()
                 }
                 .padding(.horizontal, 8)
                 .padding(.bottom, 8)
             }
             .scrollIndicators(.automatic)
             .scrollEdgeSoftIfAvailable()
+
+            SidebarSettledSection()
 
             // Reserved bottom footer area: quiet retry pill when offline, plus up to 3 usage pills.
             if model.serverStatus.needsRetry {

@@ -139,6 +139,7 @@ public struct SettledSectionHeader: View {
     let title: String
     let count: Int
     let isExpanded: Bool
+    let opensUpward: Bool
     let action: () -> Void
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -147,21 +148,23 @@ public struct SettledSectionHeader: View {
         _ title: String = "Settled",
         count: Int,
         isExpanded: Bool,
+        opensUpward: Bool = false,
         action: @escaping () -> Void = {}
     ) {
         self.title = title
         self.count = count
         self.isExpanded = isExpanded
+        self.opensUpward = opensUpward
         self.action = action
     }
 
     public var body: some View {
         Button(action: action) {
             HStack(spacing: 6) {
-                Image(systemName: "chevron.right")
+                Image(systemName: opensUpward ? "chevron.up" : "chevron.right")
                     .font(.system(size: 9.5, weight: .semibold))
                     .foregroundStyle(SwftColor.textTertiary)
-                    .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                    .rotationEffect(.degrees(isExpanded ? (opensUpward ? 180 : 90) : 0))
                     .frame(width: 11, height: 11)
                     .animation(SwftMotion.resolve(SwftMotion.disclosure, reduceMotion: reduceMotion), value: isExpanded)
                 Text(title)

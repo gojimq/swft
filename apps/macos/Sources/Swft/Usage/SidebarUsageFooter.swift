@@ -20,28 +20,23 @@ struct SidebarUsageFooter: View {
     var body: some View {
         let groups = model.visibleUsagePillGroups
         if !groups.isEmpty {
-            VStack(spacing: 0) {
-                Rectangle()
-                    .fill(SwftColor.borderSubtle)
-                    .frame(height: 1)
-
-                HStack(spacing: 6) {
-                    ForEach(groups) { group in
-                        TonalFuelPill(
-                            pillModel(for: group),
-                            isPopoverOpen: activeGroupID == group.id,
-                            onHoverChange: { hovering in
-                                handlePillHover(groupID: group.id, hovering: hovering)
-                            },
-                            action: {
-                                handlePillTap(group)
-                            }
-                        )
-                    }
+            HStack(spacing: 6) {
+                ForEach(groups) { group in
+                    TonalFuelPill(
+                        pillModel(for: group),
+                        isPopoverOpen: activeGroupID == group.id,
+                        onHoverChange: { hovering in
+                            handlePillHover(groupID: group.id, hovering: hovering)
+                        },
+                        action: {
+                            handlePillTap(group)
+                        }
+                    )
                 }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 8)
             }
+            .padding(.horizontal, 10)
+            .padding(.top, 4)
+            .padding(.bottom, 10)
             .overlay(alignment: .top) {
                 if let activeID = activeGroupID,
                    let group = groups.first(where: { $0.id == activeID })
