@@ -235,18 +235,17 @@ enum SendFlightLogic {
         return max(-input.slide, min(fromTop, fromBottom))
     }
 
-    /// Clamps the animated scroll distance to one viewport height (`reach`) matching Studio's send slide.
-    static func clampedSlide(from: CGFloat, to: CGFloat, viewportHeight: CGFloat) -> CGFloat {
-        let reach = max(0, viewportHeight)
-        return max(-reach, min(to - from, reach))
-    }
-
     /// Minimum height reserved for the latest turn so the sent prompt sits at the top with empty stream room below.
     static func streamRoomHeight(viewportHeight: CGFloat, topInset: CGFloat, bottomInset: CGFloat) -> CGFloat {
         max(0, viewportHeight - topInset - bottomInset)
     }
 
+    /// Vertical padding around a user bubble row in the transcript (`ThreadView`), so its pill sits this far below
+    /// the top of its turn. Landing math and the transcript share it so the flight lands on the pill exactly.
+    static let userRowVerticalPadding: CGFloat = 4
+
     /// Analytical top-right landing frame in `SendFlightCoordinateSpace` before the real bubble reports geometry.
+    /// `topInset` is the transcript's own top padding (the latest turn's top once scrolled to its end).
     static func predictedLandingFrame(
         viewportWidth: CGFloat,
         topInset: CGFloat,
@@ -256,23 +255,28 @@ enum SendFlightLogic {
         let columnWidth = min(max(0, viewportWidth - horizontalPadding * 2), SwftLayout.contentMaxWidth)
         let columnTrailingX = (viewportWidth + columnWidth) / 2
         let minX = max(horizontalPadding, columnTrailingX - bubbleSize.width)
-        let minY = topInset + 4
+        let minY = topInset + userRowVerticalPadding
         return CGRect(x: minX, y: minY, width: bubbleSize.width, height: bubbleSize.height)
     }
 
-    /// Projects a user bubble's current measured frame (at `currentScrollY`) to its resting frame at `endScrollY`.
-    static func landedBubbleFrame(
-        measuredFrame: CGRect,
-        currentScrollY: CGFloat,
-        endScrollY: CGFloat
+    /// Where a sent bubble rests once the transcript has scrolled to its end. The latest turn is at least
+    /// `streamRoomHeight` tall, so its top sits exactly at `topInset`; a prompt taller than the stream room instead
+    /// ends `bottomInset` above the viewport's bottom. `measuredMinX` (the real bubble's x) wins over the estimate.
+    static func landingFrame(
+        viewportSize: CGSize,
+        topInset: CGFloat,
+        bottomInset: CGFloat,
+        bubbleSize: CGSize,
+        measuredMinX: CGFloat? = nil
     ) -> CGRect {
-        let remainingScroll = endScrollY - currentScrollY
-        return CGRect(
-            x: measuredFrame.minX,
-            y: measuredFrame.minY - remainingScroll,
-            width: measuredFrame.width,
-            height: measuredFrame.height
-        )
+        var frame = predictedLandingFrame(viewportWidth: viewportSize.width, topInset: topInset, bubbleSize: bubbleSize)
+        let turnHeight = bubbleSize.height + userRowVerticalPadding * 2
+        let room = streamRoomHeight(viewportHeight: viewportSize.height, topInset: topInset, bottomInset: bottomInset)
+        if turnHeight > room {
+            frame.origin.y = viewportSize.height - bottomInset - turnHeight + userRowVerticalPadding
+        }
+        if let measuredMinX { frame.origin.x = measuredMinX }
+        return frame
     }
 
     /// Maximum horizontal width allowed for a `UserBubble` pill given the viewport width.
@@ -571,13 +575,4 @@ enum SendFlightLogic {
         return true
     }
 
-    /// Delays "Working" by `WORKING_DELAY_MS` (340ms) right after a composer send so the message reaches the top first.
-    static func workingIndicatorDelay(
-        latestRowID: String?,
-        sentID: String?,
-        reduceMotion: Bool
-    ) -> TimeInterval {
-        guard !reduceMotion, let latestRowID, latestRowID == sentID else { return 0 }
-        return SendFlightTiming.workingDelay
-    }
 }

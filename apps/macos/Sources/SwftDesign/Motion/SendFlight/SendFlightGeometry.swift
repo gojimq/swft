@@ -52,8 +52,9 @@ public extension View {
         modifier(SendFlightBubbleAnchorModifier())
     }
 
-    /// Associates a transcript user-bubble row with its item ID so its pill rect reports to the flight overlay.
-    func sendFlightBubbleTarget(id: String) -> some View {
+    /// Associates a transcript user-bubble row with its item ID so its pill rect reports to the flight overlay. Pass
+    /// an ID only for the bubble a flight is landing on: every reporting bubble re-reports on each scroll frame.
+    func sendFlightBubbleTarget(id: String?) -> some View {
         environment(\.sendFlightBubbleTargetID, id)
     }
 

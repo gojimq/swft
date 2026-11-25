@@ -51,19 +51,29 @@ private struct MaxWidthTightLayout: Layout {
     }
 }
 
-/// Overlay clone of `UserBubble`'s pill used during the 680ms J-shaped send flight.
-public struct SendFlightOverlayBubble: View {
+/// Overlay clone of `UserBubble`'s pill used during the 680ms J-shaped send flight. `progress` is linear time in
+/// `[0, 1]`; animate it with a linear animation of `SendFlightTiming.sendDuration` and the path applies the send
+/// curve itself. Only this view re-renders per frame, so a flight never re-renders the transcript.
+public struct SendFlightOverlayBubble: View, Animatable {
     let text: String
     let maxWidth: CGFloat
-    let sample: SendFlightSample
+    let path: SendFlightPath
+    nonisolated var progress: Double
 
-    public init(text: String, maxWidth: CGFloat, sample: SendFlightSample) {
+    nonisolated public var animatableData: Double {
+        get { progress }
+        set { progress = newValue }
+    }
+
+    public init(text: String, maxWidth: CGFloat, path: SendFlightPath, progress: Double) {
         self.text = text
         self.maxWidth = maxWidth
-        self.sample = sample
+        self.path = path
+        self.progress = progress
     }
 
     public var body: some View {
+        let sample = path.sample(normalizedTime: progress)
         MaxWidthTightLayout(maxWidth: max(44, maxWidth)) {
             Text(text)
                 .font(SwftType.body)

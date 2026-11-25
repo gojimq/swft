@@ -85,21 +85,48 @@ struct SendFlightLogicTests {
         )
     }
 
-    @Test func clampedSlideAndStreamRoomAndLandingProjection() {
-        #expect(SendFlightLogic.clampedSlide(from: 200, to: 500, viewportHeight: 700) == 300)
-        #expect(SendFlightLogic.clampedSlide(from: 0, to: 2000, viewportHeight: 700) == 700)
-        #expect(SendFlightLogic.clampedSlide(from: 2000, to: 100, viewportHeight: 700) == -700)
-
+    @Test func streamRoomHeight() {
         #expect(SendFlightLogic.streamRoomHeight(viewportHeight: 860, topInset: 76, bottomInset: 138) == 646)
         #expect(SendFlightLogic.streamRoomHeight(viewportHeight: 150, topInset: 76, bottomInset: 138) == 0)
+    }
 
-        // Live frame at currentScrollY=0 with endScrollY=540 projects to final landed minY=80.
-        let projected = SendFlightLogic.landedBubbleFrame(
-            measuredFrame: CGRect(x: 520, y: 620, width: 240, height: 44),
-            currentScrollY: 0,
-            endScrollY: 540
-        )
-        #expect(projected == CGRect(x: 520, y: 80, width: 240, height: 44))
+    /// Regression: the stream room and the landing were computed from a 68pt anchor while the transcript is padded
+    /// 76pt, so a first turn overflowed the viewport by 8pt and the flight landed 8pt above the real bubble.
+    @Test func landingMatchesTheTranscriptPixelForPixel() {
+        let viewport = CGSize(width: 1000, height: 860)
+        let topInset = ThreadView.topInset
+        let bottomInset: CGFloat = 138
+        let bubble = CGSize(width: 240, height: 44)
+        let room = SendFlightLogic.streamRoomHeight(viewportHeight: viewport.height, topInset: topInset, bottomInset: bottomInset)
+
+        // A brand-new thread's only turn fills the viewport exactly: nothing to scroll, nothing to hitch.
+        #expect(topInset + room + bottomInset == viewport.height)
+
+        // The landing sits on the real pill: transcript top padding, then the user row's own padding.
+        let landing = SendFlightLogic.landingFrame(viewportSize: viewport, topInset: topInset, bottomInset: bottomInset, bubbleSize: bubble)
+        #expect(landing.minY == topInset + SendFlightLogic.userRowVerticalPadding)
+        #expect(landing.minY == 80)
+        #expect(landing.size == bubble)
+        // Right-aligned to the reading column.
+        let column = min(viewport.width - 64, SwftLayout.contentMaxWidth)
+        #expect(landing.maxX == (viewport.width + column) / 2)
+
+        // A long thread scrolled to its end puts the latest turn's top at the same inset, so the landing is the same.
+        let previousTurns: CGFloat = 2400
+        let turnTop = topInset + previousTurns + 32
+        let contentHeight = turnTop + room + bottomInset
+        let endOffset = contentHeight - viewport.height
+        #expect(turnTop - endOffset + SendFlightLogic.userRowVerticalPadding == landing.minY)
+
+        // The real bubble's measured x wins over the estimate.
+        let measured = SendFlightLogic.landingFrame(viewportSize: viewport, topInset: topInset, bottomInset: bottomInset, bubbleSize: bubble, measuredMinX: 612)
+        #expect(measured.minX == 612)
+        #expect(measured.minY == landing.minY)
+
+        // A prompt taller than the stream room rests above the composer instead of below the window.
+        let tall = CGSize(width: 600, height: 900)
+        let tallLanding = SendFlightLogic.landingFrame(viewportSize: viewport, topInset: topInset, bottomInset: bottomInset, bubbleSize: tall)
+        #expect(tallLanding.maxY + SendFlightLogic.userRowVerticalPadding == viewport.height - bottomInset)
     }
 
     // MARK: - J-Shaped Flight Path Geometry
@@ -419,10 +446,6 @@ struct SendFlightLogicTests {
         ]
         #expect(!SendFlightLogic.shouldShowWorkingIndicator(isRunning: true, isBusy: true, latestTurnRows: withPendingApproval))
 
-        // Delay is WORKING_DELAY_MS (340ms) only for a newly sent message when Reduce Motion is off.
-        #expect(SendFlightLogic.workingIndicatorDelay(latestRowID: "u2", sentID: "u2", reduceMotion: false) == SendFlightTiming.workingDelay)
-        #expect(SendFlightLogic.workingIndicatorDelay(latestRowID: "u2", sentID: "u2", reduceMotion: true) == 0)
-        #expect(SendFlightLogic.workingIndicatorDelay(latestRowID: "u2", sentID: nil, reduceMotion: false) == 0)
     }
 
     // MARK: - Stick-to-Bottom & Scroll-to-Bottom Logic
@@ -476,7 +499,7 @@ struct SendFlightLogicTests {
     // MARK: - SendFlightCoordinator End-to-End Lifecycle
 
     @MainActor
-    @Test func coordinatorHandlesFullFlightRapidSendsThreadSwitchInterruptAndReduceMotion() {
+    @Test func coordinatorHandlesFullFlightRapidSendsThreadSwitchInterruptAndReduceMotion() throws {
         let baseDetail = MockData.threadDetail
         let coordinator = SendFlightCoordinator()
         coordinator.updateViewportSize(CGSize(width: 1000, height: 860))
@@ -484,34 +507,42 @@ struct SendFlightLogicTests {
         coordinator.syncThread(detail: baseDetail, isBusy: false)
         _ = coordinator.handleScrollGeometryChange(ScrollMetrics(offsetY: 400, contentHeight: 1260, viewportHeight: 860))
 
-        // 1. Live-mode send: flight starts immediately before server echoes the user item.
+        // 1. Optimistic send: the row is in the transcript on the send's frame, and the flight binds to it at once.
         let t0 = Date(timeIntervalSince1970: 1_800_000_000)
-        let send1 = ThreadSendEvent(threadID: baseDetail.summary.id, text: "First send", optimisticItemID: nil, timestamp: t0)
-        let action1 = coordinator.beginSend(send1, detail: baseDetail, reduceMotion: false, now: t0)
-        #expect(action1 == .startFlight)
-        #expect(coordinator.activeFlight?.id == send1.id)
-        #expect(coordinator.hasStreamRoom(for: baseDetail, isBusy: false))
-
-        // Server echoes u-new-1 mid-flight: bubble is hidden immediately before syncThread binds it (zero 1-frame flash).
         var withSend1 = baseDetail
         withSend1.items.append(TranscriptItem(id: "u-new-1", kind: .user("First send")))
+        let send1 = ThreadSendEvent(threadID: baseDetail.summary.id, text: "First send", optimisticItemID: "u-new-1", timestamp: t0)
+        #expect(coordinator.isSendPending(send1, in: withSend1))
+        let action1 = coordinator.beginSend(send1, detail: withSend1, reduceMotion: false, now: t0)
+        #expect(action1 == .startFlight)
+        #expect(!coordinator.isSendPending(send1, in: withSend1))
+        #expect(coordinator.activeFlight?.id == send1.id)
+        #expect(coordinator.activeFlight?.boundItemID == "u-new-1")
+        #expect(coordinator.activeFlight?.composerFrame == CGRect(x: 128, y: 738, width: 744, height: 110))
+        #expect(coordinator.hasStreamRoom(for: withSend1, isBusy: true))
         #expect(coordinator.isBubbleHiddenForFlight(rowID: "u-new-1", in: withSend1))
         coordinator.syncThread(detail: withSend1, isBusy: true)
-        #expect(coordinator.activeFlight?.boundItemID == "u-new-1")
 
-        // Mid-flight evaluation moves scroll forward and positions bubble along the J-curve.
-        _ = coordinator.handleScrollGeometryChange(ScrollMetrics(offsetY: 400, contentHeight: 1850, viewportHeight: 860))
-        let midFrame = coordinator.evaluateFlightFrame(at: t0.addingTimeInterval(0.34), topInset: 76)
-        #expect(midFrame != nil)
-        #expect(midFrame?.isComplete == false)
-        #expect((midFrame?.scrollTargetY ?? 0) > 400)
+        // Scrolling during the flight only records metrics: no observed state, no follow-pin fighting the animation.
+        #expect(!coordinator.handleScrollGeometryChange(ScrollMetrics(offsetY: 600, contentHeight: 1850, viewportHeight: 860)))
+        #expect(!coordinator.showsScrollToBottom)
 
-        // Completion clears flight overlay and reveals the real bubble (never leaves a ghost).
-        let endFrame = coordinator.evaluateFlightFrame(at: t0.addingTimeInterval(0.70), topInset: 76)
-        #expect(endFrame?.isComplete == true)
-        let shouldSnap = coordinator.finishFlightIfMatching(send1.id)
-        #expect(shouldSnap)
+        // The landing uses the measured bubble (only the bound one is recorded) and the real 76pt transcript inset.
+        coordinator.updateBubbleFrames(["u-other": CGRect(x: 1, y: 2, width: 3, height: 4)])
+        #expect(coordinator.boundBubbleFrame == nil)
+        coordinator.updateBubbleFrames(["u-new-1": CGRect(x: 610, y: 700, width: 262, height: 44)])
+        let flight1 = try #require(coordinator.activeFlight)
+        let landing = coordinator.landingFrame(for: flight1, topInset: ThreadView.topInset, bottomInset: 138)
+        #expect(landing == CGRect(x: 610, y: 80, width: 262, height: 44))
+        // Scrolling moves the measured y every frame; that must not count as a change.
+        coordinator.updateBubbleFrames(["u-new-1": CGRect(x: 610, y: 420, width: 262, height: 44)])
+        #expect(coordinator.boundBubbleFrame?.minY == 700)
+
+        // Landing at the bottom needs no settle; the real bubble shows and the overlay is gone.
+        _ = coordinator.handleScrollGeometryChange(ScrollMetrics(offsetY: 990, contentHeight: 1850, viewportHeight: 860))
+        #expect(!coordinator.finishFlightIfMatching(send1.id))
         #expect(coordinator.activeFlight == nil)
+        #expect(coordinator.settleToBottomToken == 0)
         #expect(!coordinator.isBubbleHiddenForFlight(rowID: "u-new-1", in: withSend1))
 
         // Even after the turn settles, stream room stays retained while this thread stays open.
@@ -534,14 +565,17 @@ struct SendFlightLogicTests {
         let send3 = ThreadSendEvent(threadID: settledDetail.summary.id, text: "Third", optimisticItemID: "u-new-3", timestamp: t0.addingTimeInterval(0.1))
         _ = coordinator.beginSend(send3, detail: withSend3, reduceMotion: false, now: t0.addingTimeInterval(0.1))
         #expect(coordinator.activeFlight?.id == send3.id)
-        // First interrupted bubble is immediately visible (no hidden bubble left behind).
+        // A late landing from the superseded flight is ignored.
+        #expect(!coordinator.finishFlightIfMatching(send2.id))
+        #expect(coordinator.activeFlight?.id == send3.id)
         #expect(!coordinator.isBubbleHiddenForFlight(rowID: "u-new-2", in: withSend3))
         #expect(coordinator.isBubbleHiddenForFlight(rowID: "u-new-3", in: withSend3))
 
         // 3. User scroll interruption cancels flight immediately so scroll isn't fought.
-        coordinator.handleScrollPhaseChange(from: .idle, to: .interacting)
+        #expect(coordinator.handleScrollPhaseChange(from: .idle, to: .interacting))
         #expect(coordinator.activeFlight == nil)
         #expect(!coordinator.isBubbleHiddenForFlight(rowID: "u-new-3", in: withSend3))
+        coordinator.handleScrollPhaseChange(from: .interacting, to: .idle)
 
         // 4. Thread switch mid-flight cancels flight, resets stickiness, and clears retained stream room.
         let send4 = ThreadSendEvent(threadID: withSend3.summary.id, text: "Fourth", optimisticItemID: nil, timestamp: t0)
@@ -560,12 +594,13 @@ struct SendFlightLogicTests {
         #expect(coordinator.stickiness.isSticking)
         #expect(!coordinator.hasStreamRoom(for: settledOtherThread, isBusy: false))
 
-        // 5. Failed send cancels active flight immediately.
+        // 5. Failed send cancels active flight and its hold immediately.
         let send5 = ThreadSendEvent(threadID: settledOtherThread.summary.id, text: "Will fail", optimisticItemID: nil, timestamp: t0)
         _ = coordinator.beginSend(send5, detail: settledOtherThread, reduceMotion: false, now: t0)
         #expect(coordinator.activeFlight != nil)
         coordinator.failSend(send5.id)
         #expect(coordinator.activeFlight == nil)
+        #expect(coordinator.latestTurnHeldForSendID == nil)
 
         // 6. Reduce Motion skips flight overlay and returns instant anchor.
         var withReduceSend = settledOtherThread
@@ -576,43 +611,136 @@ struct SendFlightLogicTests {
         #expect(coordinator.activeFlight == nil)
         #expect(coordinator.reduceMotionFadeBubbleID == "u-rm")
         #expect(!coordinator.isBubbleHiddenForFlight(rowID: "u-rm", in: withReduceSend))
+        #expect(!coordinator.holdsLatestTurn(for: withReduceSend, latestSend: sendRM, reduceMotion: true))
+    }
 
-        // 7. Working indicator respects WORKING_DELAY_MS on Frame 0 before beginSend runs and under pinned flight progress.
-        let freshCoord = SendFlightCoordinator()
-        var mockSendDetail = baseDetail
-        mockSendDetail.items.append(TranscriptItem(id: "u-frame0", kind: .user("Frame 0")))
-        let frame0Event = ThreadSendEvent(threadID: mockSendDetail.summary.id, text: "Frame 0", optimisticItemID: "u-frame0", timestamp: t0)
-        // Hidden on Frame 0 before beginSend arms the delay timer (zero flash).
-        #expect(!freshCoord.shouldShowWorking(
-            for: mockSendDetail,
-            isBusy: false,
-            latestTurnRows: [.user(id: "u-frame0", text: "Frame 0")],
-            latestSend: frame0Event,
-            reduceMotion: false
-        ))
+    @MainActor
+    @Test func workingAndEarlyRowsWaitForTheFlight() {
+        let t0 = Date(timeIntervalSince1970: 1_800_000_000)
+        let coordinator = SendFlightCoordinator()
+        var detail = MockData.threadDetail
+        detail.items.append(TranscriptItem(id: "u-frame0", kind: .user("Frame 0")))
+        let event = ThreadSendEvent(threadID: detail.summary.id, text: "Frame 0", optimisticItemID: "u-frame0", timestamp: t0)
+        let latestTurn: [TranscriptRow] = [.user(id: "u-frame0", text: "Frame 0")]
 
-        _ = freshCoord.beginSend(frame0Event, detail: mockSendDetail, reduceMotion: false, now: t0)
-        // Still hidden immediately after beginSend while workingDelayPendingForSendID is active.
-        #expect(freshCoord.workingDelayPendingForSendID == frame0Event.id)
-        #expect(!freshCoord.shouldShowWorking(
-            for: mockSendDetail, isBusy: false, latestTurnRows: [.user(id: "u-frame0", text: "Frame 0")],
-            latestSend: frame0Event, reduceMotion: false
-        ))
-        // Under Reduce Motion, Working shows immediately without waiting.
-        #expect(freshCoord.shouldShowWorking(
-            for: mockSendDetail, isBusy: false, latestTurnRows: [.user(id: "u-frame0", text: "Frame 0")],
-            latestSend: frame0Event, reduceMotion: true
-        ))
-        // Pinned progress switches cleanly at WORKING_DELAY_MS / SEND_MS (0.5).
-        freshCoord.pinActiveFlightProgress(0.2)
-        #expect(!freshCoord.shouldShowWorking(
-            for: mockSendDetail, isBusy: false, latestTurnRows: [.user(id: "u-frame0", text: "Frame 0")],
-            latestSend: frame0Event, reduceMotion: false
-        ))
-        freshCoord.pinActiveFlightProgress(0.6)
-        #expect(freshCoord.shouldShowWorking(
-            for: mockSendDetail, isBusy: false, latestTurnRows: [.user(id: "u-frame0", text: "Frame 0")],
-            latestSend: frame0Event, reduceMotion: false
-        ))
+        // Frame 0, before beginSend: held, so nothing pops in under the bubble that is about to fly.
+        #expect(coordinator.holdsLatestTurn(for: detail, latestSend: event, reduceMotion: false))
+        #expect(!coordinator.shouldShowWorking(for: detail, isBusy: true, latestTurnRows: latestTurn, latestSend: event, reduceMotion: false))
+        // Reduce Motion never holds.
+        #expect(coordinator.shouldShowWorking(for: detail, isBusy: true, latestTurnRows: latestTurn, latestSend: event, reduceMotion: true))
+
+        _ = coordinator.beginSend(event, detail: detail, reduceMotion: false, now: t0)
+        #expect(coordinator.latestTurnHeldForSendID == event.id)
+        #expect(coordinator.holdsLatestTurn(for: detail, latestSend: event, reduceMotion: false))
+
+        // Pinned progress releases the hold at WORKING_DELAY_MS / SEND_MS (0.5).
+        coordinator.pinActiveFlightProgress(0.2)
+        #expect(coordinator.holdsLatestTurn(for: detail, latestSend: event, reduceMotion: false))
+        coordinator.pinActiveFlightProgress(0.6)
+        #expect(!coordinator.holdsLatestTurn(for: detail, latestSend: event, reduceMotion: false))
+        #expect(coordinator.shouldShowWorking(for: detail, isBusy: true, latestTurnRows: latestTurn, latestSend: event, reduceMotion: false))
+    }
+
+    @MainActor
+    @Test func holdReleasesOnItsOwnAfterTheWorkingDelay() async throws {
+        let coordinator = SendFlightCoordinator()
+        var detail = MockData.threadDetail
+        detail.items.append(TranscriptItem(id: "u1", kind: .user("Hi")))
+        let event = ThreadSendEvent(threadID: detail.summary.id, text: "Hi", optimisticItemID: "u1")
+        _ = coordinator.beginSend(event, detail: detail, reduceMotion: false)
+        #expect(coordinator.latestTurnHeldForSendID == event.id)
+        try await Task.sleep(for: .seconds(SendFlightTiming.workingDelay))
+        // Bounded: a busy main actor (parallel window tests) can resume the release a little late.
+        for _ in 0..<100 where coordinator.latestTurnHeldForSendID != nil {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        #expect(coordinator.latestTurnHeldForSendID == nil)
+        #expect(!coordinator.holdsLatestTurn(for: detail, latestSend: event, reduceMotion: false))
+    }
+
+    // MARK: - Home → New Thread Handoff
+
+    @MainActor
+    @Test func handoffFliesTheFirstMessageOnlyOnTheHandoffScreen() {
+        var detail = MockData.threadDetail
+        detail.items = [TranscriptItem(id: "first", kind: .user("Plan the launch"))]
+        detail.isRunning = true
+        let handoff = ThreadSendEvent(threadID: detail.summary.id, text: "Plan the launch", isHandoff: true)
+
+        // The screen that took over from Home flies the existing first row out of the docked composer.
+        let coordinator = SendFlightCoordinator()
+        coordinator.syncThread(detail: detail, isBusy: true)
+        #expect(coordinator.holdsLatestTurn(for: detail, latestSend: handoff, reduceMotion: false))
+        let action = coordinator.adoptOnAppear(handoff, detail: detail, isHandoffScreen: true, reduceMotion: false)
+        #expect(action == .startFlight)
+        #expect(coordinator.activeFlight?.boundItemID == "first")
+        #expect(coordinator.isBubbleHiddenForFlight(rowID: "first", in: detail))
+        // Composer not measured yet on mount: the flight follows its live frame once it reports.
+        #expect(coordinator.activeFlight?.composerFrame == nil)
+        coordinator.updateComposerFrame(CGRect(x: 100, y: 700, width: 700, height: 110))
+        #expect(coordinator.launchFrame(for: coordinator.activeFlight!) == CGRect(x: 100, y: 700, width: 700, height: 110))
+        // Working (and any early live rows) are held until the message is most of the way up.
+        #expect(!coordinator.shouldShowWorking(for: detail, isBusy: true, latestTurnRows: detail.rows, latestSend: handoff, reduceMotion: false))
+        #expect(coordinator.holdsLatestTurn(for: detail, latestSend: handoff, reduceMotion: false))
+
+        // Coming back to the thread later (not a handoff screen) never replays, and never leaves Working hidden.
+        let revisit = SendFlightCoordinator()
+        #expect(revisit.adoptOnAppear(handoff, detail: detail, isHandoffScreen: false, reduceMotion: false) == .none)
+        #expect(revisit.activeFlight == nil)
+        #expect(revisit.shouldShowWorking(for: detail, isBusy: true, latestTurnRows: detail.rows, latestSend: handoff, reduceMotion: false))
+
+        // Reduce Motion: the screen crossfades in whole, nothing flies and nothing is held.
+        let quiet = SendFlightCoordinator()
+        #expect(quiet.adoptOnAppear(handoff, detail: detail, isHandoffScreen: true, reduceMotion: true) == .none)
+        #expect(quiet.activeFlight == nil)
+        #expect(!quiet.holdsLatestTurn(for: detail, latestSend: handoff, reduceMotion: true))
+    }
+
+    // MARK: - Scroll Lifecycle
+
+    @MainActor
+    @Test func scrollFollowsStreamingOnlyWhileStuckAndNeverFightsTheUser() {
+        let coordinator = SendFlightCoordinator()
+        coordinator.syncThread(detail: MockData.threadDetail, isBusy: false)
+
+        // Opening a thread: the first snapshot grows the content and pins to the end.
+        #expect(coordinator.handleScrollGeometryChange(ScrollMetrics(offsetY: 0, contentHeight: 2000, viewportHeight: 800)))
+        _ = coordinator.handleScrollGeometryChange(ScrollMetrics(offsetY: 1200, contentHeight: 2000, viewportHeight: 800))
+
+        // Streaming growth while at the end keeps following.
+        #expect(coordinator.handleScrollGeometryChange(ScrollMetrics(offsetY: 1200, contentHeight: 2040, viewportHeight: 800)))
+        _ = coordinator.handleScrollGeometryChange(ScrollMetrics(offsetY: 1240, contentHeight: 2040, viewportHeight: 800))
+
+        // The user scrolls up (trackpad, then momentum): stick releases and growth no longer moves them.
+        coordinator.handleScrollPhaseChange(from: .idle, to: .interacting)
+        _ = coordinator.handleScrollGeometryChange(ScrollMetrics(offsetY: 1100, contentHeight: 2040, viewportHeight: 800))
+        coordinator.handleScrollPhaseChange(from: .interacting, to: .decelerating)
+        _ = coordinator.handleScrollGeometryChange(ScrollMetrics(offsetY: 900, contentHeight: 2040, viewportHeight: 800))
+        coordinator.handleScrollPhaseChange(from: .decelerating, to: .idle)
+        #expect(!coordinator.stickiness.isSticking)
+        #expect(coordinator.showsScrollToBottom)
+        #expect(!coordinator.handleScrollGeometryChange(ScrollMetrics(offsetY: 900, contentHeight: 2100, viewportHeight: 800)))
+        #expect(coordinator.showsScrollToBottom)
+
+        // A send from far up jumps to the old end first so the animated part stays within about one viewport.
+        _ = coordinator.handleScrollGeometryChange(ScrollMetrics(offsetY: 100, contentHeight: 2100, viewportHeight: 800))
+        #expect(coordinator.preFlightJumpOffset() == 1300)
+        _ = coordinator.handleScrollGeometryChange(ScrollMetrics(offsetY: 900, contentHeight: 2100, viewportHeight: 800))
+        #expect(coordinator.preFlightJumpOffset() == nil)
+
+        // The scroll-to-bottom button re-arms stick and hides once the end is reached.
+        coordinator.armScrollToBottom()
+        _ = coordinator.handleScrollGeometryChange(ScrollMetrics(offsetY: 1300, contentHeight: 2100, viewportHeight: 800))
+        #expect(coordinator.stickiness.isSticking)
+        #expect(!coordinator.showsScrollToBottom)
+
+        // Content that grew under a flight gets one gentle settle when it lands.
+        var detail = MockData.threadDetail
+        detail.items.append(TranscriptItem(id: "u9", kind: .user("Go")))
+        let event = ThreadSendEvent(threadID: detail.summary.id, text: "Go", optimisticItemID: "u9")
+        _ = coordinator.beginSend(event, detail: detail, reduceMotion: false)
+        _ = coordinator.handleScrollGeometryChange(ScrollMetrics(offsetY: 1300, contentHeight: 2400, viewportHeight: 800))
+        #expect(coordinator.finishFlightIfMatching(event.id))
+        #expect(coordinator.settleToBottomToken == 1)
     }
 }

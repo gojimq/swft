@@ -78,9 +78,8 @@ struct NewThreadLaunchState: Equatable {
 extension Notification.Name {
     /// Posted on the main actor when a new thread is cleared to take over from Home (the composer has docked and the
     /// server has created the thread); the thread becomes the destination in the same or the next main-actor turn.
-    /// `userInfo`: `"threadID"` (String) and `"text"` (String, the first message). The first message currently just
-    /// appears in the transcript; the send-flight animation can observe this (or check
-    /// `AppModel.newThread.isHandoff(to:)` when the thread's screen appears) to fly it from the docked composer.
+    /// `userInfo`: `"threadID"` (String) and `"text"` (String, the first message). `AppModel` then emits a handoff
+    /// `ThreadSendEvent`, and the thread's screen flies the first message out of the docked composer.
     static let swftNewThreadDidHandOff = Notification.Name("SwftNewThreadDidHandOff")
 }
 

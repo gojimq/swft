@@ -151,6 +151,32 @@ struct NewThreadMockTests {
         #expect(model.threadSummary(for: row.id)?.title == "Fix Failing Test")
     }
 
+    @Test func handoffEmitsTheFirstMessageFlightAndLeavingNeverReplaysIt() async {
+        let model = AppModel.mock()
+        model.composerText = "Find and fix the failing test"
+        model.send()
+        let row = model.sidebar.threads[0]
+        model.newThread.dockSettled(token: model.newThread.launchingToken!)
+        for _ in 0..<1000 where model.destination == .home { await Task.yield() }
+        #expect(model.destination == .thread(row.id))
+        let handoff = model.latestThreadSend
+        #expect(handoff?.isHandoff == true)
+        #expect(handoff?.threadID == row.id)
+        #expect(handoff?.text == "Find and fix the failing test")
+
+        // Leaving the thread drops the event, so coming back later can never fly (or hold) it again.
+        model.goHome()
+        #expect(model.latestThreadSend == nil)
+        model.open(row.id)
+        #expect(model.latestThreadSend == nil)
+
+        // A send inside the open thread keeps its event (same destination).
+        model.composerText = "One more thing"
+        model.send()
+        #expect(model.latestThreadSend?.isHandoff == false)
+        #expect(model.latestThreadSend?.threadID == row.id)
+    }
+
     @Test func newThreadMidLaunchStaysHome() async {
         let model = AppModel.mock()
         model.composerText = "Explain this repo"

@@ -345,8 +345,10 @@ public final class ThreadStore {
 
     /// Sends a user message, updating thread runtime/interaction modes beforehand if changed.
     @discardableResult
+    /// `messageId` is chosen by the caller so an optimistic transcript row can be matched to the server's echo.
     public func sendMessage(
         text: String,
+        messageId: String = UUID().uuidString,
         modelSelection: ModelSelection? = nil,
         runtimeMode: RuntimeMode? = nil,
         interactionMode: ProviderInteractionMode? = nil,
@@ -374,6 +376,7 @@ public final class ThreadStore {
             tag: RPCMethod.orchestrationDispatchCommand,
             payload: OrchestrationCommand.dispatchMessage(
                 threadId: threadId,
+                messageId: messageId,
                 text: text,
                 attachments: attachments,
                 modelSelection: modelSelection,

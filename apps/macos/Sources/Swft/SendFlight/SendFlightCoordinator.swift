@@ -4,12 +4,16 @@ import Observation
 import SwftDesign
 import SwiftUI
 
-/// Immutable payload emitted by `AppModel.send()` when a message is dispatched inside an existing thread.
+/// Immutable payload emitted by `AppModel.send()` when a message is dispatched inside a thread, or when Home hands a
+/// freshly launched thread over to its screen (`isHandoff`, the first message flies out of the docked composer).
 struct ThreadSendEvent: Equatable, Sendable {
     let id: UUID
     let threadID: String
     let text: String
+    /// The transcript row already showing this message (optimistic in-thread sends); nil for a handoff, whose first
+    /// message row is bound when its screen appears.
     let optimisticItemID: String?
+    let isHandoff: Bool
     let timestamp: Date
 
     init(
@@ -17,51 +21,31 @@ struct ThreadSendEvent: Equatable, Sendable {
         threadID: String,
         text: String,
         optimisticItemID: String? = nil,
+        isHandoff: Bool = false,
         timestamp: Date = Date()
     ) {
         self.id = id
         self.threadID = threadID
         self.text = text
         self.optimisticItemID = optimisticItemID
+        self.isHandoff = isHandoff
         self.timestamp = timestamp
     }
 }
 
-/// Optional integration seed for another feature (e.g. Home -> new-thread transition) to hand off
-/// an already-dispatched send or raised composer frame into `ThreadView`.
-struct SendFlightExternalSeed: Equatable, Sendable {
-    let threadID: String
-    let sentItemID: String?
-    let composerFrame: CGRect?
-
-    init(threadID: String, sentItemID: String? = nil, composerFrame: CGRect? = nil) {
-        self.threadID = threadID
-        self.sentItemID = sentItemID
-        self.composerFrame = composerFrame
-    }
-}
-
-/// Snapshot of an in-progress send flight.
+/// Snapshot of an in-progress send flight. The flight's clock lives in SwiftUI's animation system (see
+/// `SendFlightOverlayLayer`), so nothing here changes per frame.
 struct ActiveSendFlight: Equatable, Sendable {
     let id: UUID
     let threadID: String
     let text: String
-    let startedAt: Date
-    let composerFrame: CGRect
-    let fromScrollY: CGFloat
+    /// Where the bubble launches from; nil when the composer had not reported its frame yet (a handoff screen mounting),
+    /// in which case the overlay follows the composer's live frame.
+    let composerFrame: CGRect?
     var boundItemID: String?
     var scrollInterrupted: Bool = false
     /// Non-nil only when deterministic snapshot/unit tests pin the flight to a specific normalized time in `[0, 1]`.
     var pinnedProgress: Double? = nil
-}
-
-/// Resolved visual frame for the flight overlay and synchronized scroll target.
-struct SendFlightFrame: Equatable, Sendable {
-    let text: String
-    let maxWidth: CGFloat
-    let sample: SendFlightSample
-    let scrollTargetY: CGFloat?
-    let isComplete: Bool
 }
 
 /// Action returned by `SendFlightCoordinator.beginSend` telling `ThreadView` how to drive `ScrollPosition`.
@@ -83,8 +67,9 @@ extension ThreadDetailState {
     }
 }
 
-/// Coordinates send flight, latest-turn stream room retention, entrance stagger, and scroll stickiness
-/// for a single `ThreadView`.
+/// Coordinates send flight, latest-turn stream room retention, the latest turn's reveal hold, and scroll stickiness
+/// for a single `ThreadView`. Observed properties change only on discrete events (a send, a landing, a stick flip),
+/// never per scroll or animation frame, so scrolling and flights do not re-render the transcript.
 @MainActor
 @Observable
 final class SendFlightCoordinator {
@@ -95,38 +80,29 @@ final class SendFlightCoordinator {
     private(set) var retainedStreamRoomTurnKey: String?
     private(set) var pendingSendStreamRoom = false
     private(set) var entrance = ConversationEntrance(initial: nil, sent: [])
-    private(set) var stickiness = ThreadScrollStickiness()
+    /// Read only by the flight overlay.
     private(set) var composerFrame: CGRect = .zero
     private(set) var viewportSize: CGSize = .zero
-    private(set) var measuredBubbleFrames: [String: CGRect] = [:]
-    private(set) var isUserInteractingWithScroll = false
-    private(set) var programmaticScrollPending = false
+    /// The bound bubble's measured frame (its x and size are what the flight lands on). Read only by the overlay.
+    private(set) var boundBubbleFrame: CGRect?
+    private(set) var showsScrollToBottom = false
     private(set) var lastHandledSendID: UUID?
-    private(set) var snapToBottomToken: Int = 0
-    private(set) var workingDelayPendingForSendID: UUID?
+    /// Bumped when a landed flight needs a gentle settle to the bottom (content grew while it flew).
+    private(set) var settleToBottomToken = 0
+    /// The send whose new turn is still holding its Working indicator and early rows back while the message flies.
+    private(set) var latestTurnHeldForSendID: UUID?
 
+    @ObservationIgnored private(set) var stickiness = ThreadScrollStickiness()
+    @ObservationIgnored private(set) var isUserInteractingWithScroll = false
+    @ObservationIgnored private(set) var programmaticScrollPending = false
     @ObservationIgnored private var completionTask: Task<Void, Never>?
-    @ObservationIgnored private var workingRevealTask: Task<Void, Never>?
+    @ObservationIgnored private var holdReleaseTask: Task<Void, Never>?
 
-    init(seed: SendFlightExternalSeed? = nil) {
-        if let seed {
-            self.currentThreadID = seed.threadID
-            if let composerFrame = seed.composerFrame {
-                self.composerFrame = composerFrame
-            }
-            if let sentItemID = seed.sentItemID {
-                self.retainedStreamRoomTurnKey = sentItemID
-            }
-        }
-    }
+    init() {}
 
     var isFlightAnimating: Bool {
         guard let activeFlight else { return false }
         return activeFlight.pinnedProgress == nil
-    }
-
-    var showsScrollToBottom: Bool {
-        stickiness.showsScrollToBottom(isFlightActive: activeFlight != nil)
     }
 
     func sentID(for detail: ThreadDetailState, latestSend: ThreadSendEvent? = nil) -> String? {
@@ -144,6 +120,30 @@ final class SendFlightCoordinator {
         return nil
     }
 
+    /// True on the frame a send's row lands in the transcript, before `beginSend` has handled it.
+    func isSendPending(_ latestSend: ThreadSendEvent?, in detail: ThreadDetailState) -> Bool {
+        guard let latestSend, latestSend.threadID == detail.summary.id else { return false }
+        return latestSend.id != lastHandledSendID
+    }
+
+    /// The row a pending send is about to fly onto, hidden on that first frame so it never flashes in place (under
+    /// the composer's glass) before the overlay takes over.
+    func pendingFlightRowID(latestSend: ThreadSendEvent?, in detail: ThreadDetailState, reduceMotion: Bool) -> String? {
+        guard !reduceMotion, let latestSend, isSendPending(latestSend, in: detail) else { return nil }
+        return latestSend.optimisticItemID ?? (latestSend.isHandoff ? lastUserRowID(in: detail.rows) : nil)
+    }
+
+    /// Whether the latest turn's Working indicator and non-user rows wait (hidden) while the sent message flies to the
+    /// top. They fade and rise in once it is most of the way there (`WORKING_DELAY_MS`).
+    func holdsLatestTurn(for detail: ThreadDetailState, latestSend: ThreadSendEvent?, reduceMotion: Bool) -> Bool {
+        if reduceMotion { return false }
+        if let flight = activeFlight, flight.threadID == detail.summary.id, let pinned = flight.pinnedProgress {
+            return pinned < SendFlightTiming.workingDelay / SendFlightTiming.sendDuration
+        }
+        if isSendPending(latestSend, in: detail) { return true }
+        return latestTurnHeldForSendID != nil
+    }
+
     func shouldShowWorking(
         for detail: ThreadDetailState,
         isBusy: Bool,
@@ -158,21 +158,13 @@ final class SendFlightCoordinator {
         ) else {
             return false
         }
-        if let flight = activeFlight, flight.threadID == detail.summary.id, let pinned = flight.pinnedProgress {
-            let threshold = SendFlightTiming.workingDelay / SendFlightTiming.sendDuration
-            return pinned >= threshold
-        }
-        if reduceMotion {
-            return true
-        }
-        // Suppress on Frame 0 before `.onChange(of: latestThreadSend)` invokes `beginSend`.
-        if let latestSend, latestSend.threadID == detail.summary.id, lastHandledSendID != latestSend.id {
-            return false
-        }
-        return workingDelayPendingForSendID == nil
+        return !holdsLatestTurn(for: detail, latestSend: latestSend, reduceMotion: reduceMotion)
     }
 
-    func hasStreamRoom(for detail: ThreadDetailState, isBusy: Bool) -> Bool {
+    /// Pass `latestSend` so the new turn has its room on the send's very first frame (an idle thread would otherwise
+    /// gain it a frame later, shifting the transcript under the starting flight).
+    func hasStreamRoom(for detail: ThreadDetailState, isBusy: Bool, latestSend: ThreadSendEvent? = nil) -> Bool {
+        if isSendPending(latestSend, in: detail) { return true }
         if pendingSendStreamRoom && activeFlight?.threadID == detail.summary.id {
             return true
         }
@@ -195,7 +187,7 @@ final class SendFlightCoordinator {
             retainedStreamRoomTurnKey = nil
             entrance = ConversationEntrance(initial: nil, sent: [])
             stickiness.resetForThread()
-            measuredBubbleFrames = [:]
+            refreshScrollToBottom()
             isUserInteractingWithScroll = false
             programmaticScrollPending = false
             currentThreadID = threadID
@@ -210,7 +202,7 @@ final class SendFlightCoordinator {
                 flight.boundItemID = currentSentID
                 activeFlight = flight
                 pendingSendStreamRoom = false
-            } else if let bound = flight.boundItemID, rows.contains(where: { $0.id == bound }) {
+            } else if let bound = flight.boundItemID, pendingSendStreamRoom, rows.contains(where: { $0.id == bound }) {
                 pendingSendStreamRoom = false
             }
         }
@@ -220,20 +212,40 @@ final class SendFlightCoordinator {
         }
 
         let streamItems = SendFlightLogic.streamRoomItems(from: rows)
-        retainedStreamRoomTurnKey = SendFlightLogic.resolveStreamRoomTurnKey(
+        let retained = SendFlightLogic.resolveStreamRoomTurnKey(
             state: detail.streamRoomState,
             isBusy: isBusy,
             items: streamItems,
             sentID: currentSentID ?? activeFlight?.boundItemID,
             retainedTurnKey: retainedStreamRoomTurnKey
         )
+        if retained != retainedStreamRoomTurnKey { retainedStreamRoomTurnKey = retained }
 
         let entries = SendFlightLogic.entranceEntries(from: rows)
-        entrance = SendFlightLogic.advanceConversationEntrance(
+        let advanced = SendFlightLogic.advanceConversationEntrance(
             entrance,
             items: entries,
             sentID: currentSentID ?? activeFlight?.boundItemID
         )
+        if advanced != entrance { entrance = advanced }
+    }
+
+    /// Handles the latest send as a screen appears. A Home handoff for this very screen flies its first message;
+    /// anything else (a send made before the user left and came back) is only marked handled so it never replays.
+    @discardableResult
+    func adoptOnAppear(
+        _ event: ThreadSendEvent?,
+        detail: ThreadDetailState,
+        isHandoffScreen: Bool,
+        reduceMotion: Bool,
+        now: Date = Date()
+    ) -> SendFlightStartAction {
+        guard let event, event.threadID == detail.summary.id, lastHandledSendID != event.id else { return .none }
+        guard event.isHandoff, isHandoffScreen else {
+            lastHandledSendID = event.id
+            return .none
+        }
+        return beginSend(event, detail: detail, reduceMotion: reduceMotion, now: now)
     }
 
     /// Begins a send flight (or instant Reduce Motion anchor) for a message sent inside the current thread.
@@ -248,21 +260,24 @@ final class SendFlightCoordinator {
         guard lastHandledSendID != event.id else { return .none }
         lastHandledSendID = event.id
 
+        // Under Reduce Motion a handoff screen crossfades in whole; there is nothing to fly.
+        if event.isHandoff && reduceMotion { return .none }
+
         // Rapid consecutive send: finish/supersede any earlier flight cleanly so its real bubble appears immediately.
         cancelFlight(clearPendingStreamRoom: false)
 
-        let lastUserIDBeforeSend = lastUserRowID(in: detail.rows, excluding: event.optimisticItemID)
+        // A handoff's first message is already in the transcript: bind the flight to that row.
+        let boundID = event.optimisticItemID ?? (event.isHandoff ? lastUserRowID(in: detail.rows) : nil)
+        let lastUserIDBeforeSend = lastUserRowID(in: detail.rows, excluding: boundID)
         tracker.armSend(threadID: event.threadID, lastUserID: lastUserIDBeforeSend)
         stickiness.armStick()
         pendingSendStreamRoom = true
-        if let optimisticID = event.optimisticItemID {
-            retainedStreamRoomTurnKey = optimisticID
+        if let boundID {
+            retainedStreamRoomTurnKey = boundID
         }
 
         if reduceMotion {
-            workingRevealTask?.cancel()
-            workingRevealTask = nil
-            workingDelayPendingForSendID = nil
+            releaseHold()
             reduceMotionFadeBubbleID = event.optimisticItemID ?? ""
             pendingSendStreamRoom = false
             programmaticScrollPending = true
@@ -270,26 +285,24 @@ final class SendFlightCoordinator {
         }
 
         reduceMotionFadeBubbleID = nil
-        let startComposerFrame = resolvedComposerFrame()
-        let flight = ActiveSendFlight(
+        boundBubbleFrame = nil
+        activeFlight = ActiveSendFlight(
             id: event.id,
             threadID: event.threadID,
             text: event.text,
-            startedAt: now,
-            composerFrame: startComposerFrame,
-            fromScrollY: stickiness.lastMetrics.offsetY,
-            boundItemID: event.optimisticItemID
+            composerFrame: composerFrame.width > 0 && composerFrame.height > 0 ? composerFrame : nil,
+            boundItemID: boundID
         )
-        activeFlight = flight
         programmaticScrollPending = true
-        scheduleWorkingReveal(for: event.id)
-        scheduleCompletionSafetyNet(for: flight.id)
+        refreshScrollToBottom()
+        scheduleHoldRelease(for: event.id)
+        scheduleCompletionSafetyNet(for: event.id)
         return .startFlight
     }
 
     /// Cancels an active flight if its live network dispatch threw an error.
     func failSend(_ eventID: UUID) {
-        guard activeFlight?.id == eventID else { return }
+        guard activeFlight?.id == eventID || latestTurnHeldForSendID == eventID else { return }
         cancelFlight(clearPendingStreamRoom: true)
     }
 
@@ -297,33 +310,36 @@ final class SendFlightCoordinator {
     func cancelFlight(clearPendingStreamRoom: Bool = false) {
         completionTask?.cancel()
         completionTask = nil
-        activeFlight = nil
+        if activeFlight != nil { activeFlight = nil }
+        boundBubbleFrame = nil
         programmaticScrollPending = false
         if clearPendingStreamRoom {
             pendingSendStreamRoom = false
-            workingRevealTask?.cancel()
-            workingRevealTask = nil
-            workingDelayPendingForSendID = nil
+            releaseHold()
         }
+        refreshScrollToBottom()
     }
 
-    /// Marks the active flight complete if its ID still matches. Returns `true` if a final bottom snap is needed.
+    /// Lands the active flight if its ID still matches. Returns `true` when the transcript should settle to the bottom
+    /// (content grew under the flight); that also bumps `settleToBottomToken`.
     @discardableResult
-    func finishFlightIfMatching(_ id: UUID, emitSnapToken: Bool = false) -> Bool {
+    func finishFlightIfMatching(_ id: UUID) -> Bool {
         guard let flight = activeFlight, flight.id == id else { return false }
-        let shouldSnapToBottom = !flight.scrollInterrupted && stickiness.isSticking
+        let needsSettle = !flight.scrollInterrupted
+            && stickiness.isSticking
+            && stickiness.lastMetrics.distanceFromBottom > 1
         cancelFlight(clearPendingStreamRoom: true)
-        if shouldSnapToBottom {
+        if needsSettle {
             programmaticScrollPending = true
-            if emitSnapToken {
-                snapToBottomToken += 1
-            }
+            settleToBottomToken += 1
         }
-        return shouldSnapToBottom
+        return needsSettle
     }
 
-    /// True while the real `UserBubble` for `rowID` is represented by the active flight overlay.
-    func isBubbleHiddenForFlight(rowID: String, in detail: ThreadDetailState) -> Bool {
+    /// True while the real `UserBubble` for `rowID` is represented by the active flight overlay (or is about to be:
+    /// `pendingRowID` from `pendingFlightRowID`).
+    func isBubbleHiddenForFlight(rowID: String, in detail: ThreadDetailState, pendingRowID: String? = nil) -> Bool {
+        if let pendingRowID, pendingRowID == rowID { return true }
         guard let flight = activeFlight, flight.threadID == detail.summary.id else { return false }
         if let boundID = flight.boundItemID {
             return boundID == rowID
@@ -341,37 +357,87 @@ final class SendFlightCoordinator {
     }
 
     func updateComposerFrame(_ frame: CGRect) {
-        guard frame.width > 0, frame.height > 0 else { return }
+        guard frame.width > 0, frame.height > 0, !frame.isNearlyEqual(to: composerFrame) else { return }
         composerFrame = frame
     }
 
     func updateViewportSize(_ size: CGSize) {
-        guard size.width > 0, size.height > 0 else { return }
+        guard size.width > 0, size.height > 0, size != viewportSize else { return }
         viewportSize = size
     }
 
+    /// Records the bound bubble's measured frame. Only its x and size matter (scrolling moves y every frame), so
+    /// scrolling during the flight never invalidates anything.
     func updateBubbleFrames(_ frames: [String: CGRect]) {
-        measuredBubbleFrames = frames
+        guard let boundID = activeFlight?.boundItemID, let frame = frames[boundID], frame.width > 0, frame.height > 0 else { return }
+        if let current = boundBubbleFrame,
+           abs(current.minX - frame.minX) < 0.5,
+           abs(current.width - frame.width) < 0.5,
+           abs(current.height - frame.height) < 0.5
+        {
+            return
+        }
+        boundBubbleFrame = frame
+    }
+
+    /// Where the flight lands, in `SendFlightCoordinateSpace`: the new prompt's resting spot once the transcript has
+    /// scrolled to its end, using the real bubble's measured size as soon as it is known.
+    func landingFrame(for flight: ActiveSendFlight, topInset: CGFloat, bottomInset: CGFloat) -> CGRect {
+        let viewport = resolvedViewportSize(for: flight)
+        let maxWidth = SendFlightLogic.maxUserBubbleWidth(viewportWidth: viewport.width)
+        let size = boundBubbleFrame?.size ?? UserBubbleMetrics.estimatedSize(for: flight.text, maxWidth: maxWidth)
+        return SendFlightLogic.landingFrame(
+            viewportSize: viewport,
+            topInset: topInset,
+            bottomInset: bottomInset,
+            bubbleSize: size,
+            measuredMinX: boundBubbleFrame?.minX
+        )
+    }
+
+    func maxBubbleWidth(for flight: ActiveSendFlight) -> CGFloat {
+        SendFlightLogic.maxUserBubbleWidth(viewportWidth: resolvedViewportSize(for: flight).width)
+    }
+
+    /// The composer frame a flight launches from.
+    func launchFrame(for flight: ActiveSendFlight) -> CGRect {
+        if let frame = flight.composerFrame { return frame }
+        if composerFrame.width > 0 && composerFrame.height > 0 { return composerFrame }
+        let viewport = resolvedViewportSize(for: flight)
+        let width = min(max(200, viewport.width - 64), SwftLayout.composerMaxWidth)
+        let height: CGFloat = 110
+        return CGRect(x: max(32, (viewport.width - width) / 2), y: max(0, viewport.height - height - 12), width: width, height: height)
+    }
+
+    /// A send from far up the transcript first jumps to the old end, so the animated part covers at most about one
+    /// viewport instead of streaking through the whole history (Studio's one-viewport `reach`).
+    func preFlightJumpOffset() -> CGFloat? {
+        let metrics = stickiness.lastMetrics
+        guard metrics.viewportHeight > 0, metrics.distanceFromBottom > metrics.viewportHeight else { return nil }
+        return metrics.endOffsetY
     }
 
     func handleWorkFoldToggle() {
         stickiness.releaseStick()
+        refreshScrollToBottom()
     }
 
     func armScrollToBottom() {
         stickiness.armStick()
         programmaticScrollPending = true
+        refreshScrollToBottom()
     }
 
-    func handleScrollPhaseChange(from oldPhase: ScrollPhase, to newPhase: ScrollPhase) {
+    /// Returns `true` when a user gesture cut an active flight short (the caller fades the real bubble in).
+    @discardableResult
+    func handleScrollPhaseChange(from oldPhase: ScrollPhase, to newPhase: ScrollPhase) -> Bool {
         switch newPhase {
         case .interacting:
             isUserInteractingWithScroll = true
             programmaticScrollPending = false
-            if var flight = activeFlight {
-                flight.scrollInterrupted = true
-                activeFlight = flight
+            if activeFlight != nil {
                 cancelFlight(clearPendingStreamRoom: false)
+                return true
             }
         case .idle:
             isUserInteractingWithScroll = false
@@ -379,12 +445,14 @@ final class SendFlightCoordinator {
         case .decelerating, .tracking, .animating:
             break
         }
+        return false
     }
 
     /// Updates scroll stickiness from SwiftUI's `onScrollGeometryChange`.
     /// Returns `true` when the view should pin to the bottom to follow live streaming / hydration growth.
     @discardableResult
     func handleScrollGeometryChange(_ metrics: ScrollMetrics) -> Bool {
+        defer { refreshScrollToBottom() }
         let previousContentHeight = stickiness.lastMetrics.contentHeight
         let contentGrew = metrics.contentHeight > previousContentHeight + 0.5
 
@@ -411,116 +479,43 @@ final class SendFlightCoordinator {
         return false
     }
 
-    /// Evaluates the flying overlay bubble transform and synchronized scroll offset for the current frame.
-    func evaluateFlightFrame(at now: Date, topInset: CGFloat) -> SendFlightFrame? {
-        guard let flight = activeFlight else { return nil }
-        let rawProgress: Double = if let pinned = flight.pinnedProgress {
-            pinned
-        } else {
-            now.timeIntervalSince(flight.startedAt) / SendFlightTiming.sendDuration
-        }
-        let clampedProgress = min(1.0, max(0.0, rawProgress))
-        let maxBubbleWidth = SendFlightLogic.maxUserBubbleWidth(
-            viewportWidth: viewportSize.width > 0 ? viewportSize.width : max(flight.composerFrame.width + 64, 600)
-        )
-        let targetFrame = resolvedTargetFrame(
-            for: flight,
-            topInset: topInset,
-            maxBubbleWidth: maxBubbleWidth
-        )
-        let path = SendFlightPath.make(
-            composerFrame: flight.composerFrame,
-            targetFrame: targetFrame
-        )
-        let sample = path.sample(normalizedTime: clampedProgress, curve: .send)
-
-        let scrollTargetY: CGFloat?
-        if flight.scrollInterrupted {
-            scrollTargetY = nil
-        } else {
-            let metrics = stickiness.lastMetrics
-            let endY = metrics.endOffsetY
-            let viewportHeight = metrics.viewportHeight > 0 ? metrics.viewportHeight : viewportSize.height
-            let slide = SendFlightLogic.clampedSlide(
-                from: flight.fromScrollY,
-                to: endY,
-                viewportHeight: max(1, viewportHeight)
-            )
-            let effectiveStart = endY - slide
-            scrollTargetY = max(0, effectiveStart + slide * CGFloat(sample.easedProgress))
-        }
-
-        return SendFlightFrame(
-            text: flight.text,
-            maxWidth: maxBubbleWidth,
-            sample: sample,
-            scrollTargetY: scrollTargetY,
-            isComplete: flight.pinnedProgress == nil && rawProgress >= 1.0
-        )
-    }
-
     // MARK: - Private Helpers
 
-    private func scheduleWorkingReveal(for sendID: UUID) {
-        workingRevealTask?.cancel()
-        workingDelayPendingForSendID = sendID
-        workingRevealTask = Task { [weak self] in
+    private func refreshScrollToBottom() {
+        let shows = stickiness.showsScrollToBottom(isFlightActive: activeFlight != nil)
+        if shows != showsScrollToBottom { showsScrollToBottom = shows }
+    }
+
+    private func releaseHold() {
+        holdReleaseTask?.cancel()
+        holdReleaseTask = nil
+        if latestTurnHeldForSendID != nil { latestTurnHeldForSendID = nil }
+    }
+
+    private func scheduleHoldRelease(for sendID: UUID) {
+        holdReleaseTask?.cancel()
+        latestTurnHeldForSendID = sendID
+        holdReleaseTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(SendFlightTiming.workingDelay))
-            guard !Task.isCancelled else { return }
-            if self?.workingDelayPendingForSendID == sendID {
-                self?.workingDelayPendingForSendID = nil
-            }
+            guard !Task.isCancelled, let self, self.latestTurnHeldForSendID == sendID else { return }
+            self.latestTurnHeldForSendID = nil
         }
     }
 
+    /// The overlay's animation completion lands the flight; this only guarantees a ghost can never outlive it.
     private func scheduleCompletionSafetyNet(for flightID: UUID) {
         completionTask?.cancel()
         completionTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(SendFlightTiming.sendDuration + 0.08))
+            try? await Task.sleep(for: .seconds(SendFlightTiming.sendDuration + 0.25))
             guard !Task.isCancelled else { return }
-            _ = self?.finishFlightIfMatching(flightID, emitSnapToken: true)
+            _ = self?.finishFlightIfMatching(flightID)
         }
     }
 
-    private func resolvedComposerFrame() -> CGRect {
-        if composerFrame.width > 0 && composerFrame.height > 0 {
-            return composerFrame
-        }
-        let width = min(max(0, viewportSize.width - 64), SwftLayout.composerMaxWidth)
-        let x = max(32, (viewportSize.width - width) / 2)
-        let height: CGFloat = 110
-        let y = max(0, viewportSize.height - height - 12)
-        return CGRect(x: x, y: y, width: max(200, width), height: height)
-    }
-
-    private func resolvedTargetFrame(
-        for flight: ActiveSendFlight,
-        topInset: CGFloat,
-        maxBubbleWidth: CGFloat
-    ) -> CGRect {
-        if let boundID = flight.boundItemID,
-           let measured = measuredBubbleFrames[boundID],
-           measured.width > 0,
-           measured.height > 0
-        {
-            let landed = SendFlightLogic.landedBubbleFrame(
-                measuredFrame: measured,
-                currentScrollY: stickiness.lastMetrics.offsetY,
-                endScrollY: stickiness.lastMetrics.endOffsetY
-            )
-            if landed.minY >= 0 && landed.minY.isFinite {
-                return landed
-            }
-        }
-        let estimated = UserBubbleMetrics.estimatedSize(for: flight.text, maxWidth: maxBubbleWidth)
-        let effectiveViewportWidth = viewportSize.width > 0
-            ? viewportSize.width
-            : max(flight.composerFrame.maxX + 32, SwftLayout.contentMaxWidth + 64)
-        return SendFlightLogic.predictedLandingFrame(
-            viewportWidth: effectiveViewportWidth,
-            topInset: topInset,
-            bubbleSize: estimated
-        )
+    private func resolvedViewportSize(for flight: ActiveSendFlight) -> CGSize {
+        if viewportSize.width > 0 && viewportSize.height > 0 { return viewportSize }
+        let width = max((flight.composerFrame?.maxX ?? 0) + 32, SwftLayout.contentMaxWidth + 64)
+        return CGSize(width: width, height: 860)
     }
 
     private func lastUserRowID(in rows: [TranscriptRow], excluding excludedID: String? = nil) -> String? {
@@ -530,5 +525,11 @@ final class SendFlightCoordinator {
             }
         }
         return nil
+    }
+}
+
+private extension CGRect {
+    func isNearlyEqual(to other: CGRect) -> Bool {
+        abs(minX - other.minX) < 0.5 && abs(minY - other.minY) < 0.5 && abs(width - other.width) < 0.5 && abs(height - other.height) < 0.5
     }
 }

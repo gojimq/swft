@@ -33,7 +33,9 @@ private struct NewThreadLaunchStage: ViewModifier {
             .coordinateSpace(.named(NewThreadMotion.homeSpace))
             .onChange(of: model.newThread.launchingToken, initial: true) { _, token in
                 if let token {
-                    withAnimation(SwftMotion.resolve(SwftMotion.dock, reduceMotion: reduceMotion)) {
+                    // Hand off when the dock lands visually (the spring's duration, within ~1pt), not after its
+                    // invisible tail, so the first message launches from the composer the moment it settles.
+                    withAnimation(SwftMotion.resolve(SwftMotion.dock, reduceMotion: reduceMotion), completionCriteria: .logicallyComplete) {
                         docked = true
                     } completion: {
                         model.newThread.dockSettled(token: token)

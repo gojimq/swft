@@ -11,7 +11,12 @@ final class AppModel {
     // MARK: - Navigation & UI Controls
 
     var destination: SidebarDestination = .home {
-        didSet { if oldValue != destination { modelPicker = nil } }
+        didSet {
+            guard oldValue != destination else { return }
+            modelPicker = nil
+            // A send belongs to the screen it was made on; a screen opened later must never replay it.
+            latestThreadSend = nil
+        }
     }
     /// The open model picker, or nil when it is closed.
     var modelPicker: ModelPickerSession?
@@ -85,6 +90,8 @@ final class AppModel {
     private var launchPhase: LaunchPhase = .idle
     private var isSubmitting = false
     private var optimisticApprovals: [String: ApprovalItem.Status] = [:]
+    /// Messages sent into the open thread, shown at once and kept under the same row id after the server echoes them.
+    private var pendingUserMessages: [ThreadSummary.ID: [PendingUserMessage]] = [:]
     private var optimisticSettlements: [ThreadSummary.ID: OptimisticSettlement] = [:]
     @ObservationIgnored private let defaults: UserDefaults?
     @ObservationIgnored private var recentProjections = RecentProjections()
@@ -679,17 +686,16 @@ final class AppModel {
         )
     }
 
+    /// The composer's busy state alone, for views that must not re-render on every keystroke via `composer`.
+    var isComposerBusy: Bool {
+        if isMock { return false }
+        if selectedThreadID != nil { return isSubmitting || (activeThreadStore?.isRunning == true) }
+        return isSubmitting
+    }
+
     var composer: ComposerState {
         let contextLabel = resolvedComposerContextLabel(mockDefaultContextLabel: mockBacking?.defaultContextLabel)
-
-        let isBusy: Bool
-        if isMock {
-            isBusy = false
-        } else if selectedThreadID != nil {
-            isBusy = isSubmitting || (activeThreadStore?.isRunning == true)
-        } else {
-            isBusy = isSubmitting
-        }
+        let isBusy = isComposerBusy
 
         return ComposerState(
             text: composerText,
@@ -806,10 +812,12 @@ final class AppModel {
             return SwftAdapters.threadDetail(
                 from: projection,
                 summary: summary,
-                optimisticApprovals: optimisticApprovals
+                optimisticApprovals: optimisticApprovals,
+                pendingUserMessages: pendingUserMessages[id] ?? []
             )
         }
-        return ThreadDetailState(summary: summary, items: [], diffStat: nil)
+        let pending = (pendingUserMessages[id] ?? []).map { TranscriptItem(id: $0.messageID, kind: .user($0.text)) }
+        return ThreadDetailState(summary: summary, items: pending, diffStat: nil)
     }
 
     func threadCount(forProjectID projectID: String) -> Int {
@@ -1158,15 +1166,20 @@ final class AppModel {
             let selection = selectedModel.map {
                 SwftAdapters.modelSelection(from: $0, reasoningChoiceId: selectedReasoningChoice?.id)
             }
-            let sendEvent = ThreadSendEvent(threadID: threadID, text: text)
+            // The row appears on this frame (not after the server's echo), so the send flight and the scroll have
+            // their real landing geometry from the start.
+            let messageID = UUID().uuidString
+            pendingUserMessages[threadID, default: []].append(PendingUserMessage(messageID: messageID, text: text))
+            let sendEvent = ThreadSendEvent(threadID: threadID, text: text, optimisticItemID: messageID)
             latestThreadSend = sendEvent
             composerText = ""
             actionError = nil
             isSubmitting = true
             Task {
                 do {
-                    _ = try await threadStore.sendMessage(text: text, modelSelection: selection)
+                    _ = try await threadStore.sendMessage(text: text, messageId: messageID, modelSelection: selection)
                 } catch {
+                    self.pendingUserMessages[threadID]?.removeAll { $0.messageID == messageID }
                     self.failedThreadSendID = sendEvent.id
                     if self.composerText.isEmpty { self.composerText = text }
                     self.actionError = error.localizedDescription
@@ -1230,6 +1243,7 @@ final class AppModel {
                     on: launchConnection,
                     initialProjection: result.projection
                 )
+                self.latestThreadSend = ThreadSendEvent(threadID: result.threadId, text: text, isHandoff: true)
                 self.visitPolicy.selectThread(result.threadId)
                 self.visitTimerTask?.cancel()
                 self.visitTimerTask = nil
@@ -1271,6 +1285,7 @@ final class AppModel {
         Task {
             guard await self.newThread.awaitHandoff(token: token, threadID: id) else { return }
             self.destination = .thread(id)
+            self.latestThreadSend = ThreadSendEvent(threadID: id, text: text, isHandoff: true)
         }
         Task {
             try? await Task.sleep(for: .seconds(1.6))
@@ -1402,6 +1417,7 @@ final class AppModel {
             recentProjections.remember(previous.projection)
         }
         optimisticApprovals.removeAll()
+        pendingUserMessages.removeAll()
         guard let resolvedConnection else {
             activeThreadStore = nil
             return
@@ -1422,6 +1438,7 @@ final class AppModel {
         recentProjections.remember(activeThreadStore?.projection)
         activeThreadStore = nil
         optimisticApprovals.removeAll()
+        pendingUserMessages.removeAll()
         visitPolicy.selectThread(nil)
         visitTimerTask?.cancel()
         visitTimerTask = nil

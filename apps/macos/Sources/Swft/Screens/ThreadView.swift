@@ -12,23 +12,32 @@ struct ThreadView: View {
     /// thread switch) lands in place instead of every row rising at once.
     @State private var populated = false
 
+    nonisolated static let topInset = SwftLayout.titlebarHeight + 24
+
     var body: some View {
         let rows = detail.rows
         let turns = SendFlightLogic.turns(from: rows)
-        let topInset = SwftLayout.titlebarHeight + 24
-        let streamRoomTopAnchor = SwftLayout.titlebarHeight + 16
+        // One inset drives the transcript's padding, the stream room and the flight's landing, so a sent prompt
+        // lands exactly where its real bubble rests.
+        let topInset = Self.topInset
         let bottomInset = composerHeight + 28
-        let hasStreamRoom = sendFlight.hasStreamRoom(for: detail, isBusy: model.composer.isBusy)
+        let isBusy = model.isComposerBusy
+        let latestSend = model.latestThreadSend
+        let hasStreamRoom = sendFlight.hasStreamRoom(for: detail, isBusy: isBusy, latestSend: latestSend)
         let streamRoom = hasStreamRoom
-            ? SendFlightLogic.streamRoomHeight(viewportHeight: sendFlight.viewportSize.height, topInset: streamRoomTopAnchor, bottomInset: bottomInset)
+            ? SendFlightLogic.streamRoomHeight(viewportHeight: sendFlight.viewportSize.height, topInset: topInset, bottomInset: bottomInset)
             : nil
         let showWorking = sendFlight.shouldShowWorking(
             for: detail,
-            isBusy: model.composer.isBusy,
+            isBusy: isBusy,
             latestTurnRows: turns.last?.rows ?? [],
-            latestSend: model.latestThreadSend,
+            latestSend: latestSend,
             reduceMotion: reduceMotion
         )
+        let holdsLatestTurn = sendFlight.holdsLatestTurn(for: detail, latestSend: latestSend, reduceMotion: reduceMotion)
+        let pendingFlightRowID = sendFlight.pendingFlightRowID(latestSend: latestSend, in: detail, reduceMotion: reduceMotion)
+        // The send's own row insertion lands without a layout animation: the flight and the scroll carry that motion.
+        let animatesRows = populated && !sendFlight.isSendPending(latestSend, in: detail)
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 32) {
                 ForEach(Array(turns.enumerated()), id: \.element.id) { index, turn in
@@ -38,6 +47,8 @@ struct ThreadView: View {
                         isLatest: index == turns.count - 1,
                         streamRoomHeight: streamRoom,
                         showWorking: showWorking,
+                        holdsRows: holdsLatestTurn,
+                        pendingFlightRowID: pendingFlightRowID,
                         coordinator: sendFlight,
                         reduceMotion: reduceMotion
                     ) { row in
@@ -52,7 +63,7 @@ struct ThreadView: View {
             .padding(.bottom, bottomInset)
             .frame(maxWidth: .infinity)
             .swftOverlayScrollbars()
-            .animation(populated && sendFlight.activeFlight == nil ? SwftMotion.resolve(SwftMotion.settle, reduceMotion: reduceMotion) : nil, value: rows.map(\.id))
+            .animation(animatesRows ? SwftMotion.resolve(SwftMotion.settle, reduceMotion: reduceMotion) : nil, value: rows.map(\.id))
         }
         .task(id: rows.isEmpty) { if !rows.isEmpty { populated = true } }
         .scrollPosition($scrollPosition)
@@ -71,10 +82,11 @@ struct ThreadView: View {
         }
         .threadSendFlightHost(
             detail: detail,
-            isBusy: model.composer.isBusy,
-            latestThreadSend: model.latestThreadSend,
+            isBusy: isBusy,
+            latestThreadSend: latestSend,
             failedThreadSendID: model.failedThreadSendID,
-            topInset: streamRoomTopAnchor,
+            topInset: topInset,
+            bottomInset: bottomInset,
             reduceMotion: reduceMotion,
             coordinator: sendFlight,
             scrollPosition: $scrollPosition
@@ -127,7 +139,7 @@ struct ThreadView: View {
     @ViewBuilder private func row(_ row: TranscriptRow) -> some View {
         switch row {
         case .user(_, let text):
-            UserBubble(text).padding(.vertical, 4)
+            UserBubble(text).padding(.vertical, SendFlightLogic.userRowVerticalPadding)
         case .assistant(_, let blocks, let streaming):
             AssistantMessage {
                 ForEach(Array(blocks.enumerated()), id: \.offset) { index, block in

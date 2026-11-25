@@ -318,6 +318,13 @@ struct ApprovalItem: Hashable {
     }
 }
 
+/// A message sent from this client that is shown in the transcript before (and keeps its row identity after) the
+/// server echoes it. `messageID` is the id sent with the dispatch, and doubles as the transcript row's id.
+struct PendingUserMessage: Equatable, Sendable {
+    let messageID: String
+    let text: String
+}
+
 struct TranscriptItem: Identifiable, Hashable {
     enum Kind: Hashable {
         case user(String)

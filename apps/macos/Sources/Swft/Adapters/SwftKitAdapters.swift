@@ -456,7 +456,8 @@ enum SwftAdapters {
     static func threadDetail(
         from projection: ThreadProjection,
         summary: ThreadSummary,
-        optimisticApprovals: [String: ApprovalItem.Status] = [:]
+        optimisticApprovals: [String: ApprovalItem.Status] = [:],
+        pendingUserMessages: [PendingUserMessage] = []
     ) -> ThreadDetailState {
         var resolvedSummary = summary
         resolvedSummary.title = projection.thread.title
@@ -469,6 +470,8 @@ enum SwftAdapters {
         )
 
         var items: [TranscriptItem] = []
+        let pendingIDs = Set(pendingUserMessages.map(\.messageID))
+        var echoedPendingIDs: Set<String> = []
         var representedApprovalIDs: Set<String> = []
         var checkpointAdditions = 0
         var checkpointDeletions = 0
@@ -497,8 +500,17 @@ enum SwftAdapters {
             ) {
                 mapped.startedAt = item.startedAt ?? item.updatedAt
                 mapped.completedAt = item.completedAt
+                if case .userMessage(let messageId, _, _, _, _, _) = item.kind, pendingIDs.contains(messageId) {
+                    // The server echoed a message sent from here: keep the optimistic row's identity so the
+                    // transcript (and any send flight bound to it) never sees the row swap out.
+                    echoedPendingIDs.insert(messageId)
+                    mapped = TranscriptItem(id: messageId, kind: mapped.kind, startedAt: mapped.startedAt, completedAt: mapped.completedAt)
+                }
                 items.append(mapped)
             }
+        }
+        for pending in pendingUserMessages where !echoedPendingIDs.contains(pending.messageID) {
+            items.append(TranscriptItem(id: pending.messageID, kind: .user(pending.text)))
         }
 
         // Fallback: surface any pending approval RuntimeRequest not yet backed by a turn item.
