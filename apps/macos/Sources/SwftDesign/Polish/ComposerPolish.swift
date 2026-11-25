@@ -77,10 +77,10 @@ private struct ComposerGlassModifier<S: InsettableShape>: ViewModifier {
     func body(content: Content) -> some View {
         if #available(macOS 26, *) {
             // A lone glass needs no GlassEffectContainer; leaving it out also keeps the model picker that floats
-            // beside the composer from ever morphing into it. `.interactive()` gives native press refraction.
+            // beside the composer from ever morphing into it. Omit `.interactive()` so clicking the slab stays steady.
             content
                 .background(shape.fill(ComposerPolish.frostFill))
-                .glassEffect(.clear.tint(ComposerPolish.resolvedGlassTint(for: colorScheme)).interactive(), in: shape)
+                .glassEffect(.clear.tint(ComposerPolish.resolvedGlassTint(for: colorScheme)), in: shape)
         } else {
             content
                 .background(.thinMaterial, in: shape)

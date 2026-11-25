@@ -18,27 +18,68 @@ public struct SwapText: View {
 extension View {
     /// Swaps this view out whenever `key` changes: the old content leaves at once and the new content fades and rises
     /// in on its own animation, so old and new never show together. The layout around it is left to the caller.
-    public func swftSwap<Key: Hashable>(on key: Key) -> some View {
+    public func swftSwap<Key: Hashable & Sendable>(on key: Key) -> some View {
         modifier(SwapOnChange(key: key))
     }
 }
 
-private struct SwapOnChange<Key: Hashable>: ViewModifier {
+/// Visual state for a single-view in-place content swap (`swftSwap(on:)`).
+public struct SwapVisualState: Equatable, Sendable {
+    public var opacity: Double
+    public var offsetY: CGFloat
+
+    public init(opacity: Double, offsetY: CGFloat) {
+        self.opacity = opacity
+        self.offsetY = offsetY
+    }
+
+    public static let settled = SwapVisualState(opacity: 1, offsetY: 0)
+}
+
+/// Pure motion parameters for single-view in-place content swaps (`swftSwap(on:)`).
+public enum SwapMotion {
+    public static let riseOffset: CGFloat = 4
+    public static let duration: TimeInterval = 0.11
+    public static let reduceMotionDuration: TimeInterval = 0.1
+
+    public static func startState(reduceMotion: Bool) -> SwapVisualState {
+        SwapVisualState(opacity: 0, offsetY: reduceMotion ? 0 : riseOffset)
+    }
+
+    public static func duration(reduceMotion: Bool) -> TimeInterval {
+        reduceMotion ? reduceMotionDuration : duration
+    }
+}
+
+private struct SwapOnChange<Key: Hashable & Sendable>: ViewModifier {
     let key: Key
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     func body(content: Content) -> some View {
-        let rise: AnyTransition = reduceMotion ? .opacity : .opacity.combined(with: .offset(y: 4))
-        let animation = reduceMotion ? Animation.easeOut(duration: 0.1) : SwftMotion.snap
-        ZStack {
-            content
-                .id(key)
-                // The insertion carries its own animation so it plays even after we clear the transaction below.
-                .transition(.asymmetric(insertion: rise.animation(animation), removal: .identity))
-        }
-        // Clear any inherited animation on swap so SwiftUI tears down the old identity at once instead of
-        // holding it at full opacity for a parent spring's duration.
-        .transaction(value: key) { $0.animation = nil }
+        let start = SwapMotion.startState(reduceMotion: reduceMotion)
+        let duration = SwapMotion.duration(reduceMotion: reduceMotion)
+        // Single-view keyframe animation (no `.id(key)` / `ZStack` transition siblings) so rapid
+        // back-and-forth key changes can never leave overlapping copies stacked on top of each other.
+        content
+            .transaction(value: key) { $0.animation = nil }
+            .keyframeAnimator(initialValue: SwapVisualState.settled, trigger: key) { view, state in
+                view
+                    .opacity(state.opacity)
+                    .offset(y: state.offsetY)
+            } keyframes: { _ in
+                KeyframeTrack(\.opacity) {
+                    MoveKeyframe(start.opacity)
+                    CubicKeyframe(SwapVisualState.settled.opacity, duration: duration)
+                }
+                KeyframeTrack(\.offsetY) {
+                    MoveKeyframe(start.offsetY)
+                    if reduceMotion {
+                        LinearKeyframe(SwapVisualState.settled.offsetY, duration: duration)
+                    } else {
+                        CubicKeyframe(SwapVisualState.settled.offsetY, duration: duration)
+                    }
+                }
+            }
     }
 }
 
@@ -105,7 +146,7 @@ public struct AccentDot: View {
     }
 }
 
-/// The rounded floating menu panel the picker lives in: frosted interactive Liquid Glass like the composer.
+/// The rounded floating menu panel the picker lives in: frosted interactive Liquid Glass.
 public struct PickerPanelSurface<Content: View>: View {
     let content: Content
 
@@ -669,9 +710,18 @@ public struct ModelPickerTrigger: View {
     public var body: some View {
         Button(action: action) {
             HStack(spacing: 5) {
-                // The whole label swaps as one unit: the old one leaves at once and the new one rises in, so parts that
-                // stay the same (e.g. "High") never slide across the incoming model name.
-                label.fixedSize().swftSwap(on: swapKey)
+                // Keep the provider mark and model name steady when only the thinking effort changes;
+                // when the model itself changes, both segments swap in lockstep so effort never slides across it.
+                modelIdentity
+                    .fixedSize()
+                    .swftSwap(on: modelSwapKey)
+                if let effort {
+                    Text(effort)
+                        .foregroundStyle(SwftColor.textTertiary)
+                        .lineLimit(1)
+                        .fixedSize()
+                        .swftSwap(on: swapKey)
+                }
                 Image(systemName: "chevron.down")
                     .font(.system(size: 9, weight: .semibold))
                     .foregroundStyle(SwftColor.textTertiary)
@@ -684,16 +734,28 @@ public struct ModelPickerTrigger: View {
         }
         .buttonStyle(HoverFillStyle(shape: Capsule(), selected: isOpen))
         .animation(SwftMotion.resolve(SwftMotion.spring, reduceMotion: reduceMotion), value: isOpen)
-        // A new model or effort resizes the pill at once; only the label's rise animates.
+        // A new model or effort resizes the pill at once; only the swapped label segment rises in.
         .transaction(value: swapKey) { $0.animation = nil }
         .fixedSize()
     }
 
-    private var swapKey: String {
-        [mark?.id ?? "", disambiguator ?? "", model, effort ?? ""].joined(separator: "\u{1F}")
+    private var modelSwapKey: String {
+        Self.modelSwapKey(markID: mark?.id, disambiguator: disambiguator, model: model)
     }
 
-    private var label: some View {
+    private var swapKey: String {
+        Self.swapKey(markID: mark?.id, disambiguator: disambiguator, model: model, effort: effort)
+    }
+
+    nonisolated public static func modelSwapKey(markID: String?, disambiguator: String?, model: String) -> String {
+        [markID ?? "", disambiguator ?? "", model].joined(separator: "\u{1F}")
+    }
+
+    nonisolated public static func swapKey(markID: String?, disambiguator: String?, model: String, effort: String?) -> String {
+        [markID ?? "", disambiguator ?? "", model, effort ?? ""].joined(separator: "\u{1F}")
+    }
+
+    private var modelIdentity: some View {
         HStack(spacing: 5) {
             if let mark {
                 ProviderMark(provider: mark.provider, acpAgentID: mark.acpAgentID, iconURL: mark.iconURL, symbol: mark.symbol, monogram: mark.monogram, size: 13)
@@ -704,9 +766,6 @@ public struct ModelPickerTrigger: View {
                 Text(disambiguator).foregroundStyle(SwftColor.textTertiary).lineLimit(1).frame(maxWidth: 96)
             }
             Text(model).foregroundStyle(SwftColor.textPrimary).lineLimit(1)
-            if let effort {
-                Text(effort).foregroundStyle(SwftColor.textTertiary).lineLimit(1)
-            }
         }
     }
 }
