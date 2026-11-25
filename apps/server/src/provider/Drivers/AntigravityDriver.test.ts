@@ -148,6 +148,7 @@ const makeHarness = Effect.fn("makeAntigravityDriverHarness")(function* (
     environment: Record<string, string | undefined>;
     profileDirectory: string | undefined;
     forceFileStorage: string | undefined;
+    forceCliFileTokenStorage: string | undefined;
     credentialKeys: ReadonlyArray<string>;
     geminiApiKey: string | undefined;
     tempDirectory: string | undefined;
@@ -211,6 +212,7 @@ const makeHarness = Effect.fn("makeAntigravityDriverHarness")(function* (
         environment: Object.fromEntries(Object.keys(environment).map((name) => [name, env(name)])),
         profileDirectory: env("GEMINI_HOME"),
         forceFileStorage: env("AGY_ACP_FORCE_FILE_STORAGE"),
+        forceCliFileTokenStorage: env("AGY_CLI_FORCE_FILE_TOKEN_STORAGE"),
         credentialKeys: Object.keys(environment).filter((key) =>
           blockedCredentialKeys.has(key.toUpperCase()),
         ),
@@ -351,6 +353,7 @@ it.layer(layerTest)("AntigravityDriver", (it) => {
           ]);
           expect(launch.profileDirectory).toBe(h.profileDirectory);
           expect(launch.forceFileStorage).toBe("1");
+          expect(launch.forceCliFileTokenStorage).toBe("1");
           expect(launch.extendEnv).toBe(false);
         }
         for (const launch of h.launches) expect(launch.credentialKeys).toEqual([]);

@@ -615,7 +615,11 @@ final class AppModel {
             }
             Task { @MainActor [weak self] in
                 do {
-                    _ = try await activeStore.refreshProviders(instanceId: instanceId, fresh: true)
+                    _ = try await activeStore.refreshProviders(
+                        instanceId: instanceId,
+                        fresh: true,
+                        refreshModels: true
+                    )
                     self?.usageRenewalErrors.removeValue(forKey: key)
                 } catch {
                     self?.usageRenewalErrors[key] = error.localizedDescription
