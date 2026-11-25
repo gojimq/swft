@@ -95,7 +95,7 @@ struct SidebarView: View {
             .scrollIndicators(.automatic)
             .scrollEdgeSoftIfAvailable()
 
-            // Reserved bottom footer area (upcoming usage widget); only shows a quiet retry pill when offline.
+            // Reserved bottom footer area: quiet retry pill when offline, plus up to 3 usage pills.
             if model.serverStatus.needsRetry {
                 OfflineRetryPill(title: model.serverStatus.pillTitle, dotColor: model.serverStatus.dotColor) {
                     model.retryConnection()
@@ -103,9 +103,9 @@ struct SidebarView: View {
                 .padding(.horizontal, 10)
                 .padding(.vertical, 8)
                 .transition(.swftPop(reduceMotion: reduceMotion, scale: 0.92))
-            } else {
-                Color.clear.frame(height: 8)
             }
+
+            SidebarUsageFooter()
         }
         .animation(SwftMotion.resolve(SwftMotion.spring, reduceMotion: reduceMotion), value: model.visibleThreads.map(\.id))
         .animation(SwftMotion.resolve(SwftMotion.spring, reduceMotion: reduceMotion), value: model.serverStatus.needsRetry)

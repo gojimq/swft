@@ -74,6 +74,8 @@ struct ProvidersSettingsSection: View {
                 }
             }
 
+            UsagePillsSettingsSection()
+
             SettingsSectionCard("Advanced") {
                 SettingsPickerRow(
                     "Compact idle threads",

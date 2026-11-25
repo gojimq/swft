@@ -106,6 +106,63 @@ enum SwftAdapters {
         )
     }
 
+    static func usageProviders(from providers: [ServerProvider]) -> [UsageProviderEntry] {
+        providers.map(usageProvider(from:))
+    }
+
+    static func usageProvider(from provider: ServerProvider) -> UsageProviderEntry {
+        let harness = pickerHarness(from: provider)
+        return UsageProviderEntry(
+            id: provider.instanceId,
+            driver: provider.driver,
+            label: harness.label,
+            kind: harness.kind,
+            accentHex: harness.accentHex,
+            account: harness.account,
+            listed: true,
+            enabled: provider.enabled,
+            installed: provider.installed,
+            unauthenticated: harness.unauthenticated,
+            unavailableReason: harness.unavailableReason,
+            usageLimits: provider.usageLimits.map(usageLimitsSnapshot(from:))
+        )
+    }
+
+    static func usageLimitsSnapshot(from limits: ServerProviderUsageLimits) -> UsageLimitsSnapshot {
+        UsageLimitsSnapshot(
+            checkedAt: limits.checkedAt,
+            windows: limits.windows.map { window in
+                let kind: UsageWindowKind = switch window.kind {
+                case .session: .session
+                case .weekly: .weekly
+                case .monthly: .monthly
+                case .other: .other
+                case .unknown: .unknown
+                }
+                return UsageWindow(
+                    id: window.id,
+                    kind: kind,
+                    label: window.label,
+                    modelIds: window.modelIds,
+                    providerIds: window.providerIds,
+                    usedPercent: window.usedPercent,
+                    resetsAt: window.resetsAt,
+                    windowDurationMins: window.windowDurationMins
+                )
+            },
+            zeroSpendCap: limits.zeroSpendCap,
+            credentialFingerprint: limits.credentialFingerprint,
+            unavailable: limits.unavailable.map { unavailable in
+                let reason: UsageUnavailableReason = switch unavailable.reason {
+                case .unsupported: .unsupported
+                case .probeFailed: .probeFailed
+                case .unknown: .unknown
+                }
+                return UsageUnavailable(reason: reason, message: unavailable.message)
+            }
+        )
+    }
+
     /// "Auth label · email" for a signed-in provider.
     static func providerAccount(_ auth: ServerProviderAuth) -> String? {
         guard auth.status == .authenticated else { return nil }
