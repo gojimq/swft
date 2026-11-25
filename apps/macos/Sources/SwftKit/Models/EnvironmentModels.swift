@@ -14,6 +14,12 @@ public struct ExecutionEnvironmentPlatform: Codable, Sendable, Equatable {
     }
 }
 
+public enum ServerSelfUpdateCapability: String, Codable, Sendable, Equatable {
+    case bootService = "boot-service"
+    case respawn = "respawn"
+    case desktopManaged = "desktop-managed"
+}
+
 public struct ExecutionEnvironmentCapabilities: Codable, Sendable, Equatable {
     public let repositoryIdentity: Bool
     public let connectionProbe: Bool
@@ -28,6 +34,10 @@ public struct ExecutionEnvironmentCapabilities: Codable, Sendable, Equatable {
     public let providerWorkspaceSnapshotsOnDemand: Bool
     public let commandOutputStreaming: Bool
     public let freshContext: Bool
+    public let serverSelfUpdate: ServerSelfUpdateCapability?
+    public let serverSelfUpdateProgress: Bool
+    public let serverUpdateStaging: Bool
+    public let desktopAppUpdate: Bool
 
     public init(
         repositoryIdentity: Bool = false,
@@ -42,7 +52,11 @@ public struct ExecutionEnvironmentCapabilities: Codable, Sendable, Equatable {
         shellOlderSettled: Bool = false,
         providerWorkspaceSnapshotsOnDemand: Bool = false,
         commandOutputStreaming: Bool = false,
-        freshContext: Bool = false
+        freshContext: Bool = false,
+        serverSelfUpdate: ServerSelfUpdateCapability? = nil,
+        serverSelfUpdateProgress: Bool = false,
+        serverUpdateStaging: Bool = false,
+        desktopAppUpdate: Bool = false
     ) {
         self.repositoryIdentity = repositoryIdentity
         self.connectionProbe = connectionProbe
@@ -57,6 +71,10 @@ public struct ExecutionEnvironmentCapabilities: Codable, Sendable, Equatable {
         self.providerWorkspaceSnapshotsOnDemand = providerWorkspaceSnapshotsOnDemand
         self.commandOutputStreaming = commandOutputStreaming
         self.freshContext = freshContext
+        self.serverSelfUpdate = serverSelfUpdate
+        self.serverSelfUpdateProgress = serverSelfUpdateProgress
+        self.serverUpdateStaging = serverUpdateStaging
+        self.desktopAppUpdate = desktopAppUpdate
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -73,6 +91,10 @@ public struct ExecutionEnvironmentCapabilities: Codable, Sendable, Equatable {
         case providerWorkspaceSnapshotsOnDemand
         case commandOutputStreaming
         case freshContext
+        case serverSelfUpdate
+        case serverSelfUpdateProgress
+        case serverUpdateStaging
+        case desktopAppUpdate
     }
 
     public init(from decoder: any Decoder) throws {
@@ -91,6 +113,10 @@ public struct ExecutionEnvironmentCapabilities: Codable, Sendable, Equatable {
             try c.decodeIfPresent(Bool.self, forKey: .providerWorkspaceSnapshotsOnDemand) ?? false
         self.commandOutputStreaming = try c.decodeIfPresent(Bool.self, forKey: .commandOutputStreaming) ?? false
         self.freshContext = try c.decodeIfPresent(Bool.self, forKey: .freshContext) ?? false
+        self.serverSelfUpdate = (try? c.decodeIfPresent(ServerSelfUpdateCapability.self, forKey: .serverSelfUpdate)) ?? nil
+        self.serverSelfUpdateProgress = try c.decodeIfPresent(Bool.self, forKey: .serverSelfUpdateProgress) ?? false
+        self.serverUpdateStaging = try c.decodeIfPresent(Bool.self, forKey: .serverUpdateStaging) ?? false
+        self.desktopAppUpdate = try c.decodeIfPresent(Bool.self, forKey: .desktopAppUpdate) ?? false
     }
 }
 

@@ -484,4 +484,49 @@ public final class ThreadsStore {
         providers = result.providers
         return result.providers
     }
+
+    @discardableResult
+    public func updateServerWithProgress(
+        targetVersion: String,
+        targetDatabaseMigration: Int? = nil,
+        stageOnly: Bool = false,
+        onProgress: @escaping @Sendable (ServerSelfUpdateProgressStage) -> Void
+    ) async throws -> ServerSelfUpdateResult {
+        let input = ServerSelfUpdateInput(
+            targetVersion: targetVersion,
+            targetDatabaseMigration: targetDatabaseMigration,
+            stageOnly: stageOnly ? true : nil
+        )
+        let supportsProgress =
+            environment?.capabilities.serverSelfUpdateProgress == true
+            || serverConfig?.environment.capabilities.serverSelfUpdateProgress == true
+
+        if supportsProgress {
+            let stream: AsyncThrowingStream<ServerSelfUpdateProgressEvent, any Error> =
+                connection.subscribe(
+                    tag: RPCMethod.serverUpdateServerWithProgress,
+                    payload: input
+                )
+            var finalResult: ServerSelfUpdateResult?
+            for try await event in stream {
+                switch event {
+                case .progress(let stage):
+                    onProgress(stage)
+                case .complete(let result):
+                    finalResult = result
+                }
+            }
+            guard let finalResult else {
+                throw RPCError.protocolError(
+                    "Server update stream completed without a final result."
+                )
+            }
+            return finalResult
+        }
+
+        return try await connection.call(
+            tag: RPCMethod.serverUpdateServer,
+            payload: input
+        )
+    }
 }

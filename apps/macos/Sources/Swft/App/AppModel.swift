@@ -48,6 +48,8 @@ final class AppModel {
     var openProviderSettingsAction: ((String) -> Void)?
     /// Home → new thread staging (composer docking, hand-off); see `Motion/NewThread`.
     let newThread = NewThreadLauncher()
+    /// Release checks and the remote-first, this-Mac-last update run behind Home's update pill.
+    let updates: UpdateCoordinator
     /// Most recent send dispatched inside an existing thread, observed by `ThreadView` to launch send flight.
     var latestThreadSend: ThreadSendEvent?
     /// Send event ID whose live dispatch failed, so `ThreadView` can cancel its flight overlay immediately.
@@ -137,7 +139,8 @@ final class AppModel {
         isMock: Bool,
         now: Date,
         mockBacking: MockBacking? = nil,
-        defaults: UserDefaults? = nil
+        defaults: UserDefaults? = nil,
+        updateServices: UpdateServices? = nil
     ) {
         self.isMock = isMock
         self.now = now
@@ -165,6 +168,9 @@ final class AppModel {
             )
             self.tunnelController = CloudflareTunnelController(baseDirectory: baseDir)
         }
+        self.updates = UpdateCoordinator(
+            services: updateServices ?? Self.makeUpdateServices(isMock: isMock, registry: environmentRegistry)
+        )
         self.settings.attach(to: self)
         self.composerAttachments.onError = { [weak self] message in
             self?.actionError = message
@@ -193,7 +199,7 @@ final class AppModel {
         AppModel(isMock: false, now: Date(), defaults: .standard)
     }
 
-    static func mock(defaults: UserDefaults? = nil) -> AppModel {
+    static func mock(defaults: UserDefaults? = nil, updateServices: UpdateServices? = nil) -> AppModel {
         let backing = MockBacking(
             projects: MockData.projects,
             threads: MockData.threads,
@@ -210,7 +216,7 @@ final class AppModel {
             defaultContextLabel: "Swft · main"
         )
         MockData.seedImageCache()
-        let model = AppModel(isMock: true, now: MockData.now, mockBacking: backing, defaults: defaults)
+        let model = AppModel(isMock: true, now: MockData.now, mockBacking: backing, defaults: defaults, updateServices: updateServices)
         model.selectedProjectID = MockData.swft.id
         model.selectedModelID = MockData.models.first?.id
         model.selectedReasoningChoiceId = MockData.models.first?.defaultReasoningChoiceId
@@ -271,6 +277,22 @@ final class AppModel {
         startVisitObservation()
         connectToLocalServer()
         startRemoteConnections()
+        updates.start()
+    }
+
+    /// Opens Settings → About so a menu-bar check always shows its result, then checks.
+    func checkForUpdates(userInitiated: Bool) {
+        if userInitiated { openSettings(section: .about) }
+        Task { await updates.checkForUpdates(userInitiated: userInitiated) }
+    }
+
+    private static func makeUpdateServices(isMock: Bool, registry: EnvironmentRegistry) -> UpdateServices {
+        let appVersion = SettingsController.bundleAppVersion
+        if let demo = DemoUpdateWorld.fromEnvironment(localVersion: appVersion) {
+            return demo.services
+        }
+        if isMock { return .inert }
+        return .live(registry: registry, appVersion: { appVersion })
     }
 
     func retryConnection() {
@@ -295,6 +317,7 @@ final class AppModel {
 
     func shutdown() async {
         isShuttingDown = true
+        updates.stop()
         settings.stopProviderSubscriptions()
         startupTask?.cancel()
         startupTask = nil

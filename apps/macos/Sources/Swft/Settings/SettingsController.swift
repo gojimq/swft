@@ -155,7 +155,9 @@ final class SettingsController {
         appModel?.resolvedDataDirectory ?? ServerLaunchConfiguration.defaultBaseDirectory
     }
 
-    var appVersion: String {
+    var appVersion: String { Self.bundleAppVersion }
+
+    static var bundleAppVersion: String {
         let short = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
         return short?.isEmpty == false ? short! : "0.1.0"
     }

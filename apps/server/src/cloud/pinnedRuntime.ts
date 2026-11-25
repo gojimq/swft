@@ -10,7 +10,13 @@ import * as Option from "effect/Option";
 import * as Schedule from "effect/Schedule";
 import * as Stream from "effect/Stream";
 import * as Semaphore from "effect/Semaphore";
-import { HttpClient, HttpClientError, HttpClientRequest, HttpClientResponse } from "effect/http";
+import {
+  FetchHttpClient,
+  HttpClient,
+  HttpClientError,
+  HttpClientRequest,
+  HttpClientResponse,
+} from "effect/http";
 
 import {
   CLI_RELEASE_CHECKSUMS_FILE,
@@ -20,6 +26,7 @@ import {
   cliReleaseAssetUrl,
   type CliArchivePlatformKey,
   parseChecksums,
+  parseGitHubReleaseDownloadUrl,
 } from "@t3tools/shared/cliRelease";
 
 import * as HostProcess from "@t3tools/shared/HostProcess";
@@ -103,7 +110,7 @@ export type PinnedRuntimeProgress =
 
 /** Tar writes the executable before native packages; only a validated install gets a sentinel. */
 
-interface PinnedRuntimeInstallInput {
+export interface PinnedRuntimeInstallInput {
   readonly baseDir: string;
   readonly version: string;
   readonly fs: FileSystem.FileSystem;
@@ -116,6 +123,7 @@ interface PinnedRuntimeInstallInput {
   readonly arch: string;
   readonly httpClient: HttpClient.HttpClient;
   readonly releaseBaseUrl?: string | undefined;
+  readonly githubToken?: string | undefined;
   /** Reuse a cached runtime only while the release source still lists it, as a policy mirror does. */
   readonly requirePublishedRelease?: boolean;
   readonly onProgress?: (progress: PinnedRuntimeProgress) => void;
@@ -261,8 +269,212 @@ const fetchReleaseAsset = Effect.fn("cloud.pinned_runtime.fetch_release_asset")(
   );
 });
 
+const GitHubReleaseByTagSchema = Schema.Struct({
+  assets: Schema.Array(
+    Schema.Struct({
+      name: Schema.String,
+      url: Schema.String,
+    }),
+  ),
+});
+const decodeGitHubReleaseByTag = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(GitHubReleaseByTagSchema),
+);
+
+type GitHubReleaseAssetCache = Map<string, ReadonlyMap<string, string>>;
+
+const isRedirectStatus = (status: number): boolean =>
+  status === 301 || status === 302 || status === 303 || status === 307 || status === 308;
+
+const mapDownloadError = (url: string, step: string) => (cause: unknown) =>
+  new PinnedRuntimeInstallError({
+    step:
+      typeof cause === "object" &&
+      cause !== null &&
+      "_tag" in cause &&
+      cause._tag === "TimeoutError"
+        ? `${step} (timed out)`
+        : step,
+    httpStatus:
+      HttpClientError.isHttpClientError(cause) && cause.reason._tag === "StatusCodeError"
+        ? cause.reason.response.status
+        : undefined,
+    downloadHost: URL.parse(HttpClientError.isHttpClientError(cause) ? cause.request.url : url)
+      ?.host,
+    cause,
+  });
+
+const resolveGitHubReleaseAssetApiUrl = Effect.fn(
+  "cloud.pinned_runtime.resolve_github_release_asset_api_url",
+)(function* (input: {
+  readonly httpClient: HttpClient.HttpClient;
+  readonly owner: string;
+  readonly repo: string;
+  readonly tag: string;
+  readonly assetName: string;
+  readonly token: string;
+  readonly step: string;
+  readonly cache: GitHubReleaseAssetCache;
+}) {
+  const cacheKey = `${input.owner}/${input.repo}@${input.tag}`;
+  let assets = input.cache.get(cacheKey);
+  if (assets === undefined) {
+    const metadataUrl = `https://api.github.com/repos/${encodeURIComponent(input.owner)}/${encodeURIComponent(input.repo)}/releases/tags/${encodeURIComponent(input.tag)}`;
+    const body = yield* Effect.suspend(() =>
+      input.httpClient.execute(
+        HttpClientRequest.get(metadataUrl).pipe(
+          HttpClientRequest.setHeader("authorization", `Bearer ${input.token}`),
+          HttpClientRequest.setHeader("accept", "application/vnd.github+json"),
+          HttpClientRequest.setHeader("x-github-api-version", "2022-11-28"),
+          HttpClientRequest.setHeader("user-agent", "swft-server"),
+        ),
+      ),
+    ).pipe(
+      Effect.flatMap(HttpClientResponse.filterStatusOk),
+      Effect.flatMap((response) => response.text),
+      Effect.timeout(PINNED_RUNTIME_DOWNLOAD_STALL_TIMEOUT),
+      Effect.retry({ ...DOWNLOAD_RETRY, while: isTransientDownloadFailure }),
+      Effect.mapError(mapDownloadError(metadataUrl, input.step)),
+    );
+    const decoded = yield* decodeGitHubReleaseByTag(body).pipe(
+      Effect.mapError(
+        (cause) =>
+          new PinnedRuntimeInstallError({
+            step: input.step,
+            downloadHost: "api.github.com",
+            cause,
+          }),
+      ),
+    );
+    const assetMap = new Map<string, string>();
+    for (const asset of decoded.assets) {
+      assetMap.set(asset.name, asset.url);
+    }
+    input.cache.set(cacheKey, assetMap);
+    assets = assetMap;
+  }
+  const assetUrl = assets.get(input.assetName);
+  if (assetUrl === undefined) {
+    return yield* new PinnedRuntimeInstallError({
+      step: `finding ${input.assetName} in the t3 release assets`,
+      httpStatus: 404,
+      downloadHost: "api.github.com",
+    });
+  }
+  return assetUrl;
+});
+
+const fetchAuthenticatedGitHubAsset = Effect.fn(
+  "cloud.pinned_runtime.fetch_authenticated_github_asset",
+)(function* (input: {
+  readonly httpClient: HttpClient.HttpClient;
+  readonly assetApiUrl: string;
+  readonly token: string;
+  readonly step: string;
+  readonly resume: boolean;
+  readonly onProgress?: ((progress: PinnedRuntimeProgress) => void) | undefined;
+}) {
+  // Fetch the API asset URL with manual redirects so the GitHub Bearer token is never forwarded to S3.
+  const resolution = yield* Effect.suspend(() =>
+    input.httpClient.execute(
+      HttpClientRequest.get(input.assetApiUrl).pipe(
+        HttpClientRequest.setHeader("authorization", `Bearer ${input.token}`),
+        HttpClientRequest.setHeader("accept", "application/octet-stream"),
+        HttpClientRequest.setHeader("x-github-api-version", "2022-11-28"),
+        HttpClientRequest.setHeader("user-agent", "swft-server"),
+      ),
+    ),
+  ).pipe(
+    Effect.provideService(FetchHttpClient.RequestInit, { redirect: "manual" }),
+    Effect.timeout(PINNED_RUNTIME_DOWNLOAD_STALL_TIMEOUT),
+    Effect.flatMap(
+      Effect.fn(function* (response) {
+        if (isRedirectStatus(response.status)) {
+          const location = response.headers["location"];
+          if (!location) {
+            return yield* new HttpClientError.HttpClientError({
+              reason: new HttpClientError.DecodeError({
+                request: response.request,
+                response,
+                description: "GitHub asset redirect response is missing a Location header",
+              }),
+            });
+          }
+          return {
+            _tag: "redirect" as const,
+            url: new URL(location, input.assetApiUrl).toString(),
+          };
+        }
+        const ok = yield* HttpClientResponse.filterStatusOk(response);
+        const buffer = yield* ok.arrayBuffer;
+        return { _tag: "bytes" as const, bytes: new Uint8Array(buffer) };
+      }),
+    ),
+    Effect.retry({ ...DOWNLOAD_RETRY, while: isTransientDownloadFailure }),
+    Effect.mapError(mapDownloadError(input.assetApiUrl, input.step)),
+  );
+  if (resolution._tag === "bytes") {
+    input.onProgress?.({
+      stage: "download",
+      received: resolution.bytes.byteLength,
+      total: resolution.bytes.byteLength,
+    });
+    return resolution.bytes;
+  }
+  return yield* fetchReleaseAsset(
+    input.httpClient,
+    resolution.url,
+    input.step,
+    input.resume,
+    input.onProgress,
+  );
+});
+
+const fetchReleaseAssetMaybeAuthenticated = Effect.fn(
+  "cloud.pinned_runtime.fetch_release_asset_maybe_authenticated",
+)(function* (input: {
+  readonly httpClient: HttpClient.HttpClient;
+  readonly url: string;
+  readonly step: string;
+  readonly resume: boolean;
+  readonly githubToken?: string | undefined;
+  readonly releaseAssetCache: GitHubReleaseAssetCache;
+  readonly onProgress?: ((progress: PinnedRuntimeProgress) => void) | undefined;
+}) {
+  const token = input.githubToken?.trim();
+  const parsed = token ? parseGitHubReleaseDownloadUrl(input.url) : undefined;
+  if (!token || parsed === undefined) {
+    return yield* fetchReleaseAsset(
+      input.httpClient,
+      input.url,
+      input.step,
+      input.resume,
+      input.onProgress,
+    );
+  }
+  const assetApiUrl = yield* resolveGitHubReleaseAssetApiUrl({
+    httpClient: input.httpClient,
+    owner: parsed.owner,
+    repo: parsed.repo,
+    tag: parsed.tag,
+    assetName: parsed.assetName,
+    token,
+    step: input.step,
+    cache: input.releaseAssetCache,
+  });
+  return yield* fetchAuthenticatedGitHubAsset({
+    httpClient: input.httpClient,
+    assetApiUrl,
+    token,
+    step: input.step,
+    resume: input.resume,
+    onProgress: input.onProgress,
+  });
+});
+
 const downloadArchive = Effect.fn("cloud.pinned_runtime.download_archive")(function* (
   input: PinnedRuntimeInstallInput,
+  releaseAssetCache: GitHubReleaseAssetCache,
 ) {
   const platformKey = cliArchivePlatformKey(input.platform, input.arch);
   if (platformKey === undefined) {
@@ -272,14 +484,16 @@ const downloadArchive = Effect.fn("cloud.pinned_runtime.download_archive")(funct
   }
   const httpClient = input.httpClient;
   input.onProgress?.({ stage: "download", received: 0, total: undefined });
-  const { fileName, expected } = yield* publishedArchive(input, platformKey);
-  const archive = yield* fetchReleaseAsset(
+  const { fileName, expected } = yield* publishedArchive(input, platformKey, releaseAssetCache);
+  const archive = yield* fetchReleaseAssetMaybeAuthenticated({
     httpClient,
-    cliReleaseAssetUrl(input.version, fileName, input.releaseBaseUrl),
-    "downloading the t3 release archive",
-    true,
-    input.onProgress,
-  );
+    url: cliReleaseAssetUrl(input.version, fileName, input.releaseBaseUrl),
+    step: "downloading the t3 release archive",
+    resume: true,
+    githubToken: input.githubToken,
+    releaseAssetCache,
+    onProgress: input.onProgress,
+  });
   input.onProgress?.({ stage: "verify" });
   const digest = yield* Effect.tryPromise({
     try: () => crypto.subtle.digest("SHA-256", archive),
@@ -337,16 +551,19 @@ const installFromArchive = Effect.fn("cloud.pinned_runtime.install_archive")(fun
 const publishedArchive = Effect.fn("cloud.pinned_runtime.published_archive")(function* (
   input: PinnedRuntimeInstallInput,
   platformKey: CliArchivePlatformKey,
+  releaseAssetCache: GitHubReleaseAssetCache,
 ) {
   const fileName = cliArchiveFileName(input.version, platformKey);
   const checksums = parseChecksums(
     new TextDecoder().decode(
-      yield* fetchReleaseAsset(
-        input.httpClient,
-        cliReleaseAssetUrl(input.version, CLI_RELEASE_CHECKSUMS_FILE, input.releaseBaseUrl),
-        "downloading the t3 release checksums",
-        false,
-      ),
+      yield* fetchReleaseAssetMaybeAuthenticated({
+        httpClient: input.httpClient,
+        url: cliReleaseAssetUrl(input.version, CLI_RELEASE_CHECKSUMS_FILE, input.releaseBaseUrl),
+        step: "downloading the t3 release checksums",
+        resume: false,
+        githubToken: input.githubToken,
+        releaseAssetCache,
+      }),
     ),
   );
   const expected = checksums.get(fileName);
@@ -372,6 +589,7 @@ const installPinnedRuntime = Effect.fn("cloud.pinned_runtime.ensure_installed")(
   input: PinnedRuntimeInstallInput,
 ) {
   const { fs } = input;
+  const releaseAssetCache: GitHubReleaseAssetCache = new Map();
   const paths = pinnedRuntimePaths(input.path, input.baseDir, input.version, input.platform);
   const [versionDirExists, entryExists, sentinel] = yield* Effect.all([
     fs.exists(paths.versionDir),
@@ -392,7 +610,7 @@ const installPinnedRuntime = Effect.fn("cloud.pinned_runtime.ensure_installed")(
           step: `selecting a t3 release archive for ${input.platform}-${input.arch}`,
         });
       }
-      yield* publishedArchive(input, platformKey);
+      yield* publishedArchive(input, platformKey, releaseAssetCache);
     }
     input.onProgress?.({ stage: "cached" });
     yield* input.validate(paths);
@@ -422,7 +640,7 @@ const installPinnedRuntime = Effect.fn("cloud.pinned_runtime.ensure_installed")(
   );
   // Downloads are buffered in memory and can take hours; staging only once they finish keeps a
   // staging directory's age a sign of abandonment for prunes in other processes.
-  const archive = yield* downloadArchive(input);
+  const archive = yield* downloadArchive(input, releaseAssetCache);
   const stagingDir = yield* fs
     .makeTempDirectory({
       directory: versionsDir,
@@ -492,8 +710,12 @@ const installPinnedRuntime = Effect.fn("cloud.pinned_runtime.ensure_installed")(
   );
 });
 
-export const ensurePinnedRuntimeInstalled = (input: PinnedRuntimeInstallInput) =>
-  pinnedRuntimeInstallLock.withPermit(installPinnedRuntime(input));
+export const ensurePinnedRuntimeInstalled = (
+  input: PinnedRuntimeInstallInput,
+): Effect.Effect<
+  PinnedRuntimePaths,
+  PinnedRuntimeInstallError | PinnedRuntimePreflightBlockedError
+> => pinnedRuntimeInstallLock.withPermit(installPinnedRuntime(input));
 
 const PINNED_RUNTIME_STAGING_PREFIX = ".staging-";
 const PINNED_RUNTIME_PRUNED_PREFIX = ".pruned-";

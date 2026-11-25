@@ -2373,6 +2373,9 @@ public enum RPCMethod {
     public static let serverProbe = "server.probe"
     public static let serverGetConfig = "server.getConfig"
     public static let serverRefreshProviders = "server.refreshProviders"
+    public static let serverUpdateServer = "server.updateServer"
+    public static let serverUpdateServerWithProgress = "server.updateServerWithProgress"
+    public static let serverCommitDesktopUpdate = "server.commitDesktopUpdate"
     public static let subscribeServerConfig = "subscribeServerConfig"
 
     public static let projectsMutate = "projects.mutate"

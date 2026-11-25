@@ -183,6 +183,39 @@ public actor ServerProcess {
         outputBuffer?.snapshotString() ?? ""
     }
 
+    /// Resolved launch target for the local server child process.
+    public enum ServerLaunchTarget: Sendable, Equatable {
+        case standaloneBinary(executableURL: URL)
+        case nodeScript(nodeURL: URL, scriptURL: URL)
+
+        public var executableURL: URL {
+            switch self {
+            case .standaloneBinary(let url):
+                return url
+            case .nodeScript(let nodeURL, _):
+                return nodeURL
+            }
+        }
+
+        public var arguments: [String] {
+            switch self {
+            case .standaloneBinary:
+                return ["--bootstrap-fd", "0"]
+            case .nodeScript(_, let scriptURL):
+                return [scriptURL.path, "--bootstrap-fd", "0"]
+            }
+        }
+
+        public var defaultWorkingDirectory: URL {
+            switch self {
+            case .standaloneBinary(let url):
+                return url.deletingLastPathComponent()
+            case .nodeScript(_, let scriptURL):
+                return scriptURL.deletingLastPathComponent()
+            }
+        }
+    }
+
     /// Launches the child server, feeds its bootstrap payload on stdin, and waits for readiness.
     public func start() async throws -> ServerEndpoint {
         guard process == nil else {
@@ -195,18 +228,17 @@ public actor ServerProcess {
             withIntermediateDirectories: true
         )
 
-        let nodeURL = try resolveNodeExecutable()
-        let entrypointURL = try resolveServerEntrypoint()
+        let launchTarget = try resolveLaunchTarget()
         let port = try configuration.port ?? Self.allocateLoopbackPort()
         let bootstrapToken = try Self.generateRandomHexToken(byteCount: 32)
 
         let child = Process()
-        child.executableURL = nodeURL
-        child.arguments = [entrypointURL.path, "--bootstrap-fd", "0"]
+        child.executableURL = launchTarget.executableURL
+        child.arguments = launchTarget.arguments
         if let workingDirectory = configuration.workingDirectory {
             child.currentDirectoryURL = workingDirectory
         } else {
-            child.currentDirectoryURL = entrypointURL.deletingLastPathComponent()
+            child.currentDirectoryURL = launchTarget.defaultWorkingDirectory
         }
 
         // Strip ambient T3CODE_* env vars so a developer's live T3 Code session never overrides bootstrap.
@@ -368,19 +400,155 @@ public actor ServerProcess {
         )
     }
 
-    private func resolveNodeExecutable() throws -> URL {
+    private func resolveLaunchTarget(
+        resourceURL: URL? = Bundle.main.resourceURL,
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) throws -> ServerLaunchTarget {
+        let fm = FileManager.default
+        if let explicit = configuration.serverEntrypoint {
+            guard fm.fileExists(atPath: explicit.path) else {
+                throw ServerProcessError.entrypointNotFound
+            }
+            if Self.isStandaloneExecutable(explicit, fileManager: fm) {
+                return .standaloneBinary(executableURL: explicit)
+            }
+            return .nodeScript(nodeURL: try resolveNodeExecutable(environment: environment), scriptURL: explicit)
+        }
+        if let envEntry = environment["SWFT_SERVER_ENTRY"], !envEntry.isEmpty {
+            let entryURL = URL(fileURLWithPath: envEntry)
+            guard fm.fileExists(atPath: entryURL.path) else {
+                throw ServerProcessError.entrypointNotFound
+            }
+            if Self.isStandaloneExecutable(entryURL, fileManager: fm) {
+                return .standaloneBinary(executableURL: entryURL)
+            }
+            return .nodeScript(nodeURL: try resolveNodeExecutable(environment: environment), scriptURL: entryURL)
+        }
+        if let envRepoRoot = environment["SWFT_REPO_ROOT"], !envRepoRoot.isEmpty {
+            guard let entry = Self.findServerEntrypoint(
+                under: URL(fileURLWithPath: envRepoRoot, isDirectory: true),
+                fileManager: fm
+            ) else {
+                throw ServerProcessError.entrypointNotFound
+            }
+            return .nodeScript(nodeURL: try resolveNodeExecutable(environment: environment), scriptURL: entry)
+        }
+        // Prefer a bundled standalone SEA server binary (no host Node required).
+        if let bundledBinary = Self.resolveBundledServerBinary(resourceURL: resourceURL, fileManager: fm) {
+            return .standaloneBinary(executableURL: bundledBinary)
+        }
+        let entrypointURL = try resolveServerEntrypoint(resourceURL: resourceURL, environment: environment)
+        let nodeURL = try resolveNodeExecutable(environment: environment)
+        return .nodeScript(nodeURL: nodeURL, scriptURL: entrypointURL)
+    }
+
+    internal static func resolveLaunchTarget(
+        configuration: ServerLaunchConfiguration = ServerLaunchConfiguration(),
+        resourceURL: URL? = Bundle.main.resourceURL,
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) throws -> ServerLaunchTarget {
+        let fm = FileManager.default
+        if let explicit = configuration.serverEntrypoint {
+            guard fm.fileExists(atPath: explicit.path) else {
+                throw ServerProcessError.entrypointNotFound
+            }
+            if isStandaloneExecutable(explicit, fileManager: fm) {
+                return .standaloneBinary(executableURL: explicit)
+            }
+            return .nodeScript(
+                nodeURL: try resolveNodeExecutable(configuration: configuration, environment: environment),
+                scriptURL: explicit
+            )
+        }
+        if let envEntry = environment["SWFT_SERVER_ENTRY"], !envEntry.isEmpty {
+            let entryURL = URL(fileURLWithPath: envEntry)
+            guard fm.fileExists(atPath: entryURL.path) else {
+                throw ServerProcessError.entrypointNotFound
+            }
+            if isStandaloneExecutable(entryURL, fileManager: fm) {
+                return .standaloneBinary(executableURL: entryURL)
+            }
+            return .nodeScript(
+                nodeURL: try resolveNodeExecutable(configuration: configuration, environment: environment),
+                scriptURL: entryURL
+            )
+        }
+        if let envRepoRoot = environment["SWFT_REPO_ROOT"], !envRepoRoot.isEmpty {
+            guard let entry = findServerEntrypoint(
+                under: URL(fileURLWithPath: envRepoRoot, isDirectory: true),
+                fileManager: fm
+            ) else {
+                throw ServerProcessError.entrypointNotFound
+            }
+            return .nodeScript(
+                nodeURL: try resolveNodeExecutable(configuration: configuration, environment: environment),
+                scriptURL: entry
+            )
+        }
+        if let bundledBinary = resolveBundledServerBinary(resourceURL: resourceURL, fileManager: fm) {
+            return .standaloneBinary(executableURL: bundledBinary)
+        }
+        let entrypointURL = try resolveServerEntrypoint(
+            configuration: configuration,
+            resourceURL: resourceURL,
+            environment: environment
+        )
+        let nodeURL = try resolveNodeExecutable(configuration: configuration, environment: environment)
+        return .nodeScript(nodeURL: nodeURL, scriptURL: entrypointURL)
+    }
+
+    /// Locates a bundled standalone SEA server executable at `<resourceURL>/server/t3`.
+    public static func resolveBundledServerBinary(
+        resourceURL: URL? = Bundle.main.resourceURL,
+        fileManager: FileManager = .default
+    ) -> URL? {
+        guard let candidate = resourceURL?.appendingPathComponent("server/t3") else {
+            return nil
+        }
+        var isDirectory: ObjCBool = false
+        guard fileManager.fileExists(atPath: candidate.path, isDirectory: &isDirectory),
+              !isDirectory.boolValue,
+              fileManager.isExecutableFile(atPath: candidate.path)
+        else {
+            return nil
+        }
+        return candidate
+    }
+
+    private static func isStandaloneExecutable(_ url: URL, fileManager: FileManager) -> Bool {
+        let scriptExtensions: Set<String> = ["js", "mjs", "cjs", "ts", "mts", "cts"]
+        if scriptExtensions.contains(url.pathExtension.lowercased()) {
+            return false
+        }
+        var isDirectory: ObjCBool = false
+        guard fileManager.fileExists(atPath: url.path, isDirectory: &isDirectory), !isDirectory.boolValue else {
+            return false
+        }
+        return fileManager.isExecutableFile(atPath: url.path)
+    }
+
+    private func resolveNodeExecutable(
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) throws -> URL {
+        try Self.resolveNodeExecutable(configuration: configuration, environment: environment)
+    }
+
+    private static func resolveNodeExecutable(
+        configuration: ServerLaunchConfiguration,
+        environment: [String: String]
+    ) throws -> URL {
         let fm = FileManager.default
         if let explicit = configuration.nodeExecutable, fm.isExecutableFile(atPath: explicit.path) {
             return explicit
         }
-        if let envPath = ProcessInfo.processInfo.environment["SWFT_NODE_PATH"], !envPath.isEmpty {
+        if let envPath = environment["SWFT_NODE_PATH"], !envPath.isEmpty {
             guard fm.isExecutableFile(atPath: envPath) else {
                 throw ServerProcessError.nodeNotFound
             }
             return URL(fileURLWithPath: envPath)
         }
 
-        let pathEntries = (ProcessInfo.processInfo.environment["PATH"] ?? "")
+        let pathEntries = (environment["PATH"] ?? "")
             .split(separator: ":")
             .map(String.init)
         for dir in pathEntries {
@@ -423,18 +591,33 @@ public actor ServerProcess {
         throw ServerProcessError.nodeNotFound
     }
 
-    private func resolveServerEntrypoint() throws -> URL {
+    private func resolveServerEntrypoint(
+        resourceURL: URL? = Bundle.main.resourceURL,
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) throws -> URL {
+        try Self.resolveServerEntrypoint(
+            configuration: configuration,
+            resourceURL: resourceURL,
+            environment: environment
+        )
+    }
+
+    private static func resolveServerEntrypoint(
+        configuration: ServerLaunchConfiguration,
+        resourceURL: URL?,
+        environment: [String: String]
+    ) throws -> URL {
         let fm = FileManager.default
         if let explicit = configuration.serverEntrypoint, fm.fileExists(atPath: explicit.path) {
             return explicit
         }
-        if let envEntry = ProcessInfo.processInfo.environment["SWFT_SERVER_ENTRY"], !envEntry.isEmpty {
+        if let envEntry = environment["SWFT_SERVER_ENTRY"], !envEntry.isEmpty {
             guard fm.fileExists(atPath: envEntry) else {
                 throw ServerProcessError.entrypointNotFound
             }
             return URL(fileURLWithPath: envEntry)
         }
-        if let envRepoRoot = ProcessInfo.processInfo.environment["SWFT_REPO_ROOT"], !envRepoRoot.isEmpty {
+        if let envRepoRoot = environment["SWFT_REPO_ROOT"], !envRepoRoot.isEmpty {
             guard let entry = Self.findServerEntrypoint(
                 under: URL(fileURLWithPath: envRepoRoot, isDirectory: true),
                 fileManager: fm
@@ -443,7 +626,7 @@ public actor ServerProcess {
             }
             return entry
         }
-        if let bundled = Bundle.main.resourceURL?.appendingPathComponent("server/bin.mjs"),
+        if let bundled = resourceURL?.appendingPathComponent("server/bin.mjs"),
            fm.fileExists(atPath: bundled.path)
         {
             return bundled

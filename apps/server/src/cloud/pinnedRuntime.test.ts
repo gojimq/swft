@@ -1,6 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off - node:path.win32 stands in for a Windows host in one test.
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
+import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -10,7 +11,7 @@ import * as Path from "effect/Path";
 import * as Stream from "effect/Stream";
 import * as NodePath from "node:path";
 import * as TestClock from "effect/testing/TestClock";
-import { HttpClient, HttpClientError, HttpClientResponse } from "effect/http";
+import { FetchHttpClient, HttpClient, HttpClientError, HttpClientResponse } from "effect/http";
 import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
@@ -108,6 +109,177 @@ it.layer(NodeServices.layer)("ensurePinnedRuntimeInstalled", (it) => {
       assert.equal(yield* fs.readFileString(paths.sentinelPath), `${version}\n`);
       assert.isFalse(yield* fs.exists(path.join(paths.versionDir, "t3-runtime-archive")));
     }),
+  );
+
+  it.effect("downloads directly from public gojimq/swft GitHub Releases when no token is set", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-pinned-public-gh-" });
+      const checksums = yield* validChecksums;
+      const seen: Array<{ readonly url: string; readonly authorization: string | undefined }> = [];
+      const client = HttpClient.make((request) => {
+        seen.push({ url: request.url, authorization: request.headers["authorization"] });
+        const body = request.url.endsWith("/SHA256SUMS") ? checksums : archiveBytes;
+        return Effect.succeed(HttpClientResponse.fromWeb(request, new Response(body)));
+      });
+      const paths = yield* ensurePinnedRuntimeInstalled({
+        baseDir,
+        version,
+        fs,
+        path,
+        platform: "linux",
+        arch: "x64",
+        httpClient: client,
+        runner: extractingRunner(fs, path),
+        validate: () => Effect.void,
+      });
+      assert.equal(yield* fs.readFileString(paths.sentinelPath), `${version}\n`);
+      assert.deepEqual(seen, [
+        {
+          url: `https://github.com/gojimq/swft/releases/download/v${version}/SHA256SUMS`,
+          authorization: undefined,
+        },
+        {
+          url: `https://github.com/gojimq/swft/releases/download/v${version}/${archiveName}`,
+          authorization: undefined,
+        },
+      ]);
+    }),
+  );
+
+  it.effect(
+    "downloads private GitHub Release assets via API two-step redirect without leaking Authorization to S3",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-pinned-private-gh-" });
+        const checksums = yield* validChecksums;
+        const seen: Array<{
+          readonly url: string;
+          readonly authorization: string | undefined;
+          readonly accept: string | undefined;
+          readonly redirect: string | undefined;
+        }> = [];
+        const client = HttpClient.make((request, _url, _signal, fiber) => {
+          const requestInit = Context.getOrUndefined(fiber.context, FetchHttpClient.RequestInit);
+          seen.push({
+            url: request.url,
+            authorization: request.headers["authorization"],
+            accept: request.headers["accept"],
+            redirect: requestInit?.redirect,
+          });
+          if (
+            request.url === `https://api.github.com/repos/gojimq/swft/releases/tags/v${version}`
+          ) {
+            return Effect.succeed(
+              HttpClientResponse.fromWeb(
+                request,
+                new Response(
+                  JSON.stringify({
+                    assets: [
+                      {
+                        name: "SHA256SUMS",
+                        url: "https://api.github.com/repos/gojimq/swft/releases/assets/101",
+                      },
+                      {
+                        name: archiveName,
+                        url: "https://api.github.com/repos/gojimq/swft/releases/assets/202",
+                      },
+                    ],
+                  }),
+                  { headers: { "content-type": "application/json" } },
+                ),
+              ),
+            );
+          }
+          if (request.url === "https://api.github.com/repos/gojimq/swft/releases/assets/101") {
+            return Effect.succeed(
+              HttpClientResponse.fromWeb(
+                request,
+                new Response(null, {
+                  status: 302,
+                  headers: {
+                    location: "https://objects.githubusercontent.com/signed/checksums?sig=abc",
+                  },
+                }),
+              ),
+            );
+          }
+          if (request.url === "https://api.github.com/repos/gojimq/swft/releases/assets/202") {
+            return Effect.succeed(
+              HttpClientResponse.fromWeb(
+                request,
+                new Response(null, {
+                  status: 302,
+                  headers: {
+                    location: "https://objects.githubusercontent.com/signed/archive?sig=def",
+                  },
+                }),
+              ),
+            );
+          }
+          if (request.url === "https://objects.githubusercontent.com/signed/checksums?sig=abc") {
+            return Effect.succeed(HttpClientResponse.fromWeb(request, new Response(checksums)));
+          }
+          if (request.url === "https://objects.githubusercontent.com/signed/archive?sig=def") {
+            return Effect.succeed(HttpClientResponse.fromWeb(request, new Response(archiveBytes)));
+          }
+          return Effect.succeed(
+            HttpClientResponse.fromWeb(request, new Response("unexpected", { status: 404 })),
+          );
+        });
+
+        const paths = yield* ensurePinnedRuntimeInstalled({
+          baseDir,
+          version,
+          fs,
+          path,
+          platform: "linux",
+          arch: "x64",
+          httpClient: client,
+          githubToken: "ghp_secret_token",
+          runner: extractingRunner(fs, path),
+          validate: () => Effect.void,
+        });
+
+        assert.equal(yield* fs.readFileString(paths.sentinelPath), `${version}\n`);
+        // Release metadata must be fetched only once and shared between SHA256SUMS and archive.
+        assert.equal(seen.filter((entry) => entry.url.includes("/releases/tags/")).length, 1);
+        assert.deepEqual(seen, [
+          {
+            url: `https://api.github.com/repos/gojimq/swft/releases/tags/v${version}`,
+            authorization: "Bearer ghp_secret_token",
+            accept: "application/vnd.github+json",
+            redirect: undefined,
+          },
+          {
+            url: "https://api.github.com/repos/gojimq/swft/releases/assets/101",
+            authorization: "Bearer ghp_secret_token",
+            accept: "application/octet-stream",
+            redirect: "manual",
+          },
+          {
+            url: "https://objects.githubusercontent.com/signed/checksums?sig=abc",
+            authorization: undefined,
+            accept: undefined,
+            redirect: undefined,
+          },
+          {
+            url: "https://api.github.com/repos/gojimq/swft/releases/assets/202",
+            authorization: "Bearer ghp_secret_token",
+            accept: "application/octet-stream",
+            redirect: "manual",
+          },
+          {
+            url: "https://objects.githubusercontent.com/signed/archive?sig=def",
+            authorization: undefined,
+            accept: undefined,
+            redirect: undefined,
+          },
+        ]);
+      }),
   );
 
   it.effect("cleans up an interrupted download without reporting verification or extraction", () =>

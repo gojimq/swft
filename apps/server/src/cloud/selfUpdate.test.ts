@@ -2,6 +2,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import type { ManagedPolicyDocument } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import * as ConfigProvider from "effect/ConfigProvider";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -35,6 +36,7 @@ interface HarnessOptions {
   readonly requestUpdate?: ServiceLauncherClient.ServiceLauncherClient["Service"]["requestUpdate"];
   readonly desktopAppUpdate?: DesktopAppUpdate.DesktopAppUpdate["Service"];
   readonly policy?: ManagedPolicyDocument;
+  readonly env?: Readonly<Record<string, string>>;
 }
 
 const archiveBytes = new TextEncoder().encode("not really a tarball");
@@ -167,9 +169,10 @@ const makeHarness = Effect.fn("test.make_self_update_harness")(function* (
     Effect.provideService(HostProcess.Platform, "linux"),
     Effect.provideService(HostProcess.Architecture, "x64"),
     Effect.provide(
-      Layer.merge(
+      Layer.mergeAll(
         ServerConfig.layer({ ...config, mode: options.mode ?? "web" }),
         ManagedPolicy.layerTest(options.policy),
+        ConfigProvider.layer(ConfigProvider.fromEnv({ env: options.env ?? {} })),
       ),
     ),
   );
@@ -429,6 +432,116 @@ it.layer(NodeServices.layer)("server self update", (it) => {
         "A server update is already in progress.",
       );
     }),
+  );
+
+  it.effect("honors SWFT_RELEASE_BASE_URL over T3CODE_RELEASE_BASE_URL", () =>
+    Effect.gen(function* () {
+      const { selfUpdate, urls } = yield* makeHarness({
+        env: {
+          SWFT_RELEASE_BASE_URL: "https://swft-mirror.example/releases",
+          T3CODE_RELEASE_BASE_URL: "https://legacy-mirror.example/releases",
+        },
+      });
+      expect((yield* selfUpdate.update({ targetVersion: "1.1.0" })).updateId).toBe("launcher-id");
+      expect(urls).toEqual([
+        "https://swft-mirror.example/releases/v1.1.0/SHA256SUMS",
+        "https://swft-mirror.example/releases/v1.1.0/t3-1.1.0-linux-x64.tar.gz",
+      ]);
+    }),
+  );
+
+  it.effect(
+    "uses SWFT_GITHUB_TOKEN (falling back to GITHUB_TOKEN) for private-repo API downloads without leaking auth on redirect",
+    () =>
+      Effect.gen(function* () {
+        const digest = yield* Effect.promise(() => crypto.subtle.digest("SHA-256", archiveBytes));
+        const hex = Array.from(new Uint8Array(digest), (byte) =>
+          byte.toString(16).padStart(2, "0"),
+        ).join("");
+        const checksums = `${hex}  t3-1.1.0-linux-x64.tar.gz\n`;
+        const requests: Array<{ readonly url: string; readonly auth: string | undefined }> = [];
+        const privateClient = HttpClient.make((request) => {
+          requests.push({ url: request.url, auth: request.headers["authorization"] });
+          if (request.url === "https://api.github.com/repos/gojimq/swft/releases/tags/v1.1.0") {
+            return Effect.succeed(
+              HttpClientResponse.fromWeb(
+                request,
+                new Response(
+                  JSON.stringify({
+                    assets: [
+                      {
+                        name: "SHA256SUMS",
+                        url: "https://api.github.com/repos/gojimq/swft/releases/assets/1",
+                      },
+                      {
+                        name: "t3-1.1.0-linux-x64.tar.gz",
+                        url: "https://api.github.com/repos/gojimq/swft/releases/assets/2",
+                      },
+                    ],
+                  }),
+                ),
+              ),
+            );
+          }
+          if (request.url.endsWith("/assets/1")) {
+            return Effect.succeed(
+              HttpClientResponse.fromWeb(
+                request,
+                new Response(null, {
+                  status: 302,
+                  headers: { location: "https://s3.example.com/sha256sums?sig=1" },
+                }),
+              ),
+            );
+          }
+          if (request.url.endsWith("/assets/2")) {
+            return Effect.succeed(
+              HttpClientResponse.fromWeb(
+                request,
+                new Response(null, {
+                  status: 302,
+                  headers: { location: "https://s3.example.com/archive.tar.gz?sig=2" },
+                }),
+              ),
+            );
+          }
+          if (request.url.startsWith("https://s3.example.com/sha256sums")) {
+            return Effect.succeed(HttpClientResponse.fromWeb(request, new Response(checksums)));
+          }
+          return Effect.succeed(HttpClientResponse.fromWeb(request, new Response(archiveBytes)));
+        });
+
+        const { selfUpdate } = yield* makeHarness({
+          httpClient: privateClient,
+          env: {
+            SWFT_GITHUB_TOKEN: "ghp_swft_token",
+            GITHUB_TOKEN: "ghp_fallback_token",
+          },
+        });
+        expect((yield* selfUpdate.update({ targetVersion: "1.1.0" })).updateId).toBe("launcher-id");
+        expect(requests).toEqual([
+          {
+            url: "https://api.github.com/repos/gojimq/swft/releases/tags/v1.1.0",
+            auth: "Bearer ghp_swft_token",
+          },
+          {
+            url: "https://api.github.com/repos/gojimq/swft/releases/assets/1",
+            auth: "Bearer ghp_swft_token",
+          },
+          {
+            url: "https://s3.example.com/sha256sums?sig=1",
+            auth: undefined,
+          },
+          {
+            url: "https://api.github.com/repos/gojimq/swft/releases/assets/2",
+            auth: "Bearer ghp_swft_token",
+          },
+          {
+            url: "https://s3.example.com/archive.tar.gz?sig=2",
+            auth: undefined,
+          },
+        ]);
+      }),
   );
 });
 

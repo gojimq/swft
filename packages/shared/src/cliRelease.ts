@@ -3,10 +3,59 @@ import * as Schema from "effect/Schema";
 
 import { compareSemverVersions } from "./semver.ts";
 
-const CLI_RELEASE_REPOSITORY = "pingdotgg/t3code";
+export const CLI_RELEASE_REPOSITORY = "gojimq/swft";
 export const CLI_RELEASES_PAGE_URL = `https://github.com/${CLI_RELEASE_REPOSITORY}/releases`;
 export const CLI_RELEASE_CHECKSUMS_FILE = "SHA256SUMS";
 export const CLI_RELEASE_BASE_URL_ENV = "T3CODE_RELEASE_BASE_URL";
+export const SWFT_RELEASE_BASE_URL_ENV = "SWFT_RELEASE_BASE_URL";
+export const SWFT_GITHUB_TOKEN_ENV = "SWFT_GITHUB_TOKEN";
+
+export interface ParsedGitHubReleaseDownloadUrl {
+  readonly owner: string;
+  readonly repo: string;
+  readonly tag: string;
+  readonly assetName: string;
+}
+
+export function parseGitHubReleaseDownloadUrl(
+  url: string,
+): ParsedGitHubReleaseDownloadUrl | undefined {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return undefined;
+  }
+  if (parsed.protocol !== "https:" || parsed.hostname.toLowerCase() !== "github.com") {
+    return undefined;
+  }
+  const rawSegments = parsed.pathname.split("/").filter((segment) => segment.length > 0);
+  if (rawSegments.length !== 6 || rawSegments[2] !== "releases" || rawSegments[3] !== "download") {
+    return undefined;
+  }
+  try {
+    const owner = decodeURIComponent(rawSegments[0]!);
+    const repo = decodeURIComponent(rawSegments[1]!);
+    const tag = decodeURIComponent(rawSegments[4]!);
+    const assetName = decodeURIComponent(rawSegments[5]!);
+    if (!owner || !repo || !tag || !assetName) return undefined;
+    if (
+      owner === "." ||
+      owner === ".." ||
+      repo === "." ||
+      repo === ".." ||
+      tag === "." ||
+      tag === ".." ||
+      assetName === "." ||
+      assetName === ".."
+    ) {
+      return undefined;
+    }
+    return { owner, repo, tag, assetName };
+  } catch {
+    return undefined;
+  }
+}
 
 // Keep archive keys aligned with the Linux matrix, Windows ARM64 build, and cli_archive rows in release.yml,
 // and with the SSH runner's host check in packages/ssh/src/tunnel.ts.

@@ -27,6 +27,8 @@ struct AboutSettingsSection: View {
         VStack(alignment: .leading, spacing: 20) {
             identityCard
 
+            AboutUpdatesCard()
+
             SettingsSectionCard("Server") {
                 SettingsRow("Local server", description: serverStatusDescription) {
                     HStack(spacing: 10) {

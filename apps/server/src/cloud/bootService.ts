@@ -15,7 +15,11 @@ import { CliError } from "effect/cli";
 import { HttpClient } from "effect/http";
 import * as Schema from "effect/Schema";
 
-import { CLI_RELEASE_BASE_URL_ENV } from "@t3tools/shared/cliRelease";
+import {
+  CLI_RELEASE_BASE_URL_ENV,
+  SWFT_GITHUB_TOKEN_ENV,
+  SWFT_RELEASE_BASE_URL_ENV,
+} from "@t3tools/shared/cliRelease";
 
 import * as ProcessRunner from "../processRunner.ts";
 import { acquireServiceSelectionLock } from "./serviceSelectionLock.ts";
@@ -825,9 +829,20 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
   const arch = yield* HostProcess.Architecture;
   const uid = yield* HostProcess.UserId;
   const httpClient = yield* HttpClient.HttpClient;
-  const releaseBaseUrl = Option.getOrUndefined(
+  const swftReleaseBaseUrl = Option.getOrUndefined(
+    yield* Config.String(SWFT_RELEASE_BASE_URL_ENV).pipe(Config.option),
+  );
+  const cliReleaseBaseUrl = Option.getOrUndefined(
     yield* Config.String(CLI_RELEASE_BASE_URL_ENV).pipe(Config.option),
   );
+  const releaseBaseUrl = swftReleaseBaseUrl?.trim() || cliReleaseBaseUrl?.trim() || undefined;
+  const swftGithubToken = Option.getOrUndefined(
+    yield* Config.String(SWFT_GITHUB_TOKEN_ENV).pipe(Config.option),
+  );
+  const fallbackGithubToken = Option.getOrUndefined(
+    yield* Config.String("GITHUB_TOKEN").pipe(Config.option),
+  );
+  const githubToken = swftGithubToken?.trim() || fallbackGithubToken?.trim() || undefined;
   const homeDir = yield* Config.String(platform === "win32" ? "USERPROFILE" : "HOME").pipe(
     Config.withDefault(""),
   );
@@ -1305,6 +1320,7 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
       platform,
       arch,
       releaseBaseUrl,
+      githubToken,
       validate: (runtime) =>
         runner
           .run({

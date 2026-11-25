@@ -12,12 +12,33 @@ struct HomeView: View {
                 .swftBloom(fading: docked)
             VStack(spacing: 0) {
                 Spacer(minLength: SwftLayout.titlebarHeight)
-                Text("Hi \(model.home.greetingName), what are we building?")
-                    .font(SwftType.greeting)
-                    .foregroundStyle(SwftColor.textPrimary)
-                    .multilineTextAlignment(.center)
-                    .padding(.bottom, 28)
-                    .swftArrival(order: 0, departing: docked, departure: .up)
+                // Reserve only the resting greeting footprint so the composer stays pinned while
+                // the greeting rises for the update pill and slides back down when it collapses.
+                greetingText
+                    .hidden()
+                    .accessibilityHidden(true)
+                    .frame(maxWidth: SwftLayout.composerMaxWidth)
+                    .padding(.bottom, HomeUpdatePillMetrics.restingGap)
+                    .overlay(alignment: .bottom) {
+                        VStack(spacing: 0) {
+                            greetingText
+                                .padding(.bottom, HomeUpdatePillMetrics.greetingPadding)
+                                .swftArrival(order: 0, departing: docked, departure: .up)
+
+                            // Shares the composer's arrival beat so a pill present at launch adds no extra delay.
+                            HomeUpdatePillSlot(
+                                state: UpdateLogic.pillState(for: model.updates.phase),
+                                actions: HomeUpdatePillActions(
+                                    update: model.updates.startUpdate,
+                                    retry: model.updates.retryFailed,
+                                    continueLocal: model.updates.continueLocalUpdate,
+                                    dismiss: model.updates.dismiss
+                                )
+                            )
+                            .swftArrival(order: 1, departing: docked, departure: .up)
+                        }
+                        .fixedSize(horizontal: false, vertical: true)
+                    }
 
                 ComposerView(placeholder: "Ask Swft to build, fix or explain…", pickerOpensBelow: true)
                     .frame(maxWidth: SwftLayout.composerMaxWidth)
@@ -63,6 +84,13 @@ struct HomeView: View {
             .padding(.horizontal, 32)
         }
         .newThreadLaunchStage(docked: $docked)
+    }
+
+    private var greetingText: some View {
+        Text("Hi \(model.home.greetingName), what are we building?")
+            .font(SwftType.greeting)
+            .foregroundStyle(SwftColor.textPrimary)
+            .multilineTextAlignment(.center)
     }
 }
 

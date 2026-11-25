@@ -116,6 +116,29 @@ public final class KeychainCredentialStore: CredentialStore {
             throw CredentialStoreError.keychainStatus(status, operation: "delete")
         }
     }
+
+    // MARK: - GitHub Release Token Convenience
+
+    public static let githubReleaseTokenAccount = "github-release-token"
+
+    public static func readGitHubReleaseToken(
+        service: String = KeychainCredentialStore.defaultService
+    ) throws -> String? {
+        try KeychainCredentialStore(service: service).read(account: githubReleaseTokenAccount)
+    }
+
+    public static func saveGitHubReleaseToken(
+        _ token: String,
+        service: String = KeychainCredentialStore.defaultService
+    ) throws {
+        try KeychainCredentialStore(service: service).write(token, account: githubReleaseTokenAccount)
+    }
+
+    public static func deleteGitHubReleaseToken(
+        service: String = KeychainCredentialStore.defaultService
+    ) throws {
+        try KeychainCredentialStore(service: service).delete(account: githubReleaseTokenAccount)
+    }
 }
 
 /// Thread-safe in-memory credential store for unit tests, mock mode, and isolated runs.

@@ -22,6 +22,8 @@ import { HttpClient } from "effect/http";
 
 import {
   CLI_RELEASE_BASE_URL_ENV,
+  SWFT_GITHUB_TOKEN_ENV,
+  SWFT_RELEASE_BASE_URL_ENV,
   cliReleaseChannelOf,
   crossesReleaseTrack,
 } from "@t3tools/shared/cliRelease";
@@ -145,9 +147,21 @@ export const make = Effect.fn("cloud.server_self_update.make")(function* () {
   const arch = yield* HostProcess.Architecture;
   const httpClient = yield* HttpClient.HttpClient;
   const mirror = managedUpdateMirror(policy.document);
+  const swftReleaseBaseUrl = Option.getOrUndefined(
+    yield* Config.String(SWFT_RELEASE_BASE_URL_ENV).pipe(Config.option),
+  );
+  const cliReleaseBaseUrl = Option.getOrUndefined(
+    yield* Config.String(CLI_RELEASE_BASE_URL_ENV).pipe(Config.option),
+  );
   const releaseBaseUrl =
-    mirror?.feedUrl ??
-    Option.getOrUndefined(yield* Config.String(CLI_RELEASE_BASE_URL_ENV).pipe(Config.option));
+    mirror?.feedUrl ?? (swftReleaseBaseUrl?.trim() || cliReleaseBaseUrl?.trim() || undefined);
+  const swftGithubToken = Option.getOrUndefined(
+    yield* Config.String(SWFT_GITHUB_TOKEN_ENV).pipe(Config.option),
+  );
+  const fallbackGithubToken = Option.getOrUndefined(
+    yield* Config.String("GITHUB_TOKEN").pipe(Config.option),
+  );
+  const githubToken = swftGithubToken?.trim() || fallbackGithubToken?.trim() || undefined;
   const inFlight = yield* Ref.make(false);
 
   yield* pruneRuntimesOnStart({ baseDir: serverConfig.baseDir, managed: launcher.managed }).pipe(
@@ -224,6 +238,7 @@ export const make = Effect.fn("cloud.server_self_update.make")(function* () {
         platform,
         arch,
         releaseBaseUrl,
+        githubToken,
         requirePublishedRelease: mirror !== undefined,
         validate: (runtime) =>
           runStagedServicePreflight({
