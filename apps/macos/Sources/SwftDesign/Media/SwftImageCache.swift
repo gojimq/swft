@@ -30,15 +30,23 @@ public enum SwftImageReference: Hashable, Sendable {
 /// Resolves image references to bytes for the screen it is installed on (bound to that thread's environment).
 public struct SwftImageLoader: Sendable {
     public var scope: String
+    public var isCacheOnly: Bool
     public var fetch: @Sendable (SwftImageReference) async throws -> Data
 
     public init(scope: String, fetch: @escaping @Sendable (SwftImageReference) async throws -> Data) {
         self.scope = scope
+        self.isCacheOnly = false
+        self.fetch = fetch
+    }
+
+    private init(scope: String, isCacheOnly: Bool, fetch: @escaping @Sendable (SwftImageReference) async throws -> Data) {
+        self.scope = scope
+        self.isCacheOnly = isCacheOnly
         self.fetch = fetch
     }
 
     /// Only images already in `SwftImageCache` render; anything else shows its quiet fallback.
-    public static let cacheOnly = SwftImageLoader(scope: "") { _ in throw CocoaError(.fileReadNoSuchFile) }
+    public static let cacheOnly = SwftImageLoader(scope: "", isCacheOnly: true) { _ in throw CocoaError(.fileReadNoSuchFile) }
 }
 
 /// A clicked image, shown full size by the screen's lightbox.
@@ -131,6 +139,16 @@ public final class SwftImageCache {
         return image
     }
 
+    /// Loads `reference` through `loader` under its scoped cache key. `.cacheOnly` loaders return any cached image
+    /// without attempting a fetch or recording a failure on global keys.
+    public func load(_ reference: SwftImageReference, using loader: SwftImageLoader) async -> CGImage? {
+        let key = reference.cacheKey(scope: loader.scope)
+        if let image = image(for: key) { return image }
+        guard !loader.isCacheOnly else { return nil }
+        let fetch = loader.fetch
+        return await load(key) { try await fetch(reference) }
+    }
+
     public func retry(_ key: String) {
         failed.remove(key)
     }
@@ -170,20 +188,24 @@ public struct SwftCachedImage<Content: View>: View {
         self.content = content
     }
 
+    private struct LoadID: Hashable {
+        let key: String
+        let isCacheOnly: Bool
+    }
+
     public var body: some View {
         let key = reference.cacheKey(scope: loader.scope)
         content(phase(for: key))
-            .task(id: key) {
-                guard SwftImageCache.shared.image(for: key) == nil else { return }
-                let fetch = loader.fetch
-                let reference = reference
-                let image = await SwftImageCache.shared.load(key) { try await fetch(reference) }
+            .task(id: LoadID(key: key, isCacheOnly: loader.isCacheOnly)) {
+                guard !loader.isCacheOnly, SwftImageCache.shared.image(for: key) == nil else { return }
+                let image = await SwftImageCache.shared.load(reference, using: loader)
                 if image == nil { failedKey = key } else { settledKey = key }
             }
     }
 
     private func phase(for key: String) -> SwftImagePhase {
         if let image = SwftImageCache.shared.image(for: key) { return .success(image) }
+        if loader.isCacheOnly { return .failure }
         if failedKey == key || SwftImageCache.shared.hasFailed(key) { return .failure }
         _ = settledKey
         return .loading

@@ -7,10 +7,15 @@ public struct SwftImageLightbox: View {
     let onClose: () -> Void
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var shown = false
+    /// Holds an already-cached image across the lightbox's lifetime so an `NSCache` eviction mid-open cannot flicker.
+    @State private var retained: (key: String, image: CGImage)?
 
     public init(preview: SwftImagePreview, onClose: @escaping () -> Void) {
         self.preview = preview
         self.onClose = onClose
+        if let image = SwftImageCache.shared.image(for: preview.cacheKey) {
+            _retained = State(initialValue: (preview.cacheKey, image))
+        }
     }
 
     public var body: some View {
@@ -21,26 +26,9 @@ public struct SwftImageLightbox: View {
                 .onTapGesture(perform: close)
 
             VStack(spacing: 14) {
-                SwftCachedImage(preview.reference) { phase in
-                    switch phase {
-                    case .success(let image):
-                        Image(decorative: image, scale: 1)
-                            .resizable()
-                            .interpolation(.high)
-                            .aspectRatio(contentMode: .fit)
-                            .frame(maxWidth: CGFloat(image.width), maxHeight: CGFloat(image.height))
-                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                            .shadow(color: .black.opacity(0.35), radius: 30, y: 10)
-                    case .loading:
-                        ProgressView().controlSize(.regular).tint(.white)
-                    case .failure:
-                        Label("Image unavailable", systemImage: "photo")
-                            .font(SwftType.label)
-                            .foregroundStyle(.white.opacity(0.8))
-                    }
-                }
-                // Clicks on the image itself never fall through to the scrim.
-                .onTapGesture {}
+                lightboxImage
+                    // Clicks on the image itself never fall through to the scrim.
+                    .onTapGesture {}
 
                 if !preview.caption.isEmpty {
                     Text(preview.caption)
@@ -81,6 +69,46 @@ public struct SwftImageLightbox: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityAddTraits(.isModal)
+    }
+
+    @ViewBuilder
+    private var lightboxImage: some View {
+        if let image = resolvedCachedImage {
+            renderedImage(image)
+        } else {
+            SwftCachedImage(preview.reference) { phase in
+                switch phase {
+                case .success(let image):
+                    renderedImage(image)
+                case .loading:
+                    ProgressView().controlSize(.regular).tint(.white)
+                case .failure:
+                    Label("Image unavailable", systemImage: "photo")
+                        .font(SwftType.label)
+                        .foregroundStyle(.white.opacity(0.8))
+                }
+            }
+        }
+    }
+
+    private var resolvedCachedImage: CGImage? {
+        if let image = SwftImageCache.shared.image(for: preview.cacheKey) {
+            return image
+        }
+        if let retained, retained.key == preview.cacheKey {
+            return retained.image
+        }
+        return nil
+    }
+
+    private func renderedImage(_ image: CGImage) -> some View {
+        Image(decorative: image, scale: 1)
+            .resizable()
+            .interpolation(.high)
+            .aspectRatio(contentMode: .fit)
+            .frame(maxWidth: CGFloat(image.width), maxHeight: CGFloat(image.height))
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .shadow(color: .black.opacity(0.35), radius: 30, y: 10)
     }
 
     private func close() {

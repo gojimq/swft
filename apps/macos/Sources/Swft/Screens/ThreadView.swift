@@ -14,6 +14,11 @@ struct ThreadView: View {
     /// The image open in the lightbox, if any.
     @State private var imagePreview: SwftImagePreview?
 
+    init(detail: ThreadDetailState, initialImagePreview: SwftImagePreview? = nil) {
+        self.detail = detail
+        _imagePreview = State(initialValue: initialImagePreview)
+    }
+
     nonisolated static let topInset = SwftLayout.titlebarHeight + 24
 
     var body: some View {
@@ -93,8 +98,6 @@ struct ThreadView: View {
             coordinator: sendFlight,
             scrollPosition: $scrollPosition
         )
-        // Transcript, flight overlay and lightbox all resolve images through this thread's own environment.
-        .environment(\.swftImageLoader, model.imageLoader(forThreadID: detail.summary.id))
         .environment(\.swftImagePreviewAction, SwftImagePreviewAction { [binding = $imagePreview] preview in
             binding.wrappedValue = preview
         })
@@ -104,6 +107,8 @@ struct ThreadView: View {
                     .id(imagePreview.id)
             }
         }
+        // Transcript, flight overlay and lightbox all resolve images through this thread's own environment.
+        .environment(\.swftImageLoader, model.imageLoader(forThreadID: detail.summary.id))
     }
 
     private var composerBar: some View {

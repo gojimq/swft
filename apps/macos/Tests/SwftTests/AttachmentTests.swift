@@ -2,6 +2,7 @@ import AppKit
 import Foundation
 import SwftDesign
 import SwftKit
+import SwiftUI
 import Testing
 @testable import Swft
 
@@ -324,5 +325,162 @@ struct ComposerAttachmentTests {
         let aliased = try #require(SwftImageCache.shared.image(for: SwftImageReference.attachmentKey(promotedID)))
         #expect(aliased.width == 48)
         #expect(aliased.height == 24)
+    }
+}
+
+@Suite("Image lightbox and cache")
+@MainActor
+struct ImageLightboxTests {
+    private func solidGreenImage(width: Int = 160, height: Int = 120) throws -> (CGImage, Data) {
+        let space = try #require(CGColorSpace(name: CGColorSpace.sRGB))
+        let context = try #require(CGContext(
+            data: nil,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: 0,
+            space: space,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ))
+        context.setFillColor(CGColor(srgbRed: 0.05, green: 0.92, blue: 0.15, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        let image = try #require(context.makeImage())
+        let png = try #require(NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]))
+        return (image, png)
+    }
+
+    private func hostOffscreen<V: View>(_ view: V, size: CGSize = CGSize(width: 640, height: 480)) -> (NSWindow, NSHostingView<V>) {
+        SwftFonts.register()
+        let window = NSWindow(
+            contentRect: CGRect(origin: CGPoint(x: -4000, y: -4000), size: size),
+            styleMask: [.titled, .fullSizeContentView, .closable, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        let host = NSHostingView(rootView: view)
+        host.frame = CGRect(origin: .zero, size: size)
+        window.contentView = host
+        window.orderBack(nil)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.45))
+        return (window, host)
+    }
+
+    private func containsBrightGreenPixel(in view: NSView) throws -> Bool {
+        view.layoutSubtreeIfNeeded()
+        let rep = try #require(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+        view.cacheDisplay(in: view.bounds, to: rep)
+        let stepX = max(1, rep.pixelsWide / 80)
+        let stepY = max(1, rep.pixelsHigh / 80)
+        for y in stride(from: 0, to: rep.pixelsHigh, by: stepY) {
+            for x in stride(from: 0, to: rep.pixelsWide, by: stepX) {
+                guard let color = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
+                if color.greenComponent > 0.7 && color.redComponent < 0.3 && color.blueComponent < 0.3 {
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
+    private func accessibilityStrings(in root: Any) -> [String] {
+        var result: [String] = []
+        var visited = Set<ObjectIdentifier>()
+        var stack: [AnyObject] = [root as AnyObject]
+        while let current = stack.popLast() {
+            let id = ObjectIdentifier(current)
+            guard visited.insert(id).inserted else { continue }
+            if let element = current as? any NSAccessibilityProtocol {
+                if let label = element.accessibilityLabel(), !label.isEmpty { result.append(label) }
+                if let title = element.accessibilityTitle(), !title.isEmpty { result.append(title) }
+                if let value = element.accessibilityValue() as? String, !value.isEmpty { result.append(value) }
+                if let children = element.accessibilityChildren() {
+                    for child in children {
+                        stack.append(child as AnyObject)
+                    }
+                }
+            }
+            if let view = current as? NSView {
+                for subview in view.subviews {
+                    stack.append(subview)
+                }
+            }
+        }
+        return result
+    }
+
+    @Test func lightboxDisplaysThreadScopedImageViaPreviewCacheKey() throws {
+        let reference = SwftImageReference.source("/workspace/dog-\(UUID().uuidString).png")
+        let scope = "env-1:thr-dog"
+        let key = reference.cacheKey(scope: scope)
+        let (image, _) = try solidGreenImage()
+        SwftImageCache.shared.store(image, for: key, pinned: true)
+        defer { SwftImageCache.shared.unpin(key) }
+
+        let preview = SwftImagePreview(cacheKey: key, reference: reference, caption: "dog.png")
+        // Intentionally uses the default `.cacheOnly` loader so only `preview.cacheKey` can resolve the scoped image.
+        let (window, host) = hostOffscreen(
+            SwftImageLightbox(preview: preview, onClose: {})
+        )
+        defer { window.orderOut(nil) }
+
+        #expect(try containsBrightGreenPixel(in: host))
+        #expect(!accessibilityStrings(in: host).contains { $0.localizedCaseInsensitiveContains("Image unavailable") })
+    }
+
+    @Test func threadViewPropagatesImageLoaderIntoLightboxOverlay() throws {
+        let model = AppModel.mock()
+        let detail = MockData.threadDetail
+        let threadScope = model.imageLoader(forThreadID: detail.summary.id).scope
+        #expect(!threadScope.isEmpty)
+
+        let reference = SwftImageReference.source("/workspace/dog-\(UUID().uuidString).png")
+        let scopedKey = reference.cacheKey(scope: threadScope)
+        let (image, _) = try solidGreenImage()
+        SwftImageCache.shared.store(image, for: scopedKey, pinned: true)
+        defer { SwftImageCache.shared.unpin(scopedKey) }
+
+        // Force a miss on `preview.cacheKey` so the lightbox must resolve via ThreadView's inherited `swftImageLoader`.
+        let preview = SwftImagePreview(cacheKey: "evicted-\(UUID().uuidString)", reference: reference, caption: "dog.png")
+        let (window, host) = hostOffscreen(
+            ThreadView(detail: detail, initialImagePreview: preview)
+                .environment(model),
+            size: CGSize(width: 900, height: 680)
+        )
+        defer { window.orderOut(nil) }
+
+        #expect(try containsBrightGreenPixel(in: host))
+        #expect(!accessibilityStrings(in: host).contains { $0.localizedCaseInsensitiveContains("Image unavailable") })
+    }
+
+    @Test func cacheOnlyLoaderDoesNotPoisonGlobalKeys() async throws {
+        let (_, png) = try solidGreenImage(width: 64, height: 32)
+        let references: [SwftImageReference] = [
+            .attachment(id: "global-att-\(UUID().uuidString)", name: "dog.png", mimeType: "image/png"),
+            .source("https://example.com/dog-\(UUID().uuidString).png"),
+        ]
+        let realLoader = SwftImageLoader(scope: "env-1:thr-1") { _ in png }
+
+        for reference in references {
+            let key = reference.cacheKey(scope: realLoader.scope)
+            #expect(reference.cacheKey(scope: SwftImageLoader.cacheOnly.scope) == key)
+
+            let cacheOnlyResult = await SwftImageCache.shared.load(reference, using: .cacheOnly)
+            #expect(cacheOnlyResult == nil)
+            #expect(!SwftImageCache.shared.hasFailed(key))
+
+            let (window, _) = hostOffscreen(
+                SwftCachedImage(reference) { phase in
+                    if case .failure = phase { Text("unavailable") } else { Color.clear }
+                },
+                size: CGSize(width: 120, height: 80)
+            )
+            window.orderOut(nil)
+            #expect(!SwftImageCache.shared.hasFailed(key))
+
+            let loaded = await SwftImageCache.shared.load(reference, using: realLoader)
+            let decoded = try #require(loaded)
+            #expect(decoded.width == 64)
+            #expect(decoded.height == 32)
+        }
     }
 }
