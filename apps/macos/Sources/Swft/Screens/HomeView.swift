@@ -74,6 +74,7 @@ struct ComposerView: View {
     /// Home has room below the composer; a thread's composer sits at the bottom, so its picker opens above.
     var pickerOpensBelow = false
     @State private var triggerFrame: CGRect = .zero
+    @State private var pasteToken = UUID()
 
     var body: some View {
         @Bindable var model = model
@@ -82,6 +83,14 @@ struct ComposerView: View {
             text: $model.composerText,
             placeholder: placeholder,
             isBusy: composer.isBusy,
+            attachments: ComposerAttachmentHandlers(
+                items: model.composerAttachments.items,
+                onAdd: model.pickAttachments,
+                onRemove: model.removeComposerAttachment,
+                onDrop: { providers in
+                    AttachmentPreparer.loadSources(from: providers) { model.attach($0) }
+                }
+            ),
             onSend: model.send,
             onStop: model.stopActiveRun
         ) {
@@ -100,6 +109,12 @@ struct ComposerView: View {
                     .frame(height: 0, alignment: pickerOpensBelow ? .top : .bottom)
                     .transition(.swftPopover(reduceMotion: reduceMotion, opensBelow: pickerOpensBelow))
             }
+        }
+        .onAppear {
+            ComposerPasteRouter.activate(token: pasteToken, shouldHandle: { model.modelPicker == nil }) { model.attach($0) }
+        }
+        .onDisappear {
+            ComposerPasteRouter.deactivate(token: pasteToken)
         }
     }
 

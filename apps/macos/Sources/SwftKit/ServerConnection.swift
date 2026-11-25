@@ -71,7 +71,7 @@ public actor ServerConnection {
 
     private let credential: AuthCredential
     private let authClient: AuthClient
-    private let session: URLSession
+    let session: URLSession
     private let reconnectPolicy: ReconnectPolicy
     private let pingInterval: Duration
     private let livenessTimeout: Duration

@@ -29,6 +29,28 @@ public enum UserBubbleMetrics {
         let height = max(44, ceil(rect.height) + verticalPadding * 2)
         return CGSize(width: width, height: height)
     }
+
+    /// Attachment-only messages render no text pill.
+    public static func hasText(_ text: String) -> Bool {
+        !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// Estimated size of a whole user turn (`UserTurnContent`): its attachment strip stacked above the text pill.
+    public static func estimatedTurnSize(
+        text: String,
+        attachments: [TranscriptAttachment],
+        maxWidth: CGFloat,
+        aspectRatio: (TranscriptAttachment) -> CGFloat? = { _ in nil }
+    ) -> CGSize {
+        let strip = AttachmentMetrics.stripSize(for: attachments, maxWidth: max(44, maxWidth), aspectRatio: aspectRatio)
+        guard hasText(text) else { return strip }
+        let pill = estimatedSize(for: text, maxWidth: maxWidth)
+        guard !attachments.isEmpty else { return pill }
+        return CGSize(
+            width: max(strip.width, pill.width),
+            height: strip.height + AttachmentMetrics.stripToBubbleSpacing + pill.height
+        )
+    }
 }
 
 /// Constrains its child to `maxWidth` while hugging the child's tight intrinsic width for short messages.
@@ -56,6 +78,7 @@ private struct MaxWidthTightLayout: Layout {
 /// curve itself. Only this view re-renders per frame, so a flight never re-renders the transcript.
 public struct SendFlightOverlayBubble: View, Animatable {
     let text: String
+    let attachments: [TranscriptAttachment]
     let maxWidth: CGFloat
     let path: SendFlightPath
     nonisolated var progress: Double
@@ -65,8 +88,9 @@ public struct SendFlightOverlayBubble: View, Animatable {
         set { progress = newValue }
     }
 
-    public init(text: String, maxWidth: CGFloat, path: SendFlightPath, progress: Double) {
+    public init(text: String, attachments: [TranscriptAttachment] = [], maxWidth: CGFloat, path: SendFlightPath, progress: Double) {
         self.text = text
+        self.attachments = attachments
         self.maxWidth = maxWidth
         self.path = path
         self.progress = progress
@@ -74,18 +98,9 @@ public struct SendFlightOverlayBubble: View, Animatable {
 
     public var body: some View {
         let sample = path.sample(normalizedTime: progress)
+        // The same turn unit the transcript renders, so attachments and text lift out and land together.
         MaxWidthTightLayout(maxWidth: max(44, maxWidth)) {
-            Text(text)
-                .font(SwftType.body)
-                .foregroundStyle(SwftColor.textPrimary)
-                .lineSpacing(SwftType.bodyLineSpacing)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.horizontal, UserBubbleMetrics.horizontalPadding)
-                .padding(.vertical, UserBubbleMetrics.verticalPadding)
-                .background(
-                    RoundedRectangle(cornerRadius: UserBubbleMetrics.cornerRadius, style: .continuous)
-                        .fill(SwftColor.userBubble.opacity(sample.pillOpacity))
-                )
+            UserTurnContent(text: text, attachments: attachments, pillOpacity: sample.pillOpacity, interactive: false)
         }
         .scaleEffect(sample.scale, anchor: .bottomTrailing)
         .opacity(sample.opacity)

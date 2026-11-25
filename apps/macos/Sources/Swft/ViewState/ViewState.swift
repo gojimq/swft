@@ -1,4 +1,5 @@
 import Foundation
+import SwftDesign
 
 // Plain value types the screens render. The engineering track backs these with SwftKit data;
 // screens never see wire models directly.
@@ -282,6 +283,10 @@ struct ComposerState {
 enum MessageBlock: Hashable {
     case text(String)
     case code(language: String?, source: String)
+    /// A markdown image (`![alt](source)`) on its own block.
+    case image(alt: String, source: String)
+    /// Files and images the agent attached to its message.
+    case attachments([TranscriptAttachment])
 }
 
 struct ToolCallItem: Hashable {
@@ -293,6 +298,8 @@ struct ToolCallItem: Hashable {
     var status: Status
     var duration: TimeInterval?
     var output: String?
+    /// An image the tool looked at (e.g. a viewed screenshot), shown with its output.
+    var imagePath: String? = nil
 }
 
 struct ApprovalItem: Hashable {
@@ -323,11 +330,12 @@ struct ApprovalItem: Hashable {
 struct PendingUserMessage: Equatable, Sendable {
     let messageID: String
     let text: String
+    var attachments: [TranscriptAttachment] = []
 }
 
 struct TranscriptItem: Identifiable, Hashable {
     enum Kind: Hashable {
-        case user(String)
+        case user(String, attachments: [TranscriptAttachment] = [])
         case assistant(blocks: [MessageBlock], streaming: Bool)
         case toolCall(ToolCallItem)
         case approval(ApprovalItem)
@@ -383,7 +391,7 @@ struct WorkFold: Identifiable, Hashable {
 
 /// What the thread screen renders, after folding each turn's work.
 enum TranscriptRow: Identifiable, Hashable {
-    case user(id: String, text: String)
+    case user(id: String, text: String, attachments: [TranscriptAttachment] = [])
     case assistant(id: String, blocks: [MessageBlock], streaming: Bool)
     case work(WorkFold)
     case approval(id: String, ApprovalItem)
@@ -391,7 +399,7 @@ enum TranscriptRow: Identifiable, Hashable {
 
     var id: String {
         switch self {
-        case .user(let id, _), .assistant(let id, _, _), .approval(let id, _), .note(let id, _, _, _): id
+        case .user(let id, _, _), .assistant(let id, _, _), .approval(let id, _), .note(let id, _, _, _): id
         case .work(let fold): fold.id
         }
     }

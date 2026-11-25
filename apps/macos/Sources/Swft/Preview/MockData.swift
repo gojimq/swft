@@ -1,4 +1,6 @@
+import AppKit
 import Foundation
+import SwftDesign
 
 /// Mock view state for SwiftUI previews and `-SwftMock`/`-SwftScreen`/`-SwftAppearance` screenshot runs.
 enum MockData {
@@ -254,6 +256,63 @@ enum MockData {
         diffStat: "+142 −38",
         isRunning: true
     )
+
+    /// A settled turn with attachments both ways: a screenshot and a log from the user, an inline markdown image and an
+    /// attached chart from the agent. Their pixels are generated locally (`seedImageCache`), nothing is fetched.
+    @MainActor
+    static var attachmentsDetail: ThreadDetailState {
+        ThreadDetailState(
+            summary: threads[2],
+            items: [
+                .init(id: "m1", kind: .user("The environment picker clips on narrow windows — here’s what I see.", attachments: [
+                    TranscriptAttachment(id: "mock-shot", kind: .image, name: "Screenshot 2026-11-25 at 10.41.png", mimeType: "image/png", sizeBytes: 482_113),
+                    TranscriptAttachment(id: "mock-log", kind: .file, name: "environment-switch.log", mimeType: "text/plain", sizeBytes: 18_204),
+                ]), startedAt: at(0)),
+                .init(id: "m2", kind: .toolCall(.init(kind: .read, title: "Viewed", detail: "Screenshot 2026-11-25 at 10.41.png", status: .succeeded, duration: 0.2, output: nil)), startedAt: at(1), completedAt: at(1.2)),
+                .init(id: "m3", kind: .assistant(blocks: [
+                    .text("The chip’s label isn’t allowed to truncate, so it pushes the picker past the composer’s edge. Here’s the clipped state reproduced:"),
+                    .image(alt: "Clipped environment picker", source: mockImageDataURI),
+                    .text("I’ve attached a width sweep showing where it starts to clip."),
+                    .attachments([TranscriptAttachment(id: "mock-chart", kind: .image, name: "width-sweep.png", mimeType: "image/png", sizeBytes: 96_400)]),
+                ], streaming: false), startedAt: at(3), completedAt: at(6)),
+            ],
+            diffStat: nil
+        )
+    }
+
+    /// Generated stand-ins for the attachment fixtures above, pinned so they never need a server.
+    @MainActor
+    static func seedImageCache() {
+        let cache = SwftImageCache.shared
+        if let shot = gradientImage(width: 1440, height: 900, from: (0.82, 0.89, 0.99), to: (0.55, 0.68, 0.95)) {
+            cache.store(shot, for: SwftImageReference.attachmentKey("mock-shot"), pinned: true)
+        }
+        if let chart = gradientImage(width: 1200, height: 1200, from: (0.98, 0.9, 0.78), to: (0.93, 0.6, 0.45)) {
+            cache.store(chart, for: SwftImageReference.attachmentKey("mock-chart"), pinned: true)
+        }
+    }
+
+    static let mockImageDataURI: String = {
+        guard let image = gradientImage(width: 640, height: 280, from: (0.86, 0.95, 0.88), to: (0.45, 0.75, 0.6)) else { return "" }
+        let bitmap = NSBitmapImageRep(cgImage: image)
+        guard let png = bitmap.representation(using: .png, properties: [:]) else { return "" }
+        return "data:image/png;base64,\(png.base64EncodedString())"
+    }()
+
+    private static func gradientImage(width: Int, height: Int, from: (CGFloat, CGFloat, CGFloat), to: (CGFloat, CGFloat, CGFloat)) -> CGImage? {
+        guard let space = CGColorSpace(name: CGColorSpace.sRGB),
+              let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0, space: space, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue),
+              let gradient = CGGradient(colorsSpace: space, colors: [
+                  CGColor(srgbRed: from.0, green: from.1, blue: from.2, alpha: 1),
+                  CGColor(srgbRed: to.0, green: to.1, blue: to.2, alpha: 1),
+              ] as CFArray, locations: [0, 1])
+        else { return nil }
+        context.drawLinearGradient(gradient, start: .zero, end: CGPoint(x: width, y: height), options: [])
+        context.setFillColor(CGColor(gray: 1, alpha: 0.55))
+        let inset = CGFloat(min(width, height)) * 0.12
+        context.fill(CGRect(x: inset, y: inset, width: CGFloat(width) - inset * 2, height: CGFloat(height) * 0.22))
+        return context.makeImage()
+    }
 
     /// A live turn paused on an approval.
     static let approvalDetail = ThreadDetailState(

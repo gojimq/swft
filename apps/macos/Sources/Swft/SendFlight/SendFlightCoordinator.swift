@@ -10,6 +10,8 @@ struct ThreadSendEvent: Equatable, Sendable {
     let id: UUID
     let threadID: String
     let text: String
+    /// Sent attachments; they fly with the text as one turn unit.
+    let attachments: [TranscriptAttachment]
     /// The transcript row already showing this message (optimistic in-thread sends); nil for a handoff, whose first
     /// message row is bound when its screen appears.
     let optimisticItemID: String?
@@ -20,6 +22,7 @@ struct ThreadSendEvent: Equatable, Sendable {
         id: UUID = UUID(),
         threadID: String,
         text: String,
+        attachments: [TranscriptAttachment] = [],
         optimisticItemID: String? = nil,
         isHandoff: Bool = false,
         timestamp: Date = Date()
@@ -27,6 +30,7 @@ struct ThreadSendEvent: Equatable, Sendable {
         self.id = id
         self.threadID = threadID
         self.text = text
+        self.attachments = attachments
         self.optimisticItemID = optimisticItemID
         self.isHandoff = isHandoff
         self.timestamp = timestamp
@@ -39,6 +43,7 @@ struct ActiveSendFlight: Equatable, Sendable {
     let id: UUID
     let threadID: String
     let text: String
+    var attachments: [TranscriptAttachment] = []
     /// Where the bubble launches from; nil when the composer had not reported its frame yet (a handoff screen mounting),
     /// in which case the overlay follows the composer's live frame.
     let composerFrame: CGRect?
@@ -290,6 +295,7 @@ final class SendFlightCoordinator {
             id: event.id,
             threadID: event.threadID,
             text: event.text,
+            attachments: event.attachments,
             composerFrame: composerFrame.width > 0 && composerFrame.height > 0 ? composerFrame : nil,
             boundItemID: boundID
         )
@@ -385,7 +391,7 @@ final class SendFlightCoordinator {
     func landingFrame(for flight: ActiveSendFlight, topInset: CGFloat, bottomInset: CGFloat) -> CGRect {
         let viewport = resolvedViewportSize(for: flight)
         let maxWidth = SendFlightLogic.maxUserBubbleWidth(viewportWidth: viewport.width)
-        let size = boundBubbleFrame?.size ?? UserBubbleMetrics.estimatedSize(for: flight.text, maxWidth: maxWidth)
+        let size = boundBubbleFrame?.size ?? SendFlightLogic.estimatedTurnSize(text: flight.text, attachments: flight.attachments, maxWidth: maxWidth)
         return SendFlightLogic.landingFrame(
             viewportSize: viewport,
             topInset: topInset,
@@ -520,7 +526,7 @@ final class SendFlightCoordinator {
 
     private func lastUserRowID(in rows: [TranscriptRow], excluding excludedID: String? = nil) -> String? {
         for row in rows.reversed() {
-            if case .user(let id, _) = row, id != excludedID {
+            if case .user(let id, _, _) = row, id != excludedID {
                 return id
             }
         }

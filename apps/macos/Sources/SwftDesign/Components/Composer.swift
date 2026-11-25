@@ -1,31 +1,87 @@
 import SwiftUI
 
-/// The pill composer: multi-line field above a row of controls (+, accessories … picker, mic, send).
+/// Attachment wiring for `PillComposer`; `.none` hides the tray and leaves `+` inert.
+public struct ComposerAttachmentHandlers {
+    public var items: [ComposerAttachmentItem]
+    public var onAdd: (() -> Void)?
+    public var onRemove: (String) -> Void
+    /// Handles files or images dropped on the composer; returns whether the drop was accepted.
+    public var onDrop: (([NSItemProvider]) -> Bool)?
+
+    public init(
+        items: [ComposerAttachmentItem],
+        onAdd: (() -> Void)? = nil,
+        onRemove: @escaping (String) -> Void = { _ in },
+        onDrop: (([NSItemProvider]) -> Bool)? = nil
+    ) {
+        self.items = items
+        self.onAdd = onAdd
+        self.onRemove = onRemove
+        self.onDrop = onDrop
+    }
+
+    public static var none: ComposerAttachmentHandlers { ComposerAttachmentHandlers(items: []) }
+
+    /// Sendable with text or at least one uploaded attachment, and never while an upload is still in flight.
+    public static func canSend(text: String, items: [ComposerAttachmentItem]) -> Bool {
+        if items.contains(where: { $0.status == .uploading }) { return false }
+        let hasText = !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        return hasText || items.contains { $0.status == .ready }
+    }
+}
+
+/// The pill composer: staged attachments, a multi-line field, then a row of controls (+, accessories … picker, mic, send).
 public struct PillComposer<Leading: View, Trailing: View>: View {
     @Binding var text: String
     let placeholder: String
     var isBusy: Bool
+    let attachments: ComposerAttachmentHandlers
     let onSend: () -> Void
     let onStop: (() -> Void)?
     let leading: Leading
     let trailing: Trailing
     @FocusState private var focused: Bool
+    @State private var isDropTargeted = false
+    /// The tray keeps showing its last items while it rolls closed (they fade out at once on send).
+    @State private var trayItems: [ComposerAttachmentItem]
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    public init(text: Binding<String>, placeholder: String, isBusy: Bool = false, onSend: @escaping () -> Void, onStop: (() -> Void)? = nil, @ViewBuilder leading: () -> Leading, @ViewBuilder trailing: () -> Trailing) {
+    public init(
+        text: Binding<String>,
+        placeholder: String,
+        isBusy: Bool = false,
+        attachments: ComposerAttachmentHandlers = .none,
+        onSend: @escaping () -> Void,
+        onStop: (() -> Void)? = nil,
+        @ViewBuilder leading: () -> Leading,
+        @ViewBuilder trailing: () -> Trailing
+    ) {
         self._text = text
         self.placeholder = placeholder
         self.isBusy = isBusy
+        self.attachments = attachments
         self.onSend = onSend
         self.onStop = onStop
         self.leading = leading()
         self.trailing = trailing()
+        self._trayItems = State(initialValue: attachments.items)
     }
 
-    private var canSend: Bool { !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    private var canSend: Bool { ComposerAttachmentHandlers.canSend(text: text, items: attachments.items) }
+    private var hasAttachments: Bool { !attachments.items.isEmpty }
 
     public var body: some View {
-        VStack(alignment: .leading, spacing: ComposerPolish.verticalSpacing) {
+        // No stack spacing: a collapsed tray is zero-height, so each gap lives with the view below it.
+        VStack(alignment: .leading, spacing: 0) {
+            // Rolls open above the field when something is attached and back up once the tray empties.
+            SwftDisclosure(isExpanded: hasAttachments) {
+                ComposerAttachmentTray(items: hasAttachments ? attachments.items : trayItems, onRemove: attachments.onRemove)
+                    .opacity(hasAttachments ? 1 : 0)
+                    .padding(.horizontal, ComposerPolish.textHorizontalInset)
+                    .padding(.top, ComposerPolish.textTopInset)
+                    .padding(.bottom, 10)
+            }
+
             TextField(
                 "",
                 text: $text,
@@ -44,13 +100,16 @@ public struct PillComposer<Leading: View, Trailing: View>: View {
                 .padding(.top, ComposerPolish.textTopInset)
 
             HStack(spacing: ComposerPolish.controlsSpacing) {
-                IconButton("plus", help: "Attach files", size: ComposerPolish.controlButtonSize, tint: SwftColor.textPrimary)
+                IconButton("plus", help: "Attach files", size: ComposerPolish.controlButtonSize, tint: SwftColor.textPrimary) {
+                    attachments.onAdd?()
+                }
                 leading
                 Spacer(minLength: 8)
                 trailing
                 IconButton("mic", help: "Dictate", size: ComposerPolish.controlButtonSize, tint: SwftColor.textPrimary)
                 SendButton(state: isBusy ? .stop : (canSend ? .ready : .idle), action: isBusy ? (onStop ?? onSend) : onSend)
             }
+            .padding(.top, ComposerPolish.verticalSpacing)
         }
         .padding(.leading, ComposerPolish.contentLeadingPadding)
         .padding(.trailing, ComposerPolish.contentTrailingPadding)
@@ -58,10 +117,26 @@ public struct PillComposer<Leading: View, Trailing: View>: View {
         .padding(.bottom, ComposerPolish.contentBottomPadding)
         .frame(minHeight: ComposerPolish.minHeight, alignment: .top)
         .swftComposerGlass(in: shape)
+        .overlay {
+            // Quiet drop target: an accent ring and the faintest wash while files hover over the composer.
+            shape.strokeBorder(SwftColor.accent.opacity(isDropTargeted ? 0.75 : 0), lineWidth: 1.5)
+                .background(shape.fill(SwftColor.accent.opacity(isDropTargeted ? 0.04 : 0)))
+                .allowsHitTesting(false)
+        }
         .contentShape(shape)
         .onTapGesture { focused = true }
+        .onDrop(of: [.fileURL, .image], isTargeted: $isDropTargeted) { providers in
+            guard let onDrop = attachments.onDrop else { return false }
+            focused = true
+            return onDrop(providers)
+        }
+        .onChange(of: attachments.items) { _, items in
+            if !items.isEmpty { trayItems = items }
+        }
         // Grows/shrinks smoothly as lines are added or removed.
         .animation(SwftMotion.resolve(SwftMotion.spring, reduceMotion: reduceMotion), value: text.filter(\.isNewline).count)
+        .animation(SwftMotion.resolve(SwftMotion.quick, reduceMotion: reduceMotion), value: isDropTargeted)
+        .animation(SwftMotion.resolve(SwftMotion.quick, reduceMotion: reduceMotion), value: hasAttachments)
     }
 
     private var shape: RoundedRectangle {
@@ -70,8 +145,8 @@ public struct PillComposer<Leading: View, Trailing: View>: View {
 }
 
 extension PillComposer where Leading == EmptyView {
-    public init(text: Binding<String>, placeholder: String, isBusy: Bool = false, onSend: @escaping () -> Void, onStop: (() -> Void)? = nil, @ViewBuilder trailing: () -> Trailing) {
-        self.init(text: text, placeholder: placeholder, isBusy: isBusy, onSend: onSend, onStop: onStop, leading: { EmptyView() }, trailing: trailing)
+    public init(text: Binding<String>, placeholder: String, isBusy: Bool = false, attachments: ComposerAttachmentHandlers = .none, onSend: @escaping () -> Void, onStop: (() -> Void)? = nil, @ViewBuilder trailing: () -> Trailing) {
+        self.init(text: text, placeholder: placeholder, isBusy: isBusy, attachments: attachments, onSend: onSend, onStop: onStop, leading: { EmptyView() }, trailing: trailing)
     }
 }
 

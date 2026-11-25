@@ -18,7 +18,8 @@ struct WorkFoldView: View {
                 .accessibilityLabel(fold.title)
                 .accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
 
-            if isExpanded {
+            // Rolls height open and closed; the steps stay laid out at full size while the clip edge moves.
+            SwftDisclosure(isExpanded: isExpanded) {
                 VStack(alignment: .leading, spacing: 8) {
                     ForEach(fold.steps) { WorkStepRow(step: $0) }
                 }
@@ -29,7 +30,6 @@ struct WorkFoldView: View {
                     Rectangle().fill(SwftColor.borderSubtle).frame(width: 1).padding(.vertical, 8)
                 }
                 .padding(.leading, 2)
-                .transition(reduceMotion ? .opacity : .opacity.combined(with: .offset(y: -4)))
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -90,6 +90,7 @@ struct WorkFoldView: View {
             .font(.system(size: 8.5, weight: .semibold))
             .foregroundStyle(SwftColor.textTertiary)
             .rotationEffect(.degrees(isExpanded ? 90 : 0))
+            .animation(SwftMotion.resolve(SwftMotion.disclosure, reduceMotion: reduceMotion), value: isExpanded)
             .opacity(fold.isLive && !hovering && !isExpanded ? 0 : 1)
     }
 }
@@ -103,9 +104,10 @@ private struct WorkStepRow: View {
     var body: some View {
         switch step.kind {
         case .tool(let call):
-            VStack(alignment: .leading, spacing: 6) {
+            // No stack spacing: a collapsed disclosure is zero-height, so the gap lives inside it.
+            VStack(alignment: .leading, spacing: 0) {
                 Button {
-                    guard call.output != nil else { return }
+                    guard hasDetail(call) else { return }
                     withAnimation(SwftMotion.resolve(SwftMotion.disclosure, reduceMotion: reduceMotion)) { showsOutput.toggle() }
                 } label: {
                     HStack(alignment: .firstTextBaseline, spacing: 6) {
@@ -122,21 +124,30 @@ private struct WorkStepRow: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .help(call.output == nil ? "" : (showsOutput ? "Hide output" : "Show output"))
+                .help(!hasDetail(call) ? "" : (showsOutput ? "Hide output" : "Show output"))
 
-                if showsOutput, let output = call.output {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        Text(output)
-                            .font(SwftType.monoSmall)
-                            .foregroundStyle(SwftColor.textSecondary)
-                            .lineSpacing(2)
-                            .lineLimit(24)
-                            .textSelection(.enabled)
-                            .fixedSize()
-                            .padding(10)
+                // The output stays mounted through the collapse, so it rolls up instead of vanishing.
+                SwftDisclosure(isExpanded: showsOutput && hasDetail(call)) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        // A viewed image (e.g. a screenshot the agent opened) shows above its raw output.
+                        if let imagePath = call.imagePath {
+                            MessageImage(source: imagePath, alt: (imagePath as NSString).lastPathComponent)
+                        }
+                        if let output = call.output {
+                            ScrollView(.horizontal, showsIndicators: false) {
+                                Text(output)
+                                    .font(SwftType.monoSmall)
+                                    .foregroundStyle(SwftColor.textSecondary)
+                                    .lineSpacing(2)
+                                    .lineLimit(24)
+                                    .textSelection(.enabled)
+                                    .fixedSize()
+                                    .padding(10)
+                            }
+                            .background(RoundedRectangle(cornerRadius: SwftRadius.s, style: .continuous).fill(SwftColor.codeBackground))
+                        }
                     }
-                    .background(RoundedRectangle(cornerRadius: SwftRadius.s, style: .continuous).fill(SwftColor.codeBackground))
-                    .transition(reduceMotion ? .opacity : .opacity.combined(with: .offset(y: -4)))
+                    .padding(.top, 6)
                 }
             }
         case .thought(let text):
@@ -167,6 +178,10 @@ private struct WorkStepRow: View {
         case .note(let title, let message):
             QuietNote(title: title, message: message, isError: false)
         }
+    }
+
+    private func hasDetail(_ call: ToolCallItem) -> Bool {
+        call.output != nil || call.imagePath != nil
     }
 }
 

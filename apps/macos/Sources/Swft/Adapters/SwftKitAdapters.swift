@@ -1,5 +1,6 @@
 import Foundation
 import SwftKit
+import SwftDesign
 
 /// Pure adapter functions mapping SwftKit wire/store types onto plain UI view-state types.
 enum SwftAdapters {
@@ -510,7 +511,7 @@ enum SwftAdapters {
             }
         }
         for pending in pendingUserMessages where !echoedPendingIDs.contains(pending.messageID) {
-            items.append(TranscriptItem(id: pending.messageID, kind: .user(pending.text)))
+            items.append(TranscriptItem(id: pending.messageID, kind: .user(pending.text, attachments: pending.attachments)))
         }
 
         // Fallback: surface any pending approval RuntimeRequest not yet backed by a turn item.
@@ -553,6 +554,29 @@ enum SwftAdapters {
 
     static let workspacePreparationInput = "Preparing workspace"
 
+    /// Wire attachment → display attachment. Unknown attachment types render as files.
+    static func transcriptAttachment(from attachment: ChatAttachment) -> TranscriptAttachment {
+        let isImage = attachment.type == "image" && attachment.mimeType.lowercased().hasPrefix("image/")
+        return TranscriptAttachment(
+            id: attachment.id,
+            kind: isImage ? .image : .file,
+            name: attachment.name,
+            mimeType: attachment.mimeType,
+            sizeBytes: attachment.sizeBytes
+        )
+    }
+
+    /// Display attachment → wire attachment for a dispatch (the inverse of `transcriptAttachment(from:)`).
+    static func chatAttachment(from attachment: TranscriptAttachment) -> ChatAttachment {
+        ChatAttachment(
+            type: attachment.kind == .image ? "image" : "file",
+            id: attachment.id,
+            name: attachment.name,
+            mimeType: attachment.mimeType,
+            sizeBytes: attachment.sizeBytes
+        )
+    }
+
     static func transcriptItem(
         from item: TurnItem,
         requestsByID: [String: RuntimeRequest],
@@ -563,18 +587,16 @@ enum SwftAdapters {
 
         switch item.kind {
         case .userMessage(_, let text, _, let attachments, _, _):
-            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !trimmed.isEmpty {
-                return TranscriptItem(id: item.id, kind: .user(text))
-            }
-            if !attachments.isEmpty {
-                let names = attachments.map(\.name).joined(separator: ", ")
-                return TranscriptItem(id: item.id, kind: .user(names))
-            }
-            return nil
+            let hasText = !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            guard hasText || !attachments.isEmpty else { return nil }
+            // Text and attachments travel together; an attachment-only message has no text pill.
+            return TranscriptItem(id: item.id, kind: .user(hasText ? text : "", attachments: attachments.map(transcriptAttachment)))
 
-        case .assistantMessage(_, let text, let streaming, _, _, _):
-            let blocks = MarkdownBlockParser.parse(text)
+        case .assistantMessage(_, let text, let streaming, _, _, let attachments):
+            var blocks = MarkdownBlockParser.parse(text)
+            if !attachments.isEmpty {
+                blocks.append(.attachments(attachments.map(transcriptAttachment)))
+            }
             if blocks.isEmpty {
                 guard streaming else { return nil }
                 return TranscriptItem(id: item.id, kind: .assistant(blocks: [.text("")], streaming: true))
@@ -756,7 +778,8 @@ enum SwftAdapters {
                         detail: singleLinePreview(detail, fallback: toolName ?? "tool"),
                         status: status,
                         duration: duration,
-                        output: renderedOutput
+                        output: renderedOutput,
+                        imagePath: viewedImagePath?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
                     )
                 )
             )
@@ -993,6 +1016,24 @@ enum MarkdownBlockParser {
             }
         }
 
+        // Image syntax splits a prose line: text around it stays prose, the image becomes its own block.
+        func appendProse(_ line: String) {
+            let segments = MarkdownImageScanner.segments(in: line)
+            guard segments.contains(where: \.isImage) else {
+                proseLines.append(line)
+                return
+            }
+            for segment in segments {
+                switch segment {
+                case .text(let text):
+                    if !MarkdownImageScanner.isResidue(text) { proseLines.append(text) }
+                case .image(let alt, let source, _):
+                    flushProse()
+                    blocks.append(.image(alt: alt, source: source))
+                }
+            }
+        }
+
         for line in lines {
             if let fenceChar = openFenceChar {
                 if isClosingFence(line: line, char: fenceChar, minLength: openFenceLength) {
@@ -1010,7 +1051,7 @@ enum MarkdownBlockParser {
                 openFenceLength = opening.length
                 openFenceLanguage = opening.language
             } else {
-                proseLines.append(line)
+                appendProse(line)
             }
         }
 
@@ -1054,6 +1095,158 @@ enum MarkdownBlockParser {
         let fenceRun = trimmedLeading.prefix(while: { $0 == char })
         guard fenceRun.count >= minLength else { return false }
         return trimmedLeading.dropFirst(fenceRun.count).allSatisfy { $0 == " " || $0 == "\t" }
+    }
+}
+
+// MARK: - Markdown Images
+
+/// Finds `![alt](target)`, `![alt](<target with spaces>)` and `![alt](target "title")` in one prose line, skipping
+/// inline code spans and escaped `\![`. Incomplete syntax (mid-stream) stays text.
+enum MarkdownImageScanner {
+    enum Segment: Equatable {
+        case text(String)
+        case image(alt: String, source: String, title: String?)
+
+        var isImage: Bool { if case .image = self { true } else { false } }
+    }
+
+    static func segments(in line: String) -> [Segment] {
+        guard line.contains("![") else { return [.text(line)] }
+        let chars = Array(line)
+        var segments: [Segment] = []
+        var textStart = 0
+        var codeRun: Int?
+        var index = 0
+
+        while index < chars.count {
+            let char = chars[index]
+            if char == "\\" {
+                index += 2
+                continue
+            }
+            if char == "`" {
+                var run = 0
+                while index + run < chars.count && chars[index + run] == "`" { run += 1 }
+                if let open = codeRun {
+                    if open == run { codeRun = nil }
+                } else {
+                    codeRun = run
+                }
+                index += run
+                continue
+            }
+            if codeRun == nil, char == "!", index + 1 < chars.count, chars[index + 1] == "[",
+               let image = parseImage(chars, at: index)
+            {
+                if index > textStart { segments.append(.text(String(chars[textStart..<index]))) }
+                segments.append(.image(alt: image.alt, source: image.source, title: image.title))
+                index = image.end
+                textStart = index
+                continue
+            }
+            index += 1
+        }
+        if textStart < chars.count { segments.append(.text(String(chars[textStart...]))) }
+        return segments
+    }
+
+    /// Text left beside an extracted image that carries no prose of its own (whitespace, a bare list marker).
+    static func isResidue(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespaces)
+        if trimmed.isEmpty { return true }
+        if ["-", "*", "+", ">"].contains(trimmed) { return true }
+        if let last = trimmed.last, last == "." || last == ")", trimmed.dropLast().allSatisfy(\.isNumber), trimmed.count > 1 {
+            return true
+        }
+        return false
+    }
+
+    private struct ParsedImage {
+        let alt: String
+        let source: String
+        let title: String?
+        let end: Int
+    }
+
+    private static func parseImage(_ chars: [Character], at start: Int) -> ParsedImage? {
+        var index = start + 2
+        var depth = 1
+        var alt = ""
+        while index < chars.count {
+            let char = chars[index]
+            if char == "\\", index + 1 < chars.count {
+                alt.append(chars[index + 1])
+                index += 2
+                continue
+            }
+            if char == "[" { depth += 1 }
+            if char == "]" {
+                depth -= 1
+                if depth == 0 { break }
+            }
+            alt.append(char)
+            index += 1
+        }
+        guard depth == 0, index + 1 < chars.count, chars[index + 1] == "(" else { return nil }
+        index += 2
+        skipSpaces(chars, &index)
+        guard index < chars.count else { return nil }
+
+        var source = ""
+        if chars[index] == "<" {
+            index += 1
+            while index < chars.count, chars[index] != ">" {
+                source.append(chars[index])
+                index += 1
+            }
+            guard index < chars.count else { return nil }
+            index += 1
+        } else {
+            var parens = 0
+            while index < chars.count {
+                let char = chars[index]
+                if char.isWhitespace { break }
+                if char == "(" { parens += 1 }
+                if char == ")" {
+                    if parens == 0 { break }
+                    parens -= 1
+                }
+                source.append(char)
+                index += 1
+            }
+        }
+        source = source.trimmingCharacters(in: .whitespaces)
+        guard !source.isEmpty else { return nil }
+
+        skipSpaces(chars, &index)
+        var title: String?
+        if index < chars.count, let close = titleCloser(chars[index]) {
+            index += 1
+            var value = ""
+            while index < chars.count, chars[index] != close {
+                value.append(chars[index])
+                index += 1
+            }
+            guard index < chars.count else { return nil }
+            index += 1
+            title = value
+            skipSpaces(chars, &index)
+        }
+        guard index < chars.count, chars[index] == ")" else { return nil }
+        return ParsedImage(alt: alt.trimmingCharacters(in: .whitespaces), source: source, title: title, end: index + 1)
+    }
+
+    private static func titleCloser(_ char: Character) -> Character? {
+        switch char {
+        case "\"": "\""
+        case "'": "'"
+        case "(": ")"
+        default: nil
+        }
+    }
+
+    private static func skipSpaces(_ chars: [Character], _ index: inout Int) {
+        while index < chars.count, chars[index] == " " || chars[index] == "\t" { index += 1 }
     }
 }
 

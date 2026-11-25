@@ -279,6 +279,18 @@ enum SendFlightLogic {
         return frame
     }
 
+    /// Predicted size of a sent turn unit (attachments over the text pill), before the real one is measured. A lone
+    /// image already decoded into `SwftImageCache` (every composer attachment is) contributes its true aspect ratio.
+    @MainActor
+    static func estimatedTurnSize(text: String, attachments: [TranscriptAttachment], maxWidth: CGFloat) -> CGSize {
+        UserBubbleMetrics.estimatedTurnSize(
+            text: text,
+            attachments: attachments,
+            maxWidth: maxWidth,
+            aspectRatio: AttachmentMetrics.cachedAspectRatio
+        )
+    }
+
     /// Maximum horizontal width allowed for a `UserBubble` pill given the viewport width.
     static func maxUserBubbleWidth(viewportWidth: CGFloat) -> CGFloat {
         let columnWidth = min(max(0, viewportWidth - 64), SwftLayout.contentMaxWidth)
@@ -515,7 +527,7 @@ enum SendFlightLogic {
     static func turns(from rows: [TranscriptRow]) -> [TranscriptTurn] {
         var groups: [(id: String, rows: [TranscriptRow])] = []
         for row in rows {
-            if case .user(let id, _) = row {
+            if case .user(let id, _, _) = row {
                 groups.append((id: id, rows: [row]))
             } else if groups.isEmpty {
                 groups.append((id: row.id, rows: [row]))
@@ -529,7 +541,7 @@ enum SendFlightLogic {
     static func streamRoomItems(from rows: [TranscriptRow]) -> [StreamRoomItem] {
         rows.map { row in
             switch row {
-            case .user(let id, _):
+            case .user(let id, _, _):
                 StreamRoomItem(id: id, isUser: true)
             case .work(let fold):
                 StreamRoomItem(id: fold.id, isTurnFold: !fold.isLive)

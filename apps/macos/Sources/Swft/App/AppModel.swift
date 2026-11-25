@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import Observation
+import SwftDesign
 import SwftKit
 import SwiftUI
 
@@ -28,6 +29,8 @@ final class AppModel {
         }
     }
     var composerText = ""
+    /// Files and images staged in the composer; each uploads to the composer's environment as soon as it is attached.
+    let composerAttachments = ComposerAttachments()
     var composerMode: ComposerMode = .chat
     var selectedProjectID: String? {
         didSet { if selectedProjectID != nil { isNoProjectSelected = false } }
@@ -95,6 +98,7 @@ final class AppModel {
     private var optimisticSettlements: [ThreadSummary.ID: OptimisticSettlement] = [:]
     @ObservationIgnored private let defaults: UserDefaults?
     @ObservationIgnored private var recentProjections = RecentProjections()
+    @ObservationIgnored private var imageLoaders: [String: SwftImageLoader] = [:]
 
     private enum LaunchPhase: Equatable {
         case idle
@@ -162,6 +166,9 @@ final class AppModel {
             self.tunnelController = CloudflareTunnelController(baseDirectory: baseDir)
         }
         self.settings.attach(to: self)
+        self.composerAttachments.onError = { [weak self] message in
+            self?.actionError = message
+        }
         self.openProviderSettingsAction = { [weak self] harnessID in
             self?.openSettings(section: .providers, providerID: harnessID)
         }
@@ -195,9 +202,14 @@ final class AppModel {
             models: MockData.models,
             harnesses: MockData.harnesses,
             usageProviders: MockData.usageProviders,
-            details: [MockData.threadDetail.summary.id: MockData.threadDetail, MockData.approvalDetail.summary.id: MockData.approvalDetail],
+            details: [
+                MockData.threadDetail.summary.id: MockData.threadDetail,
+                MockData.approvalDetail.summary.id: MockData.approvalDetail,
+                MockData.attachmentsDetail.summary.id: MockData.attachmentsDetail,
+            ],
             defaultContextLabel: "Swft · main"
         )
+        MockData.seedImageCache()
         let model = AppModel(isMock: true, now: MockData.now, mockBacking: backing, defaults: defaults)
         model.selectedProjectID = MockData.swft.id
         model.selectedModelID = MockData.models.first?.id
@@ -809,14 +821,18 @@ final class AppModel {
            activeThreadStore.threadId == id,
            let projection = activeThreadStore.projection
         {
+            let pending = pendingUserMessages[id] ?? []
+            if !pending.isEmpty {
+                Self.aliasPromotedAttachmentPreviews(in: projection, matching: pending)
+            }
             return SwftAdapters.threadDetail(
                 from: projection,
                 summary: summary,
                 optimisticApprovals: optimisticApprovals,
-                pendingUserMessages: pendingUserMessages[id] ?? []
+                pendingUserMessages: pending
             )
         }
-        let pending = (pendingUserMessages[id] ?? []).map { TranscriptItem(id: $0.messageID, kind: .user($0.text)) }
+        let pending = (pendingUserMessages[id] ?? []).map { TranscriptItem(id: $0.messageID, kind: .user($0.text, attachments: $0.attachments)) }
         return ThreadDetailState(summary: summary, items: pending, diffStat: nil)
     }
 
@@ -1129,23 +1145,117 @@ final class AppModel {
         }
     }
 
+    // MARK: - Composer Attachments
+
+    /// The connection composer attachments upload to: the open thread's environment, else Home's target environment.
+    /// Nil in mock mode (attachments stay local).
+    var composerConnection: ServerConnection? {
+        if isMock { return nil }
+        if let threadID = selectedThreadID {
+            return owningEnvironment(forThreadID: threadID)?.connection ?? connection
+        }
+        if let id = activeComposerEnvironmentID, let environment = environmentRegistry.environment(id: id) {
+            return environment.connection
+        }
+        return environmentRegistry.localEnvironment?.connection ?? connection
+    }
+
+    /// One loader per thread and environment, reused across renders so the environment value stays stable.
+    func imageLoader(forThreadID id: String) -> SwftImageLoader {
+        if isMock {
+            return ThreadImageLoading.loader(threadID: id, environmentID: "mock", connection: nil)
+        }
+        let owner = owningEnvironment(forThreadID: id)
+        let key = "\(owner?.id ?? "local"):\(id)"
+        if let cached = imageLoaders[key] { return cached }
+        let loader = ThreadImageLoading.loader(threadID: id, environmentID: owner?.id, connection: owner?.connection ?? connection)
+        imageLoaders[key] = loader
+        return loader
+    }
+
+    func attach(_ sources: [AttachmentSource]) {
+        guard !sources.isEmpty else { return }
+        actionError = nil
+        composerAttachments.add(sources, connection: composerConnection)
+    }
+
+    func removeComposerAttachment(_ id: String) {
+        composerAttachments.remove(id)
+    }
+
+    /// When the server promotes `pending-<uuid>` uploads to `<thread>-<uuid>` on send/launch, alias the local preview
+    /// into `SwftImageCache` under the promoted id so the flight and transcript never flash a loading spinner.
+    static func aliasAttachmentPreviews(from pending: [TranscriptAttachment], to promoted: [ChatAttachment]) {
+        guard !pending.isEmpty, pending.count == promoted.count else { return }
+        for (local, server) in zip(pending, promoted) where local.id != server.id {
+            let sourceKey = SwftImageReference.attachmentKey(local.id)
+            let targetKey = SwftImageReference.attachmentKey(server.id)
+            if SwftImageCache.shared.image(for: targetKey) == nil,
+               let cached = SwftImageCache.shared.image(for: sourceKey)
+            {
+                SwftImageCache.shared.store(cached, for: targetKey)
+            }
+        }
+    }
+
+    static func aliasPromotedAttachmentPreviews(in projection: ThreadProjection, matching pending: [PendingUserMessage]) {
+        let pendingByID = Dictionary(uniqueKeysWithValues: pending.map { ($0.messageID, $0) })
+        for projected in projection.visibleTurnItems {
+            if case .userMessage(let messageID, _, _, let serverAttachments, _, _) = projected.item.kind,
+               let match = pendingByID[messageID]
+            {
+                aliasAttachmentPreviews(from: match.attachments, to: serverAttachments)
+            }
+        }
+    }
+
+    static func aliasLaunchedAttachmentPreviews(
+        pending: [TranscriptAttachment],
+        projection: ThreadProjection?
+    ) -> [TranscriptAttachment] {
+        guard !pending.isEmpty, let projection else { return pending }
+        for projected in projection.visibleTurnItems {
+            if case .userMessage(_, _, _, let serverAttachments, _, _) = projected.item.kind, !serverAttachments.isEmpty {
+                aliasAttachmentPreviews(from: pending, to: serverAttachments)
+                return serverAttachments.map(SwftAdapters.transcriptAttachment)
+            }
+        }
+        return pending
+    }
+
+    /// `+` in the composer: the system open panel, any files or images, several at once.
+    func pickAttachments() {
+        let panel = NSOpenPanel()
+        panel.title = "Attach Files"
+        panel.prompt = "Attach"
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = true
+        panel.resolvesAliases = true
+        guard panel.runModal() == .OK else { return }
+        attach(panel.urls.map(AttachmentSource.file))
+    }
+
     func send() {
         let text = composerText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
+        // Never dispatch an attachment whose bytes are still on their way up.
+        guard !composerAttachments.isUploading else { return }
+        guard !text.isEmpty || !composerAttachments.ready.isEmpty else { return }
 
         if isMock {
+            let attachments = composerAttachments.takeReady(keepPinned: true)
             if selectedThreadID == nil {
-                launchMockThread(text: text)
+                launchMockThread(text: text, attachments: attachments)
                 return
             }
             composerText = ""
             let id = selectedThreadID ?? MockData.threadDetail.summary.id
             var existing = detail(for: id) ?? MockData.threadDetail
             let itemID = UUID().uuidString
-            existing.items.append(TranscriptItem(id: itemID, kind: .user(text)))
+            existing.items.append(TranscriptItem(id: itemID, kind: .user(text, attachments: attachments)))
             mockBacking?.details[id] = existing
             if selectedThreadID != nil {
-                latestThreadSend = ThreadSendEvent(threadID: id, text: text, optimisticItemID: itemID)
+                latestThreadSend = ThreadSendEvent(threadID: id, text: text, attachments: attachments, optimisticItemID: itemID)
             }
             destination = .thread(id)
             return
@@ -1159,6 +1269,12 @@ final class AppModel {
             return
         }
 
+        let attachmentConnection = composerConnection
+        guard composerAttachments.readyAttachments(for: attachmentConnection) != nil else {
+            actionError = "These attachments were uploaded to another environment. Remove them and attach again."
+            return
+        }
+
         if let threadID = selectedThreadID,
            let threadStore = activeThreadStore,
            threadStore.threadId == threadID
@@ -1166,22 +1282,29 @@ final class AppModel {
             let selection = selectedModel.map {
                 SwftAdapters.modelSelection(from: $0, reasoningChoiceId: selectedReasoningChoice?.id)
             }
+            let attachments = composerAttachments.takeReady(keepPinned: false)
             // The row appears on this frame (not after the server's echo), so the send flight and the scroll have
             // their real landing geometry from the start.
             let messageID = UUID().uuidString
-            pendingUserMessages[threadID, default: []].append(PendingUserMessage(messageID: messageID, text: text))
-            let sendEvent = ThreadSendEvent(threadID: threadID, text: text, optimisticItemID: messageID)
+            pendingUserMessages[threadID, default: []].append(PendingUserMessage(messageID: messageID, text: text, attachments: attachments))
+            let sendEvent = ThreadSendEvent(threadID: threadID, text: text, attachments: attachments, optimisticItemID: messageID)
             latestThreadSend = sendEvent
             composerText = ""
             actionError = nil
             isSubmitting = true
             Task {
                 do {
-                    _ = try await threadStore.sendMessage(text: text, messageId: messageID, modelSelection: selection)
+                    _ = try await threadStore.sendMessage(
+                        text: text,
+                        messageId: messageID,
+                        modelSelection: selection,
+                        attachments: attachments.map(SwftAdapters.chatAttachment)
+                    )
                 } catch {
                     self.pendingUserMessages[threadID]?.removeAll { $0.messageID == messageID }
                     self.failedThreadSendID = sendEvent.id
                     if self.composerText.isEmpty { self.composerText = text }
+                    self.composerAttachments.restore(attachments, connection: attachmentConnection)
                     self.actionError = error.localizedDescription
                 }
                 self.isSubmitting = false
@@ -1210,7 +1333,8 @@ final class AppModel {
         )
         let provider = launchStore.provider(for: modelOption.instanceId)
         let runtimeMode = Self.resolveRuntimeMode(for: provider, preferred: settings.serverSettings?.defaultRuntimeMode)
-        let initialTitle = Self.initialThreadTitle(from: text)
+        let attachments = composerAttachments.takeReady(keepPinned: false)
+        let initialTitle = Self.initialThreadTitle(from: text.isEmpty ? (attachments.first?.name ?? "Attachment") : text)
 
         composerText = ""
         actionError = nil
@@ -1228,9 +1352,15 @@ final class AppModel {
                     runtimeMode: runtimeMode,
                     interactionMode: .default,
                     workspaceStrategy: .root(),
-                    initialMessage: LaunchThreadInitialMessage(text: text)
+                    initialMessage: LaunchThreadInitialMessage(text: text, attachments: attachments.map(SwftAdapters.chatAttachment))
                 )
                 let result = try await launchStore.launchThread(input)
+                // The server promotes `pending-<uuid>` uploads to `<thread>-<uuid>` on launch; carry the cached local
+                // preview across so the flight and landing never flash a spinner.
+                let handoffAttachments = Self.aliasLaunchedAttachmentPreviews(
+                    pending: attachments,
+                    projection: result.projection
+                )
                 // Wait for Home's composer to dock; if the user moved on meanwhile, leave them where they are.
                 guard await self.newThread.awaitHandoff(token: launchToken, threadID: result.threadId) else {
                     self.isSubmitting = false
@@ -1243,7 +1373,7 @@ final class AppModel {
                     on: launchConnection,
                     initialProjection: result.projection
                 )
-                self.latestThreadSend = ThreadSendEvent(threadID: result.threadId, text: text, isHandoff: true)
+                self.latestThreadSend = ThreadSendEvent(threadID: result.threadId, text: text, attachments: handoffAttachments, isHandoff: true)
                 self.visitPolicy.selectThread(result.threadId)
                 self.visitTimerTask?.cancel()
                 self.visitTimerTask = nil
@@ -1251,6 +1381,7 @@ final class AppModel {
             } catch {
                 self.newThread.fail(token: launchToken)
                 if self.composerText.isEmpty { self.composerText = text }
+                self.composerAttachments.restore(attachments, connection: attachmentConnection)
                 self.actionError = error.localizedDescription
             }
             self.isSubmitting = false
@@ -1259,16 +1390,17 @@ final class AppModel {
 
     /// Mock Home send: a new thread row lands in the inbox, Home hands off once the composer docks, and a "generated"
     /// title replaces the first-message title a moment later (as the server's title generation would).
-    private func launchMockThread(text: String) {
+    private func launchMockThread(text: String, attachments: [TranscriptAttachment] = []) {
         guard mockBacking != nil else { return }
         composerText = ""
+        let titleSource = text.isEmpty ? (attachments.first?.name ?? "Attachment") : text
         let created: ThreadDetailState
         if selectedProject == nil {
-            created = makeMockNoProjectThread(text: text)
+            created = makeMockNoProjectThread(text: text, attachments: attachments)
         } else {
             let summary = ThreadSummary(
                 id: "mock-\(UUID().uuidString.prefix(8))",
-                title: Self.initialThreadTitle(from: text),
+                title: Self.initialThreadTitle(from: titleSource),
                 project: selectedProject,
                 location: .branch("main"),
                 provider: selectedModel?.provider ?? .claude,
@@ -1276,7 +1408,7 @@ final class AppModel {
                 activity: .idle,
                 updatedAt: now
             )
-            created = ThreadDetailState(summary: summary, items: [TranscriptItem(id: UUID().uuidString, kind: .user(text))], diffStat: nil)
+            created = ThreadDetailState(summary: summary, items: [TranscriptItem(id: UUID().uuidString, kind: .user(text, attachments: attachments))], diffStat: nil)
         }
         let id = created.summary.id
         mockBacking?.threads.insert(created.summary, at: 0)
@@ -1285,11 +1417,11 @@ final class AppModel {
         Task {
             guard await self.newThread.awaitHandoff(token: token, threadID: id) else { return }
             self.destination = .thread(id)
-            self.latestThreadSend = ThreadSendEvent(threadID: id, text: text, isHandoff: true)
+            self.latestThreadSend = ThreadSendEvent(threadID: id, text: text, attachments: attachments, isHandoff: true)
         }
         Task {
             try? await Task.sleep(for: .seconds(1.6))
-            self.renameMockThread(id, to: MockData.generatedTitle(for: text))
+            self.renameMockThread(id, to: MockData.generatedTitle(for: titleSource))
         }
     }
 

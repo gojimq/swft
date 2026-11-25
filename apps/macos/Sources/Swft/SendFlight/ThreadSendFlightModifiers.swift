@@ -42,6 +42,7 @@ private struct SendFlightFlyer: View {
         let path = SendFlightPath.make(composerFrame: coordinator.launchFrame(for: flight), targetFrame: target)
         SendFlightOverlayBubble(
             text: flight.text,
+            attachments: flight.attachments,
             maxWidth: coordinator.maxBubbleWidth(for: flight),
             path: path,
             progress: flight.pinnedProgress ?? progress
@@ -99,7 +100,7 @@ struct SendFlightTurnSection<RowContent: View>: View {
     private var effectiveReduceMotion: Bool { reduceMotion || forceReduceMotion }
 
     @ViewBuilder private func rowView(_ row: TranscriptRow, held: Bool) -> some View {
-        if case .user(let id, _) = row {
+        if case .user(let id, _, _) = row {
             let hidden = coordinator.isBubbleHiddenForFlight(rowID: id, in: detail, pendingRowID: pendingFlightRowID)
             rowContent(row)
                 .sendFlightBubbleTarget(id: hidden ? id : nil)

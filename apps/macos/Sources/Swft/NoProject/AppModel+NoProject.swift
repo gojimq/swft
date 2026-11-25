@@ -89,11 +89,11 @@ extension AppModel {
         }
     }
 
-    func makeMockNoProjectThread(text: String) -> ThreadDetailState {
+    func makeMockNoProjectThread(text: String, attachments: [TranscriptAttachment] = []) -> ThreadDetailState {
         let id = "mock-noproject-\(UUID().uuidString)"
         let summary = ThreadSummary(
             id: id,
-            title: NoProjectLogic.initialThreadTitle(from: text),
+            title: NoProjectLogic.initialThreadTitle(from: text.isEmpty ? (attachments.first?.name ?? "Attachment") : text),
             project: nil,
             location: .host("Local"),
             provider: selectedModel?.provider ?? .claude,
@@ -103,7 +103,7 @@ extension AppModel {
         )
         return ThreadDetailState(
             summary: summary,
-            items: [TranscriptItem(id: UUID().uuidString, kind: .user(text), startedAt: now)],
+            items: [TranscriptItem(id: UUID().uuidString, kind: .user(text, attachments: attachments), startedAt: now)],
             diffStat: nil
         )
     }

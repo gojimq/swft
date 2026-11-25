@@ -11,6 +11,8 @@ struct ThreadView: View {
     /// Rows animate in only once the transcript has content; its first population (or a snapshot arriving after a
     /// thread switch) lands in place instead of every row rising at once.
     @State private var populated = false
+    /// The image open in the lightbox, if any.
+    @State private var imagePreview: SwftImagePreview?
 
     nonisolated static let topInset = SwftLayout.titlebarHeight + 24
 
@@ -91,6 +93,17 @@ struct ThreadView: View {
             coordinator: sendFlight,
             scrollPosition: $scrollPosition
         )
+        // Transcript, flight overlay and lightbox all resolve images through this thread's own environment.
+        .environment(\.swftImageLoader, model.imageLoader(forThreadID: detail.summary.id))
+        .environment(\.swftImagePreviewAction, SwftImagePreviewAction { [binding = $imagePreview] preview in
+            binding.wrappedValue = preview
+        })
+        .overlay {
+            if let imagePreview {
+                SwftImageLightbox(preview: imagePreview) { self.imagePreview = nil }
+                    .id(imagePreview.id)
+            }
+        }
     }
 
     private var composerBar: some View {
@@ -138,8 +151,8 @@ struct ThreadView: View {
 
     @ViewBuilder private func row(_ row: TranscriptRow) -> some View {
         switch row {
-        case .user(_, let text):
-            UserBubble(text).padding(.vertical, SendFlightLogic.userRowVerticalPadding)
+        case .user(_, let text, let attachments):
+            UserBubble(text, attachments: attachments).padding(.vertical, SendFlightLogic.userRowVerticalPadding)
         case .assistant(_, let blocks, let streaming):
             AssistantMessage {
                 ForEach(Array(blocks.enumerated()), id: \.offset) { index, block in
@@ -148,6 +161,11 @@ struct ThreadView: View {
                         MessageText(text, streaming: streaming && index == blocks.count - 1)
                     case .code(let language, let source):
                         CodeBlock(source, language: language)
+                    case .image(let alt, let source):
+                        MessageImage(source: source, alt: alt)
+                    case .attachments(let attachments):
+                        AttachmentStrip(attachments, trailing: false)
+                            .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
             }

@@ -55,8 +55,8 @@ enum TranscriptLayout {
 
         for (index, item) in turn.enumerated() {
             switch item.kind {
-            case .user(let text):
-                rows.append(.user(id: item.id, text: text))
+            case .user(let text, let attachments):
+                rows.append(.user(id: item.id, text: text, attachments: attachments))
             case .assistant(let blocks, let streaming):
                 if index == answerIndex {
                     rows.append(.assistant(id: item.id, blocks: blocks, streaming: streaming))

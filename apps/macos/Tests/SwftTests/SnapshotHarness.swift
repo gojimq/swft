@@ -36,6 +36,13 @@ struct Snapshots {
     }
 
     @Test(arguments: ["light", "dark"])
+    func attachments(appearance: String) throws {
+        let model = AppModel.mock()
+        model.destination = .thread(MockData.attachmentsDetail.summary.id)
+        try Self.capture(model, appearance: appearance, name: "attachments-\(appearance)")
+    }
+
+    @Test(arguments: ["light", "dark"])
     func home(appearance: String) throws {
         try Self.capture(AppModel.mock(), appearance: appearance, name: "home-\(appearance)")
     }

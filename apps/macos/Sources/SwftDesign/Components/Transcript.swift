@@ -1,25 +1,22 @@
 import AppKit
 import SwiftUI
 
-/// Right-aligned user message: a plain soft-grey bubble with a large radius, like the reference. Nothing attached.
+/// Right-aligned user message: its attachments above a plain soft-grey bubble with a large radius, like the reference.
+/// The whole unit (attachments and text) is the send-flight landing surface.
 public struct UserBubble: View {
     let text: String
-    public init(_ text: String) { self.text = text }
+    let attachments: [TranscriptAttachment]
 
-    /// One line of text sits in a 44pt-tall bubble; derive padding from this font's natural line height.
-    private static let verticalPadding = max(8, (44 - SwftFonts.lineHeight(SwftType.bodySize)) / 2)
+    public init(_ text: String, attachments: [TranscriptAttachment] = []) {
+        self.text = text
+        self.attachments = attachments
+    }
 
     public var body: some View {
         HStack {
-            Spacer(minLength: 80)
-            Text(text)
-                .font(SwftType.body)
-                .foregroundStyle(SwftColor.textPrimary)
-                .lineSpacing(SwftType.bodyLineSpacing)
+            Spacer(minLength: UserBubbleMetrics.leadingSpacerMinLength)
+            UserTurnContent(text: text, attachments: attachments)
                 .textSelection(.enabled)
-                .padding(.horizontal, 18)
-                .padding(.vertical, Self.verticalPadding)
-                .background(RoundedRectangle(cornerRadius: 22, style: .continuous).fill(SwftColor.userBubble))
                 .sendFlightBubbleAnchor()
         }
     }
