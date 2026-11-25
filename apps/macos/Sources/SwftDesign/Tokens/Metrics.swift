@@ -52,8 +52,26 @@ public enum SwftMotion {
     /// Selection pill gliding between rows.
     public static let glide = Animation.spring(response: 0.36, dampingFraction: 0.82)
 
+    /// Popover entrance and exit: critically damped (no overshoot) so text lands once and never wobbles.
+    public static let popoverDamping: Double = 1
+    public static let popover = Animation.spring(response: 0.24, dampingFraction: popoverDamping)
+    /// Scale a popover grows from; kept close to 1 so glyphs barely resize while it fades in.
+    public static let popoverScale: CGFloat = 0.97
+    public static let popoverOffset: CGFloat = 4
+
     public static func resolve(_ animation: Animation, reduceMotion: Bool) -> Animation {
         reduceMotion ? .easeInOut(duration: 0.18) : animation
+    }
+
+    // Tactile press: down is instant-feeling, release springs back.
+    public static func pressAnimation(isPressed: Bool, reduceMotion: Bool) -> Animation {
+        if reduceMotion { return .easeOut(duration: 0.1) }
+        return isPressed ? snap : spring
+    }
+
+    /// Scale while pressed; Reduce Motion keeps controls still and relies on the pressed fill alone.
+    public static func pressScale(isPressed: Bool, scale: CGFloat, reduceMotion: Bool) -> CGFloat {
+        isPressed && !reduceMotion ? scale : 1
     }
 }
 
@@ -66,6 +84,15 @@ extension AnyTransition {
     /// Pops in from slightly smaller; crossfade only under Reduce Motion.
     public static func swftPop(reduceMotion: Bool, scale: CGFloat = 0.9) -> AnyTransition {
         reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: scale))
+    }
+
+    /// A floating panel growing out of its trigger's corner; `opensBelow` panels drop down, others rise up.
+    public static func swftPopover(reduceMotion: Bool, opensBelow: Bool) -> AnyTransition {
+        if reduceMotion { return .opacity }
+        let anchor: UnitPoint = opensBelow ? .topTrailing : .bottomTrailing
+        return .opacity
+            .combined(with: .scale(scale: SwftMotion.popoverScale, anchor: anchor))
+            .combined(with: .offset(y: opensBelow ? -SwftMotion.popoverOffset : SwftMotion.popoverOffset))
     }
 }
 

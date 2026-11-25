@@ -105,7 +105,7 @@ public struct AccentDot: View {
     }
 }
 
-/// The rounded floating menu panel the picker lives in (Gemini's menu surface).
+/// The rounded floating menu panel the picker lives in: frosted interactive Liquid Glass like the composer.
 public struct PickerPanelSurface<Content: View>: View {
     let content: Content
 
@@ -114,11 +114,17 @@ public struct PickerPanelSurface<Content: View>: View {
     public var body: some View {
         let shape = RoundedRectangle(cornerRadius: SwftRadius.menu, style: .continuous)
         content
-            .background(shape.fill(SwftColor.menuSurface))
             .clipShape(shape)
-            .overlay(shape.strokeBorder(SwftColor.borderSubtle))
-            .shadow(color: SwftColor.shadow.opacity(1.4), radius: 22, y: 8)
-            .shadow(color: SwftColor.shadow, radius: 2, y: 1)
+            .swftPickerGlass(in: shape)
+    }
+}
+
+/// Translucent hairline between the picker's sections.
+public struct PickerDivider: View {
+    public init() {}
+
+    public var body: some View {
+        Rectangle().fill(PickerPolish.divider).frame(height: 1)
     }
 }
 
@@ -144,6 +150,8 @@ public struct PickerSearchField: View {
                 .font(SwftType.label)
                 .foregroundStyle(SwftColor.textPrimary)
                 .focused(focus)
+                // Pin the line box so AppKit's field editor taking over on focus can't nudge the baseline.
+                .frame(height: 18)
                 .accessibilityLabel(placeholder)
         }
         .padding(.horizontal, 16)
@@ -262,9 +270,9 @@ public struct PickerRail: View {
                     .frame(width: 36, height: 36)
                     .background {
                         ZStack {
-                            if hovering && !selected { shape.fill(SwftColor.hover) }
+                            if hovering && !selected { shape.fill(PickerPolish.hoverFill) }
                             if selected {
-                                shape.fill(SwftColor.accentSoft).matchedGeometryEffect(id: "rail.selection", in: namespace)
+                                shape.fill(PickerPolish.railSelection).matchedGeometryEffect(id: "rail.selection", in: namespace)
                             }
                         }
                     }
@@ -280,7 +288,7 @@ public struct PickerRail: View {
                     }
                     .contentShape(shape)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(TactilePressStyle(shape: shape, pressScale: PickerPolish.tabPressScale))
             .onHover { hovering = $0 }
             .animation(SwftMotion.resolve(SwftMotion.quick, reduceMotion: reduceMotion), value: hovering)
             .help(item.tooltip)
@@ -343,10 +351,10 @@ public struct PickerModelRow: View {
             }
             .padding(.horizontal, 10)
             .frame(height: 32)
-            .background(shape.fill(isHighlighted ? SwftColor.pressed : (hovering ? SwftColor.hover : .clear)))
+            .background(shape.fill(isHighlighted ? PickerPolish.highlightFill : (hovering ? PickerPolish.hoverFill : .clear)))
             .contentShape(shape)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(TactilePressStyle(shape: shape))
         .onHover { hovering = $0 }
         .animation(SwftMotion.resolve(SwftMotion.quick, reduceMotion: reduceMotion), value: hovering)
         .animation(SwftMotion.resolve(SwftMotion.quick, reduceMotion: reduceMotion), value: isHighlighted)
@@ -526,22 +534,22 @@ public struct PickerAccountSwitcher: View {
                         .frame(height: 26)
                         .background {
                             if selected {
-                                Capsule().fill(SwftColor.surfaceRaised)
-                                    .shadow(color: SwftColor.shadow.opacity(1.5), radius: 1.5, y: 1)
-                                    .overlay(Capsule().strokeBorder(keyboardFocused ? SwftColor.accent.opacity(0.6) : SwftColor.borderSubtle, lineWidth: keyboardFocused ? 1.5 : 1))
+                                Capsule().fill(PickerPolish.switcherThumb)
+                                    .shadow(color: SwftColor.shadow, radius: 1.5, y: 0.5)
+                                    .overlay(Capsule().strokeBorder(keyboardFocused ? SwftColor.accent.opacity(0.6) : PickerPolish.divider, lineWidth: keyboardFocused ? 1.5 : 0.5))
                                     .matchedGeometryEffect(id: "account.selection", in: ns)
                             }
                         }
                         .contentShape(Capsule())
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(TactilePressStyle(shape: Capsule(), pressScale: PickerPolish.segmentPressScale, pressedFill: selected ? .clear : PickerPolish.hoverFill))
                     .help(item.tooltip)
                     .accessibilityLabel(item.inUse ? "\(item.tooltip), in use" : item.tooltip)
                     .accessibilityAddTraits(selected ? [.isSelected] : [])
                 }
             }
             .padding(2)
-            .background(Capsule().fill(SwftColor.surfaceMuted))
+            .background(Capsule().fill(PickerPolish.switcherTrack))
         }
         .scrollIndicators(.never)
         .fixedSize(horizontal: false, vertical: true)
@@ -585,7 +593,7 @@ public struct ThinkingSlider: View {
                 let travel = geo.size.width - thumb
                 let x = travel * CGFloat(clamped) / CGFloat(last)
                 ZStack(alignment: .leading) {
-                    Capsule().fill(SwftColor.surfaceMuted).frame(height: 6)
+                    Capsule().fill(PickerPolish.sliderTrack).frame(height: 6)
                     HStack(spacing: 0) {
                         ForEach(levels.indices, id: \.self) { stop in
                             if stop > 0 { Spacer(minLength: 0) }

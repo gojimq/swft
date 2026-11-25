@@ -205,8 +205,9 @@ private struct ChipTriggerStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.98 : 1)
-            .animation(SwftMotion.resolve(SwftMotion.quick, reduceMotion: reduceMotion), value: configuration.isPressed)
+            .background(Capsule().fill(configuration.isPressed ? SwftColor.hover : .clear))
+            .scaleEffect(SwftMotion.pressScale(isPressed: configuration.isPressed, scale: 0.97, reduceMotion: reduceMotion))
+            .animation(SwftMotion.pressAnimation(isPressed: configuration.isPressed, reduceMotion: reduceMotion), value: configuration.isPressed)
     }
 }
 
@@ -215,7 +216,7 @@ private struct ChipClearButtonStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.88 : 1)
-            .animation(SwftMotion.resolve(SwftMotion.quick, reduceMotion: reduceMotion), value: configuration.isPressed)
+            .scaleEffect(SwftMotion.pressScale(isPressed: configuration.isPressed, scale: 0.88, reduceMotion: reduceMotion))
+            .animation(SwftMotion.pressAnimation(isPressed: configuration.isPressed, reduceMotion: reduceMotion), value: configuration.isPressed)
     }
 }

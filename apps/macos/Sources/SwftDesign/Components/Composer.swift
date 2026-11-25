@@ -106,12 +106,26 @@ public struct SendButton: View {
     }
 }
 
-/// Plain style that springs down a little while pressed.
+/// Plain style that presses down a little and springs back on release.
 struct PressScaleStyle: ButtonStyle {
+    var scale: CGFloat = 0.9
+
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .scaleEffect(configuration.isPressed ? 0.9 : 1)
-            .animation(SwftMotion.spring, value: configuration.isPressed)
+        PressScaleBody(configuration: configuration, scale: scale)
+    }
+
+    private struct PressScaleBody: View {
+        let configuration: Configuration
+        let scale: CGFloat
+        @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+        var body: some View {
+            let pressed = configuration.isPressed
+            configuration.label
+                .scaleEffect(SwftMotion.pressScale(isPressed: pressed, scale: scale, reduceMotion: reduceMotion))
+                .opacity(pressed && reduceMotion ? 0.75 : 1)
+                .animation(SwftMotion.pressAnimation(isPressed: pressed, reduceMotion: reduceMotion), value: pressed)
+        }
     }
 }
 

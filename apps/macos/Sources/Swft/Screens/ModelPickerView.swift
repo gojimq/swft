@@ -56,7 +56,7 @@ struct ModelPickerPanel: View {
                 PickerSearchField(text: Binding(get: { session.query }, set: { next in
                     withAnimation(SwftMotion.resolve(SwftMotion.quick, reduceMotion: reduceMotion)) { model.modelPicker?.setQuery(next) }
                 }), focus: $searchFocused)
-                hairline
+                PickerDivider()
                 ZStack(alignment: .topLeading) {
                     if content.isSearching {
                         searchResults(catalog: catalog)
@@ -80,7 +80,7 @@ struct ModelPickerPanel: View {
                 .padding(.vertical, 6)
                 .frame(height: Self.bodyHeight)
                 .animation(SwftMotion.resolve(SwftMotion.quick, reduceMotion: reduceMotion), value: content.isSearching)
-                hairline
+                PickerDivider()
                 thinking(current: current)
             }
         }
@@ -91,13 +91,11 @@ struct ModelPickerPanel: View {
             onKey: { key in withAnimation(SwftMotion.resolve(SwftMotion.standard, reduceMotion: reduceMotion)) { model.handleModelPickerKey(key) } },
             onOutsideClick: { closeAnimated() }
         ))
-        .task { searchFocused = true }
+        // Focus the search field as part of the first frame, never as an animated change mid-entrance.
+        .defaultFocus($searchFocused, true)
+        .task { if !searchFocused { withoutAnimation { searchFocused = true } } }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Model and thinking level")
-    }
-
-    private var hairline: some View {
-        Rectangle().fill(SwftColor.borderSubtle).frame(height: 1)
     }
 
     private func closeAnimated() {
@@ -140,9 +138,22 @@ struct ModelPickerPanel: View {
         }
     }
 
-    private func scroll(_ proxy: ScrollViewProxy, to focus: ModelPickerSession.Focus) {
+    /// Keyboard navigation glides to the focused row; the initial jump to the current model on open is instant so
+    /// the list never scrolls while the panel is still settling in.
+    private func scroll(_ proxy: ScrollViewProxy, to focus: ModelPickerSession.Focus, animated: Bool = true) {
         guard case .row(let index) = focus, content.rows.indices.contains(index) else { return }
-        withAnimation(SwftMotion.resolve(SwftMotion.quick, reduceMotion: reduceMotion)) { proxy.scrollTo(content.rows[index].id) }
+        let id = content.rows[index].id
+        if animated {
+            withAnimation(SwftMotion.resolve(SwftMotion.quick, reduceMotion: reduceMotion)) { proxy.scrollTo(id) }
+        } else {
+            withoutAnimation { proxy.scrollTo(id) }
+        }
+    }
+
+    private func withoutAnimation(_ body: () -> Void) {
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction, body)
     }
 
     // MARK: Provider panel
@@ -245,7 +256,7 @@ struct ModelPickerPanel: View {
             }
             .scrollIndicators(.never)
             .onChange(of: session.focus) { _, focus in scroll(proxy, to: focus) }
-            .onAppear { scroll(proxy, to: content.entryRow.map { .row($0) } ?? .search) }
+            .onAppear { scroll(proxy, to: content.entryRow.map { .row($0) } ?? .search, animated: false) }
         }
     }
 

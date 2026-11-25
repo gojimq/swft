@@ -105,9 +105,9 @@ public struct HoverFillStyle<S: Shape>: ButtonStyle {
                         }
                     }
                 }
-                .scaleEffect(configuration.isPressed && !reduceMotion ? pressScale : 1)
+                .scaleEffect(SwftMotion.pressScale(isPressed: configuration.isPressed, scale: pressScale, reduceMotion: reduceMotion))
                 .animation(SwftMotion.resolve(SwftMotion.quick, reduceMotion: reduceMotion), value: hovering)
-                .animation(SwftMotion.resolve(SwftMotion.spring, reduceMotion: reduceMotion), value: configuration.isPressed)
+                .animation(SwftMotion.pressAnimation(isPressed: configuration.isPressed, reduceMotion: reduceMotion), value: configuration.isPressed)
                 .onHover { hovering = $0 }
         }
 

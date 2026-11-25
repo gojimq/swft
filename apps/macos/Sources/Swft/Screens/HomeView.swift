@@ -98,7 +98,7 @@ struct ComposerView: View {
                     .padding(pickerOpensBelow ? .top : .bottom, 8)
                     // A zero-height anchor on the composer's edge; the panel overflows away from the composer.
                     .frame(height: 0, alignment: pickerOpensBelow ? .top : .bottom)
-                    .transition(reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.94, anchor: pickerOpensBelow ? .topTrailing : .bottomTrailing)).combined(with: .offset(y: pickerOpensBelow ? -6 : 6)))
+                    .transition(.swftPopover(reduceMotion: reduceMotion, opensBelow: pickerOpensBelow))
             }
         }
     }
@@ -127,7 +127,7 @@ struct ComposerView: View {
             effort: effort,
             isOpen: model.modelPicker != nil
         ) {
-            withAnimation(SwftMotion.resolve(model.modelPicker == nil ? SwftMotion.pop : SwftMotion.standard, reduceMotion: reduceMotion)) {
+            withAnimation(SwftMotion.resolve(SwftMotion.popover, reduceMotion: reduceMotion)) {
                 model.toggleModelPicker()
             }
         }
