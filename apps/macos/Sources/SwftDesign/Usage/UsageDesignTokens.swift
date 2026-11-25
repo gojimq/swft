@@ -47,8 +47,8 @@ public enum SwftUsageColor {
 
 extension View {
     /// Floating Liquid Glass card surface matching the model picker popover on macOS 26+ (exterior-only
-    /// elevation shadow, interactive specular rim, never inside a shared GlassEffectContainer), with a
-    /// translucent regularMaterial fallback on macOS 15.
+    /// elevation shadow, never inside a shared GlassEffectContainer), with a translucent regularMaterial
+    /// fallback on macOS 15.
     @MainActor
     public func swftUsagePopoverGlass(cornerRadius: CGFloat = 18) -> some View {
         let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)

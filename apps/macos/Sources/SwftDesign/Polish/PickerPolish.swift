@@ -40,7 +40,7 @@ private struct PickerGlassModifier<S: InsettableShape>: ViewModifier {
             // No GlassEffectContainer: the panel must never merge with the composer's glass it floats beside.
             content
                 .background(shape.fill(PickerPolish.frostFill))
-                .glassEffect(.clear.tint(PickerPolish.resolvedGlassTint(for: colorScheme)).interactive(), in: shape)
+                .glassEffect(.clear.tint(PickerPolish.resolvedGlassTint(for: colorScheme)), in: shape)
                 .background(elevation)
         } else {
             content
@@ -64,7 +64,7 @@ private struct PickerGlassModifier<S: InsettableShape>: ViewModifier {
 }
 
 extension View {
-    /// Frosted interactive Liquid Glass for floating picker panels (macOS 26+), material fallback on macOS 15.
+    /// Frosted Liquid Glass for floating picker panels (macOS 26+), material fallback on macOS 15.
     @MainActor
     public func swftPickerGlass<S: InsettableShape>(in shape: S) -> some View {
         modifier(PickerGlassModifier(shape: shape))
