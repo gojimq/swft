@@ -1,9 +1,10 @@
 import SwftDesign
 import SwiftUI
 
-/// Renders the J-shaped send flight overlay. The flight and the transcript's scroll start in one transaction and run on
-/// SwiftUI's own animation clock: the bubble interpolates `progress` (only it re-renders per frame) while
-/// `ScrollPosition` animates to the new end with the same 680ms send curve. Nothing mutates state per frame.
+/// Renders the J-shaped send flight overlay for in-thread sends. The overlay bubble interpolates `progress` on
+/// SwiftUI's animation clock while `SendFlightScrollDriver` drives the underlying `NSScrollView` in lockstep over the
+/// same 680ms `CubicBezierCurve.send` curve at native display refresh rate (60/120Hz). Nothing mutates observed state
+/// per frame.
 struct SendFlightOverlayLayer: View {
     let coordinator: SendFlightCoordinator
     let topInset: CGFloat
@@ -55,28 +56,76 @@ private struct SendFlightFlyer: View {
             } completion: {
                 coordinator.finishFlightIfMatching(id)
             }
-            withAnimation(SwftMotion.send) {
-                scrollPosition.scrollTo(edge: .bottom)
+            if !coordinator.scrollDriver.animateToBottom(
+                duration: SendFlightTiming.sendDuration,
+                curve: .send,
+                preJumpY: flight.preFlightJumpY
+            ) {
+                if let jump = flight.preFlightJumpY {
+                    scrollPosition.scrollTo(y: jump)
+                }
+                withAnimation(SwftMotion.send) {
+                    scrollPosition.scrollTo(edge: .bottom)
+                }
             }
+        }
+    }
+}
+
+/// Fade-in cadence for a user bubble appearing directly in place (no J-curve flight).
+enum SendBubbleFadeStyle: Equatable, Sendable {
+    case none
+    /// First user message handing off from Home as the composer settles at the bottom.
+    case handoff
+    /// In-thread send under Reduce Motion.
+    case reduceMotion
+
+    var animation: Animation {
+        switch self {
+        case .none: .linear(duration: 0)
+        case .handoff: SwftMotion.handoffFade
+        case .reduceMotion: .easeInOut(duration: 0.18)
         }
     }
 }
 
 /// Renders one conversation turn inside `ThreadView`, applying stream-room height to the latest turn
 /// and showing the delayed "Working" indicator when the latest turn is awaiting agent output.
-struct SendFlightTurnSection<RowContent: View>: View {
-    let detail: ThreadDetailState
+///
+/// Conforms to `Equatable` over plain value inputs so historical turns skip body re-evaluation during send flights,
+/// live server streaming updates, and work-fold toggles in other turns.
+struct SendFlightTurnSection: View, Equatable {
+    let threadID: String
     let turn: TranscriptTurn
     let isLatest: Bool
     let streamRoomHeight: CGFloat?
     let showWorking: Bool
-    /// The latest turn's non-user rows wait, hidden, while its prompt flies up; they fade and rise in together.
+    /// The latest turn's non-user rows wait, hidden, while its prompt flies up or fades in; they fade and rise in together.
     let holdsRows: Bool
-    /// A just-sent row whose flight starts next frame; hidden now so it never flashes in place.
-    let pendingFlightRowID: String?
-    let coordinator: SendFlightCoordinator
+    /// The user bubble currently represented by an active/pending send flight overlay.
+    let hiddenBubbleID: String?
+    /// The user bubble fading cleanly in place (Home handoff or Reduce Motion in-thread send).
+    let fadeBubbleID: String?
+    let fadeStyle: SendBubbleFadeStyle
+    /// Work-fold IDs expanded inside this turn only.
+    let expandedFoldIDs: Set<String>
     let reduceMotion: Bool
-    @ViewBuilder let rowContent: (TranscriptRow) -> RowContent
+    let onToggleWorkFold: (String) -> Void
+    let onResolveApproval: (String, Bool) -> Void
+
+    nonisolated static func == (lhs: SendFlightTurnSection, rhs: SendFlightTurnSection) -> Bool {
+        lhs.threadID == rhs.threadID
+            && lhs.turn == rhs.turn
+            && lhs.isLatest == rhs.isLatest
+            && lhs.streamRoomHeight == rhs.streamRoomHeight
+            && lhs.showWorking == rhs.showWorking
+            && lhs.holdsRows == rhs.holdsRows
+            && lhs.hiddenBubbleID == rhs.hiddenBubbleID
+            && lhs.fadeBubbleID == rhs.fadeBubbleID
+            && lhs.fadeStyle == rhs.fadeStyle
+            && lhs.expandedFoldIDs == rhs.expandedFoldIDs
+            && lhs.reduceMotion == rhs.reduceMotion
+    }
 
     var body: some View {
         let held = isLatest && holdsRows
@@ -85,31 +134,70 @@ struct SendFlightTurnSection<RowContent: View>: View {
                 rowView(row, held: held)
             }
             if isLatest && showWorking {
-                WorkingIndicatorRow(delay: 0, reduceMotion: effectiveReduceMotion)
+                WorkingIndicatorRow(delay: 0, reduceMotion: reduceMotion)
                     .id("working:\(turn.id)")
-                    .transition(.swftRise(reduceMotion: effectiveReduceMotion))
+                    .transition(.swftRise(reduceMotion: reduceMotion))
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .frame(minHeight: isLatest ? streamRoomHeight : nil, alignment: .top)
-        .animation(SwftMotion.resolve(SwftMotion.settle, reduceMotion: effectiveReduceMotion), value: showWorking)
-        .animation(SwftMotion.resolve(SwftMotion.settle, reduceMotion: effectiveReduceMotion), value: held)
+        .animation(SwftMotion.resolve(SwftMotion.settle, reduceMotion: reduceMotion), value: showWorking)
+        .animation(SwftMotion.resolve(SwftMotion.settle, reduceMotion: reduceMotion), value: held)
     }
 
-    @Environment(\.sendFlightForceReduceMotion) private var forceReduceMotion
-    private var effectiveReduceMotion: Bool { reduceMotion || forceReduceMotion }
-
     @ViewBuilder private func rowView(_ row: TranscriptRow, held: Bool) -> some View {
-        if case .user(let id, _, _) = row {
-            let hidden = coordinator.isBubbleHiddenForFlight(rowID: id, in: detail, pendingRowID: pendingFlightRowID)
-            rowContent(row)
+        switch row {
+        case .user(let id, let text, let attachments):
+            let hidden = hiddenBubbleID == id
+            let rowFadeStyle: SendBubbleFadeStyle = (fadeBubbleID == id) ? fadeStyle : .none
+            UserBubble(text, attachments: attachments)
+                .equatable()
+                .padding(.vertical, SendFlightLogic.userRowVerticalPadding)
                 .sendFlightBubbleTarget(id: hidden ? id : nil)
                 .opacity(hidden ? 0 : 1)
-                .modifier(ReduceMotionSendFadeModifier(
-                    active: reduceMotion && coordinator.reduceMotionFadeBubbleID == id
-                ))
-        } else {
-            rowContent(row)
+                .modifier(SendBubbleFadeModifier(style: rowFadeStyle))
+        case .assistant(_, let blocks, let streaming):
+            AssistantMessage {
+                ForEach(Array(blocks.enumerated()), id: \.offset) { index, block in
+                    switch block {
+                    case .text(let text):
+                        MessageText(text, streaming: streaming && index == blocks.count - 1)
+                            .equatable()
+                    case .code(let language, let source):
+                        CodeBlock(source, language: language)
+                            .equatable()
+                    case .image(let alt, let source):
+                        MessageImage(source: source, alt: alt)
+                    case .attachments(let attachments):
+                        AttachmentStrip(attachments, trailing: false)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+            }
+            .opacity(held ? 0 : 1)
+            .offset(y: held ? 8 : 0)
+            .transition(.swftRise(reduceMotion: reduceMotion))
+        case .work(let fold):
+            WorkFoldView(fold: fold, isExpanded: expandedFoldIDs.contains(fold.id)) {
+                onToggleWorkFold(fold.id)
+            }
+            .opacity(held ? 0 : 1)
+            .offset(y: held ? 8 : 0)
+            .transition(.swftRise(reduceMotion: reduceMotion))
+        case .approval(let id, let approval):
+            ApprovalCard(
+                title: approval.title,
+                message: approval.message,
+                command: approval.command,
+                status: approval.status.cardStatus,
+                onApprove: { onResolveApproval(id, true) },
+                onDeny: { onResolveApproval(id, false) }
+            )
+            .opacity(held ? 0 : 1)
+            .offset(y: held ? 8 : 0)
+            .transition(.swftRise(reduceMotion: reduceMotion))
+        case .note(_, let title, let message, let isError):
+            QuietNote(title: title, message: message, isError: isError)
                 .opacity(held ? 0 : 1)
                 .offset(y: held ? 8 : 0)
                 .transition(.swftRise(reduceMotion: reduceMotion))
@@ -117,21 +205,21 @@ struct SendFlightTurnSection<RowContent: View>: View {
     }
 }
 
-private struct ReduceMotionSendFadeModifier: ViewModifier {
-    let active: Bool
+private struct SendBubbleFadeModifier: ViewModifier {
+    let style: SendBubbleFadeStyle
     @State private var revealed: Bool
 
-    init(active: Bool) {
-        self.active = active
-        self._revealed = State(initialValue: !active)
+    init(style: SendBubbleFadeStyle) {
+        self.style = style
+        self._revealed = State(initialValue: style == .none)
     }
 
     func body(content: Content) -> some View {
         content
-            .opacity(revealed ? 1 : 0)
+            .opacity(style == .none || revealed ? 1 : 0)
             .onAppear {
-                guard active, !revealed else { return }
-                withAnimation(.easeInOut(duration: 0.18)) {
+                guard style != .none, !revealed else { return }
+                withAnimation(style.animation) {
                     revealed = true
                 }
             }
@@ -148,6 +236,7 @@ extension EnvironmentValues {
 /// Wires send-flight coordinate space, geometry observers, scroll phase/stickiness, and flight overlay onto `ThreadView`.
 struct ThreadSendFlightHostModifier: ViewModifier {
     let detail: ThreadDetailState
+    let rows: [TranscriptRow]
     let isBusy: Bool
     let latestThreadSend: ThreadSendEvent?
     let failedThreadSendID: UUID?
@@ -183,11 +272,21 @@ struct ThreadSendFlightHostModifier: ViewModifier {
                 )
             }
             .onAppear {
-                coordinator.syncThread(detail: detail, isBusy: isBusy)
-                // Home → new thread: the first message flies out of the docked composer this screen took over.
+                coordinator.scrollDriver.onUserScrollInterrupt = {
+                    if coordinator.isFlightAnimating {
+                        withAnimation(.easeOut(duration: 0.16)) {
+                            _ = coordinator.handleUserScrollInterrupt()
+                        }
+                    } else {
+                        _ = coordinator.handleUserScrollInterrupt()
+                    }
+                }
+                coordinator.syncThread(detail: detail, rows: rows, isBusy: isBusy)
+                // Home → new thread: the first message fades in cleanly without a J-curve flight overlay.
                 let action = coordinator.adoptOnAppear(
                     latestThreadSend,
                     detail: detail,
+                    rows: rows,
                     isHandoffScreen: isHandoffScreen,
                     reduceMotion: effectiveReduceMotion
                 )
@@ -196,38 +295,48 @@ struct ThreadSendFlightHostModifier: ViewModifier {
                 }
             }
             .onChange(of: detail.summary.id) { _, _ in
-                coordinator.syncThread(detail: detail, isBusy: isBusy)
-                scrollPosition.scrollTo(edge: .bottom)
-            }
-            .onChange(of: coordinator.settleToBottomToken) { _, _ in
-                withAnimation(SwftMotion.resolve(SwftMotion.settle, reduceMotion: effectiveReduceMotion)) {
+                coordinator.syncThread(detail: detail, rows: rows, isBusy: isBusy)
+                if !coordinator.scrollDriver.scrollToBottomImmediately() {
                     scrollPosition.scrollTo(edge: .bottom)
                 }
             }
-            .onChange(of: detail.rows.map(\.id)) { _, _ in
-                coordinator.syncThread(detail: detail, isBusy: isBusy)
+            .onChange(of: coordinator.settleToBottomToken) { _, _ in
+                if effectiveReduceMotion {
+                    if !coordinator.scrollDriver.scrollToBottomImmediately() {
+                        scrollPosition.scrollTo(edge: .bottom)
+                    }
+                } else if !coordinator.scrollDriver.animateToBottom(
+                    duration: SendFlightTiming.settleDuration,
+                    curve: .settle
+                ) {
+                    withAnimation(SwftMotion.settle) {
+                        scrollPosition.scrollTo(edge: .bottom)
+                    }
+                }
+            }
+            .onChange(of: rows.map(\.id)) { _, _ in
+                coordinator.syncThread(detail: detail, rows: rows, isBusy: isBusy)
             }
             .onChange(of: detail.isRunning) { _, _ in
-                coordinator.syncThread(detail: detail, isBusy: isBusy)
+                coordinator.syncThread(detail: detail, rows: rows, isBusy: isBusy)
             }
             .onChange(of: isBusy) { _, _ in
-                coordinator.syncThread(detail: detail, isBusy: isBusy)
+                coordinator.syncThread(detail: detail, rows: rows, isBusy: isBusy)
             }
             .onChange(of: latestThreadSend) { _, event in
                 guard let event else { return }
-                let jump = coordinator.preFlightJumpOffset()
-                let action = coordinator.beginSend(event, detail: detail, reduceMotion: effectiveReduceMotion)
-                coordinator.syncThread(detail: detail, isBusy: isBusy)
+                let action = coordinator.beginSend(event, detail: detail, rows: rows, reduceMotion: effectiveReduceMotion)
+                coordinator.syncThread(detail: detail, rows: rows, isBusy: isBusy)
                 switch action {
                 case .startFlight:
                     if let pinnedProgress {
                         coordinator.pinActiveFlightProgress(pinnedProgress)
-                    } else if let jump {
-                        scrollPosition.scrollTo(y: jump)
                     }
                 case .instantAnchor:
-                    scrollPosition.scrollTo(edge: .bottom)
-                case .none:
+                    if !coordinator.scrollDriver.scrollToBottomImmediately() {
+                        scrollPosition.scrollTo(edge: .bottom)
+                    }
+                case .handoffFade, .none:
                     break
                 }
             }
@@ -242,6 +351,7 @@ struct ThreadSendFlightHostModifier: ViewModifier {
             }
             .onDisappear {
                 coordinator.cancelFlight(clearPendingStreamRoom: true)
+                coordinator.scrollDriver.detach()
             }
     }
 }
@@ -249,6 +359,7 @@ struct ThreadSendFlightHostModifier: ViewModifier {
 extension View {
     func threadSendFlightHost(
         detail: ThreadDetailState,
+        rows: [TranscriptRow],
         isBusy: Bool,
         latestThreadSend: ThreadSendEvent?,
         failedThreadSendID: UUID?,
@@ -260,6 +371,7 @@ extension View {
     ) -> some View {
         modifier(ThreadSendFlightHostModifier(
             detail: detail,
+            rows: rows,
             isBusy: isBusy,
             latestThreadSend: latestThreadSend,
             failedThreadSendID: failedThreadSendID,
@@ -274,6 +386,7 @@ extension View {
     /// Attaches Studio-style scroll geometry and user-scroll-phase tracking to the thread `ScrollView`.
     func threadSendFlightScrollTracking(
         coordinator: SendFlightCoordinator,
+        isSendPending: Bool,
         scrollPosition: Binding<ScrollPosition>
     ) -> some View {
         self
@@ -294,8 +407,10 @@ extension View {
                     viewportHeight: geometry.visibleRect.height
                 )
             } action: { _, metrics in
-                if coordinator.handleScrollGeometryChange(metrics) {
-                    scrollPosition.wrappedValue.scrollTo(edge: .bottom)
+                if coordinator.handleScrollGeometryChange(metrics, isSendPending: isSendPending) {
+                    if !coordinator.scrollDriver.scrollToBottomImmediately() {
+                        scrollPosition.wrappedValue.scrollTo(edge: .bottom)
+                    }
                 }
             }
     }

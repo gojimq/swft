@@ -4,6 +4,8 @@ import SwiftUI
 struct ThreadView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.sendFlightForceReduceMotion) private var forceReduceMotion
+    @Environment(\.swftScreenHandoff) private var isHandoffScreen
     let detail: ThreadDetailState
     @State private var scrollPosition = ScrollPosition()
     @State private var composerHeight: CGFloat = 110
@@ -21,6 +23,8 @@ struct ThreadView: View {
 
     nonisolated static let topInset = SwftLayout.titlebarHeight + 24
 
+    private var effectiveReduceMotion: Bool { reduceMotion || forceReduceMotion }
+
     var body: some View {
         let rows = detail.rows
         let turns = SendFlightLogic.turns(from: rows)
@@ -30,7 +34,8 @@ struct ThreadView: View {
         let bottomInset = composerHeight + 28
         let isBusy = model.isComposerBusy
         let latestSend = model.latestThreadSend
-        let hasStreamRoom = sendFlight.hasStreamRoom(for: detail, isBusy: isBusy, latestSend: latestSend)
+        let isSendPending = sendFlight.isSendPending(latestSend, in: detail)
+        let hasStreamRoom = sendFlight.hasStreamRoom(for: detail, rows: rows, isBusy: isBusy, latestSend: latestSend)
         let streamRoom = hasStreamRoom
             ? SendFlightLogic.streamRoomHeight(viewportHeight: sendFlight.viewportSize.height, topInset: topInset, bottomInset: bottomInset)
             : nil
@@ -39,28 +44,75 @@ struct ThreadView: View {
             isBusy: isBusy,
             latestTurnRows: turns.last?.rows ?? [],
             latestSend: latestSend,
-            reduceMotion: reduceMotion
+            isHandoffScreen: isHandoffScreen,
+            reduceMotion: effectiveReduceMotion
         )
-        let holdsLatestTurn = sendFlight.holdsLatestTurn(for: detail, latestSend: latestSend, reduceMotion: reduceMotion)
-        let pendingFlightRowID = sendFlight.pendingFlightRowID(latestSend: latestSend, in: detail, reduceMotion: reduceMotion)
-        // The send's own row insertion lands without a layout animation: the flight and the scroll carry that motion.
-        let animatesRows = populated && !sendFlight.isSendPending(latestSend, in: detail)
+        let holdsLatestTurn = sendFlight.holdsLatestTurn(
+            for: detail,
+            latestSend: latestSend,
+            isHandoffScreen: isHandoffScreen,
+            reduceMotion: effectiveReduceMotion
+        )
+        let pendingFlightRowID = sendFlight.pendingFlightRowID(
+            latestSend: latestSend,
+            in: detail,
+            rows: rows,
+            reduceMotion: effectiveReduceMotion
+        )
+        let hiddenBubbleID = sendFlight.activeHiddenFlightBubbleID(
+            in: detail,
+            rows: rows,
+            pendingRowID: pendingFlightRowID
+        )
+        let handoffFadeID = sendFlight.activeHandoffFadeBubbleID(
+            in: detail,
+            rows: rows,
+            latestSend: latestSend,
+            isHandoffScreen: isHandoffScreen,
+            reduceMotion: effectiveReduceMotion
+        )
+        let (fadeBubbleID, fadeStyle): (String?, SendBubbleFadeStyle) = {
+            if let handoffFadeID {
+                return (handoffFadeID, .handoff)
+            }
+            if effectiveReduceMotion, let rmID = sendFlight.reduceMotionFadeBubbleID, !rmID.isEmpty {
+                return (rmID, .reduceMotion)
+            }
+            return (nil, .none)
+        }()
+        // The send's own row insertion and active scroll flight land without a LazyVStack layout animation:
+        // the flight and display-synced scroll carry that motion cleanly without fighting layout.
+        let animatesRows = populated && !isSendPending && !sendFlight.isFlightAnimating
+        let expandedWorkFolds = model.expandedWorkFolds
+        let threadID = detail.summary.id
+
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 32) {
                 ForEach(Array(turns.enumerated()), id: \.element.id) { index, turn in
+                    let isLatest = index == turns.count - 1
                     SendFlightTurnSection(
-                        detail: detail,
+                        threadID: threadID,
                         turn: turn,
-                        isLatest: index == turns.count - 1,
-                        streamRoomHeight: streamRoom,
-                        showWorking: showWorking,
-                        holdsRows: holdsLatestTurn,
-                        pendingFlightRowID: pendingFlightRowID,
-                        coordinator: sendFlight,
-                        reduceMotion: reduceMotion
-                    ) { row in
-                        self.row(row)
-                    }
+                        isLatest: isLatest,
+                        streamRoomHeight: isLatest ? streamRoom : nil,
+                        showWorking: isLatest && showWorking,
+                        holdsRows: isLatest && holdsLatestTurn,
+                        hiddenBubbleID: isLatest ? hiddenBubbleID : nil,
+                        fadeBubbleID: isLatest ? fadeBubbleID : nil,
+                        fadeStyle: isLatest ? fadeStyle : .none,
+                        expandedFoldIDs: Self.expandedFoldIDs(for: turn, in: expandedWorkFolds),
+                        reduceMotion: effectiveReduceMotion,
+                        onToggleWorkFold: { foldID in
+                            sendFlight.handleWorkFoldToggle()
+                            withAnimation(SwftMotion.resolve(SwftMotion.disclosure, reduceMotion: effectiveReduceMotion)) {
+                                model.toggleWorkFold(foldID)
+                            }
+                        },
+                        onResolveApproval: { itemID, approved in
+                            model.resolveApproval(itemID: itemID, in: threadID, approved: approved)
+                        }
+                    )
+                    .equatable()
                 }
             }
             .frame(maxWidth: SwftLayout.contentMaxWidth)
@@ -70,7 +122,8 @@ struct ThreadView: View {
             .padding(.bottom, bottomInset)
             .frame(maxWidth: .infinity)
             .swftOverlayScrollbars()
-            .animation(animatesRows ? SwftMotion.resolve(SwftMotion.settle, reduceMotion: reduceMotion) : nil, value: rows.map(\.id))
+            .background(SendFlightScrollAnchor(driver: sendFlight.scrollDriver).frame(width: 0, height: 0))
+            .animation(animatesRows ? SwftMotion.resolve(SwftMotion.settle, reduceMotion: effectiveReduceMotion) : nil, value: rows.map(\.id))
         }
         .task(id: rows.isEmpty) { if !rows.isEmpty { populated = true } }
         .scrollPosition($scrollPosition)
@@ -78,23 +131,37 @@ struct ThreadView: View {
         .defaultScrollAnchor(.top, for: .alignment)
         .defaultScrollAnchor(.bottom, for: .initialOffset)
         .defaultScrollAnchor(.top, for: .sizeChanges)
-        .threadSendFlightScrollTracking(coordinator: sendFlight, scrollPosition: $scrollPosition)
+        .threadSendFlightScrollTracking(coordinator: sendFlight, isSendPending: isSendPending, scrollPosition: $scrollPosition)
         .scrollEdgeSoftIfAvailable()
         // The macOS 26 toolbar reports a taller top safe area; the transcript already pads under the top bar itself.
         .ignoresSafeArea(.container, edges: .top)
         // The composer floats over the transcript; the transcript keeps scrolling underneath its glass.
         .overlay(alignment: .bottom) {
             composerBar
-                .onGeometryChange(for: CGFloat.self, of: \.size.height) { composerHeight = $0 }
+                .onGeometryChange(for: CGFloat.self, of: \.size.height) { height in
+                    let quantized = (height * 2).rounded() / 2
+                    sendFlight.recordMeasuredComposerHeight(quantized)
+                    // Avoid re-rendering the transcript every frame while a multi-line composer or attachment tray
+                    // collapses during a send flight; the settled height flushes when the flight finishes.
+                    if !sendFlight.isFlightAnimating, abs(quantized - composerHeight) >= 0.5 {
+                        composerHeight = quantized
+                    }
+                }
+        }
+        .onChange(of: sendFlight.isFlightAnimating) { _, animating in
+            if !animating, let measured = sendFlight.latestMeasuredComposerHeight, abs(measured - composerHeight) >= 0.5 {
+                composerHeight = measured
+            }
         }
         .threadSendFlightHost(
             detail: detail,
+            rows: rows,
             isBusy: isBusy,
             latestThreadSend: latestSend,
             failedThreadSendID: model.failedThreadSendID,
             topInset: topInset,
             bottomInset: bottomInset,
-            reduceMotion: reduceMotion,
+            reduceMotion: effectiveReduceMotion,
             coordinator: sendFlight,
             scrollPosition: $scrollPosition
         )
@@ -111,6 +178,17 @@ struct ThreadView: View {
         .environment(\.swftImageLoader, model.imageLoader(forThreadID: detail.summary.id))
     }
 
+    private static func expandedFoldIDs(for turn: TranscriptTurn, in expanded: Set<String>) -> Set<String> {
+        guard !expanded.isEmpty else { return [] }
+        var matched: Set<String> = []
+        for row in turn.rows {
+            if let foldID = row.workFoldID, expanded.contains(foldID) {
+                matched.insert(foldID)
+            }
+        }
+        return matched
+    }
+
     private var composerBar: some View {
         VStack(spacing: 8) {
             if let actionError = model.actionError {
@@ -118,7 +196,7 @@ struct ThreadView: View {
                     model.actionError = nil
                 }
                 .frame(maxWidth: SwftLayout.composerMaxWidth)
-                .transition(.swftRise(reduceMotion: reduceMotion))
+                .transition(.swftRise(reduceMotion: effectiveReduceMotion))
             }
 
             ComposerView(placeholder: "Reply to \(detail.summary.providerLabel)…")
@@ -128,12 +206,21 @@ struct ThreadView: View {
                     if sendFlight.showsScrollToBottom {
                         ScrollToBottomButton {
                             sendFlight.armScrollToBottom()
-                            withAnimation(SwftMotion.resolve(SwftMotion.screen, reduceMotion: reduceMotion)) {
-                                scrollPosition.scrollTo(edge: .bottom)
+                            if effectiveReduceMotion {
+                                if !sendFlight.scrollDriver.scrollToBottomImmediately() {
+                                    scrollPosition.scrollTo(edge: .bottom)
+                                }
+                            } else if !sendFlight.scrollDriver.animateToBottom(
+                                duration: SendFlightTiming.settleDuration,
+                                curve: .settle
+                            ) {
+                                withAnimation(SwftMotion.screen) {
+                                    scrollPosition.scrollTo(edge: .bottom)
+                                }
                             }
                         }
                         .offset(y: -50)
-                        .transition(.swftPop(reduceMotion: reduceMotion, scale: 0.6))
+                        .transition(.swftPop(reduceMotion: effectiveReduceMotion, scale: 0.6))
                     }
                 }
         }
@@ -150,48 +237,7 @@ struct ThreadView: View {
             .frame(height: 64)
             .allowsHitTesting(false)
         }
-        .animation(SwftMotion.resolve(SwftMotion.pop, reduceMotion: reduceMotion), value: sendFlight.showsScrollToBottom)
-        .animation(SwftMotion.resolve(SwftMotion.spring, reduceMotion: reduceMotion), value: model.actionError)
-    }
-
-    @ViewBuilder private func row(_ row: TranscriptRow) -> some View {
-        switch row {
-        case .user(_, let text, let attachments):
-            UserBubble(text, attachments: attachments).padding(.vertical, SendFlightLogic.userRowVerticalPadding)
-        case .assistant(_, let blocks, let streaming):
-            AssistantMessage {
-                ForEach(Array(blocks.enumerated()), id: \.offset) { index, block in
-                    switch block {
-                    case .text(let text):
-                        MessageText(text, streaming: streaming && index == blocks.count - 1)
-                    case .code(let language, let source):
-                        CodeBlock(source, language: language)
-                    case .image(let alt, let source):
-                        MessageImage(source: source, alt: alt)
-                    case .attachments(let attachments):
-                        AttachmentStrip(attachments, trailing: false)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                }
-            }
-        case .work(let fold):
-            WorkFoldView(fold: fold, isExpanded: model.expandedWorkFolds.contains(fold.id)) {
-                sendFlight.handleWorkFoldToggle()
-                withAnimation(SwftMotion.resolve(SwftMotion.disclosure, reduceMotion: reduceMotion)) {
-                    model.toggleWorkFold(fold.id)
-                }
-            }
-        case .approval(let id, let approval):
-            ApprovalCard(
-                title: approval.title,
-                message: approval.message,
-                command: approval.command,
-                status: approval.status.cardStatus,
-                onApprove: { model.resolveApproval(itemID: id, in: detail.summary.id, approved: true) },
-                onDeny: { model.resolveApproval(itemID: id, in: detail.summary.id, approved: false) }
-            )
-        case .note(_, let title, let message, let isError):
-            QuietNote(title: title, message: message, isError: isError)
-        }
+        .animation(SwftMotion.resolve(SwftMotion.pop, reduceMotion: effectiveReduceMotion), value: sendFlight.showsScrollToBottom)
+        .animation(SwftMotion.resolve(SwftMotion.spring, reduceMotion: effectiveReduceMotion), value: model.actionError)
     }
 }

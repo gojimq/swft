@@ -101,6 +101,16 @@ final class AppModel {
     @ObservationIgnored private let defaults: UserDefaults?
     @ObservationIgnored private var recentProjections = RecentProjections()
     @ObservationIgnored private var imageLoaders: [String: SwftImageLoader] = [:]
+    @ObservationIgnored private var cachedLiveDetail: CachedLiveThreadDetail?
+
+    private struct CachedLiveThreadDetail {
+        let storeID: ObjectIdentifier
+        let projectionVersion: UInt64
+        let summary: ThreadSummary
+        let pending: [PendingUserMessage]
+        let approvals: [String: ApprovalItem.Status]
+        let detail: ThreadDetailState
+    }
 
     private enum LaunchPhase: Equatable {
         case idle
@@ -849,15 +859,35 @@ final class AppModel {
            let projection = activeThreadStore.projection
         {
             let pending = pendingUserMessages[id] ?? []
+            let storeID = ObjectIdentifier(activeThreadStore)
+            let version = activeThreadStore.projectionVersion
+            if let cached = cachedLiveDetail,
+               cached.storeID == storeID,
+               cached.projectionVersion == version,
+               cached.summary == summary,
+               cached.pending == pending,
+               cached.approvals == optimisticApprovals
+            {
+                return cached.detail
+            }
             if !pending.isEmpty {
                 Self.aliasPromotedAttachmentPreviews(in: projection, matching: pending)
             }
-            return SwftAdapters.threadDetail(
+            let detail = SwftAdapters.threadDetail(
                 from: projection,
                 summary: summary,
                 optimisticApprovals: optimisticApprovals,
                 pendingUserMessages: pending
             )
+            cachedLiveDetail = CachedLiveThreadDetail(
+                storeID: storeID,
+                projectionVersion: version,
+                summary: summary,
+                pending: pending,
+                approvals: optimisticApprovals,
+                detail: detail
+            )
+            return detail
         }
         let pending = (pendingUserMessages[id] ?? []).map { TranscriptItem(id: $0.messageID, kind: .user($0.text, attachments: $0.attachments)) }
         return ThreadDetailState(summary: summary, items: pending, diffStat: nil)

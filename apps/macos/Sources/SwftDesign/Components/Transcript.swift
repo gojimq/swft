@@ -1,15 +1,20 @@
 import AppKit
+import os
 import SwiftUI
 
 /// Right-aligned user message: its attachments above a plain soft-grey bubble with a large radius, like the reference.
 /// The whole unit (attachments and text) is the send-flight landing surface.
-public struct UserBubble: View {
+public struct UserBubble: View, Equatable {
     let text: String
     let attachments: [TranscriptAttachment]
 
     public init(_ text: String, attachments: [TranscriptAttachment] = []) {
         self.text = text
         self.attachments = attachments
+    }
+
+    nonisolated public static func == (lhs: UserBubble, rhs: UserBubble) -> Bool {
+        lhs.text == rhs.text && lhs.attachments == rhs.attachments
     }
 
     public var body: some View {
@@ -39,13 +44,17 @@ public struct AssistantMessage<Content: View>: View {
 /// Markdown prose: paragraphs, `#` headings and `-`/`1.` lists, with bold and inline code styled explicitly so they
 /// stay in Google Sans Flex / mono instead of falling back to the system font.
 /// `streaming` appends a static caret (no blink, by design) and lets the text grow smoothly.
-public struct MessageText: View {
+public struct MessageText: View, Equatable {
     let markdown: String
     var streaming: Bool
 
     public init(_ markdown: String, streaming: Bool = false) {
         self.markdown = markdown
         self.streaming = streaming
+    }
+
+    nonisolated public static func == (lhs: MessageText, rhs: MessageText) -> Bool {
+        lhs.markdown == rhs.markdown && lhs.streaming == rhs.streaming
     }
 
     public var body: some View {
@@ -96,9 +105,53 @@ public struct MessageText: View {
     }
 }
 
+/// Bounded thread-safe cache avoiding repeated `AttributedString(markdown:)` parses during scroll and live updates.
+private final class MarkdownProseCache: Sendable {
+    struct InlineKey: Hashable, Sendable {
+        let style: MarkdownProse.Style
+        let source: String
+    }
+
+    private struct Storage {
+        var blocks: [String: [MarkdownProse.Block]] = [:]
+        var inline: [InlineKey: AttributedString] = [:]
+    }
+
+    static let shared = MarkdownProseCache()
+    private static let maxEntries = 512
+    private let lock = OSAllocatedUnfairLock(initialState: Storage())
+
+    func blocks(for markdown: String, compute: () -> [MarkdownProse.Block]) -> [MarkdownProse.Block] {
+        guard markdown.utf8.count <= 16_384 else { return compute() }
+        if let cached = lock.withLock({ $0.blocks[markdown] }) {
+            return cached
+        }
+        let result = compute()
+        lock.withLock { storage in
+            if storage.blocks.count >= Self.maxEntries { storage.blocks.removeAll(keepingCapacity: true) }
+            storage.blocks[markdown] = result
+        }
+        return result
+    }
+
+    func inline(for source: String, style: MarkdownProse.Style, compute: () -> AttributedString) -> AttributedString {
+        guard source.utf8.count <= 8_192 else { return compute() }
+        let key = InlineKey(style: style, source: source)
+        if let cached = lock.withLock({ $0.inline[key] }) {
+            return cached
+        }
+        let result = compute()
+        lock.withLock { storage in
+            if storage.inline.count >= Self.maxEntries { storage.inline.removeAll(keepingCapacity: true) }
+            storage.inline[key] = result
+        }
+        return result
+    }
+}
+
 /// Small block-level markdown splitter for assistant prose (fenced code is split out earlier, upstream).
 public enum MarkdownProse {
-    public enum Style: Equatable {
+    public enum Style: Hashable, Sendable {
         case body, heading, subheading
 
         var font: Font {
@@ -118,7 +171,7 @@ public enum MarkdownProse {
         }
     }
 
-    public enum Marker: Equatable {
+    public enum Marker: Hashable, Sendable {
         case bullet
         case ordered(String)
 
@@ -132,7 +185,7 @@ public enum MarkdownProse {
         }
     }
 
-    public enum Block: Equatable {
+    public enum Block: Hashable, Sendable {
         case heading(level: Int, text: String)
         case paragraph(String)
         case listItem(marker: Marker, depth: Int, text: String)
@@ -148,6 +201,12 @@ public enum MarkdownProse {
     }
 
     public static func blocks(_ markdown: String) -> [Block] {
+        MarkdownProseCache.shared.blocks(for: markdown) {
+            parseBlocks(markdown)
+        }
+    }
+
+    private static func parseBlocks(_ markdown: String) -> [Block] {
         var blocks: [Block] = []
         var paragraph: [String] = []
 
@@ -212,25 +271,31 @@ public enum MarkdownProse {
 
     /// Inline markdown with explicit fonts on strong and code runs.
     public static func inline(_ source: String, style: Style) -> AttributedString {
-        var attributed = (try? AttributedString(markdown: source, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
-            ?? AttributedString(source)
-        for run in attributed.runs {
-            guard let intent = run.inlinePresentationIntent else { continue }
-            if intent.contains(.code) {
-                attributed[run.range].font = SwftType.inlineCode
-            } else if intent.contains(.stronglyEmphasized) {
-                attributed[run.range].font = style.strongFont
+        MarkdownProseCache.shared.inline(for: source, style: style) {
+            var attributed = (try? AttributedString(markdown: source, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
+                ?? AttributedString(source)
+            for run in attributed.runs {
+                guard let intent = run.inlinePresentationIntent else { continue }
+                if intent.contains(.code) {
+                    attributed[run.range].font = SwftType.inlineCode
+                } else if intent.contains(.stronglyEmphasized) {
+                    attributed[run.range].font = style.strongFont
+                }
             }
+            return attributed
         }
-        return attributed
     }
 }
 
 /// Fenced code block with a language label and copy button.
-public struct CodeBlock: View {
+public struct CodeBlock: View, Equatable {
     let code: String
     let language: String?
     @State private var copied = false
+
+    nonisolated public static func == (lhs: CodeBlock, rhs: CodeBlock) -> Bool {
+        lhs.code == rhs.code && lhs.language == rhs.language
+    }
 
     public init(_ code: String, language: String? = nil) {
         self.code = code

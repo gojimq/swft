@@ -61,6 +61,24 @@ struct SendFlightSnapshots {
         }
     }
 
+    @Test(arguments: ["light", "dark"])
+    func newThreadHandoffFadeIn(appearance: String) async throws {
+        let model = AppModel.mock()
+        try await Self.captureAsync(
+            model,
+            appearance: appearance,
+            name: "send-flight-new-thread-fade-\(appearance)"
+        ) {
+            model.composerText = "Fade the first message in cleanly"
+            model.send()
+            let start = Date()
+            while Date().timeIntervalSince(start) < 1.2 {
+                Self.pump(1.0 / 60.0)
+                await Task.yield()
+            }
+        }
+    }
+
     @Test func scrolledUpShowsScrollToBottomButton() throws {
         let model = AppModel.mock()
         model.destination = .thread(MockData.threadDetail.summary.id)
@@ -139,5 +157,39 @@ struct SendFlightSnapshots {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         try png.write(to: directory.appendingPathComponent("\(name).png"))
         window.orderOut(nil)
+    }
+
+    static func captureAsync(
+        _ model: AppModel,
+        appearance: String,
+        name: String,
+        size: CGSize = CGSize(width: 1280, height: 860),
+        then interact: () async -> Void
+    ) async throws {
+        SwftFonts.register()
+        let window = NSWindow(
+            contentRect: CGRect(origin: CGPoint(x: -4000, y: -4000), size: size),
+            styleMask: [.titled, .fullSizeContentView, .closable, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        window.appearance = NSAppearance(named: appearance == "dark" ? .darkAqua : .aqua)
+        let host = NSHostingView(rootView: RootView().environment(model))
+        host.frame = CGRect(origin: .zero, size: size)
+        window.contentView = host
+        window.orderBack(nil)
+        Self.pump(1.0)
+        await interact()
+        host.layoutSubtreeIfNeeded()
+        let rep = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+        host.cacheDisplay(in: host.bounds, to: rep)
+        let png = try #require(rep.representation(using: .png, properties: [:]))
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try png.write(to: directory.appendingPathComponent("\(name).png"))
+        window.orderOut(nil)
+    }
+
+    private static func pump(_ seconds: TimeInterval) {
+        RunLoop.main.run(until: Date().addingTimeInterval(seconds))
     }
 }

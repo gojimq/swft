@@ -10,6 +10,8 @@ public final class ThreadStore {
     public let threadId: String
 
     public private(set) var projection: ThreadProjection?
+    /// Monotonic counter incremented whenever `projection` changes, enabling O(1) memoization in UI adapters.
+    public private(set) var projectionVersion: UInt64 = 0
     public private(set) var isSynchronized: Bool = false
     public private(set) var lastSequence: Int?
     public private(set) var lastError: String?
@@ -130,6 +132,7 @@ public final class ThreadStore {
         switch item {
         case .snapshot(let snapshotSequence, let nextProjection):
             projection = nextProjection
+            projectionVersion &+= 1
             lastSequence = snapshotSequence
 
         case .synchronized:
@@ -223,6 +226,7 @@ public final class ThreadStore {
         }
 
         projection = current
+        projectionVersion &+= 1
     }
 
     private func isItemVisible(_ item: TurnItem, in projection: ThreadProjection) -> Bool {

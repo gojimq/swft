@@ -151,7 +151,7 @@ struct NewThreadMockTests {
         #expect(model.threadSummary(for: row.id)?.title == "Fix Failing Test")
     }
 
-    @Test func handoffEmitsTheFirstMessageFlightAndLeavingNeverReplaysIt() async {
+    @Test func handoffEmitsFirstMessageFadeAndFollowUpUsesFlightWithoutReplaying() async throws {
         let model = AppModel.mock()
         model.composerText = "Find and fix the failing test"
         model.send()
@@ -159,22 +159,35 @@ struct NewThreadMockTests {
         model.newThread.dockSettled(token: model.newThread.launchingToken!)
         for _ in 0..<1000 where model.destination == .home { await Task.yield() }
         #expect(model.destination == .thread(row.id))
-        let handoff = model.latestThreadSend
-        #expect(handoff?.isHandoff == true)
-        #expect(handoff?.threadID == row.id)
-        #expect(handoff?.text == "Find and fix the failing test")
+        let handoff = try #require(model.latestThreadSend)
+        #expect(handoff.isHandoff == true)
+        #expect(handoff.threadID == row.id)
+        #expect(handoff.text == "Find and fix the failing test")
 
-        // Leaving the thread drops the event, so coming back later can never fly (or hold) it again.
+        // The handoff uses fade-in rather than launching a J-curve flight overlay.
+        let detail = try #require(model.detail(for: row.id))
+        let coordinator = SendFlightCoordinator()
+        coordinator.syncThread(detail: detail, isBusy: true)
+        #expect(coordinator.adoptOnAppear(handoff, detail: detail, isHandoffScreen: true, reduceMotion: false) == .handoffFade)
+        #expect(coordinator.activeFlight == nil)
+        #expect(coordinator.handoffFadeBubbleID != nil)
+
+        // Leaving the thread drops the event, so coming back later can never fade or hold it again.
         model.goHome()
         #expect(model.latestThreadSend == nil)
         model.open(row.id)
         #expect(model.latestThreadSend == nil)
 
-        // A send inside the open thread keeps its event (same destination).
+        // A send inside the open thread keeps its event and runs the full J-curve flight.
         model.composerText = "One more thing"
         model.send()
-        #expect(model.latestThreadSend?.isHandoff == false)
-        #expect(model.latestThreadSend?.threadID == row.id)
+        let followUp = try #require(model.latestThreadSend)
+        #expect(followUp.isHandoff == false)
+        #expect(followUp.threadID == row.id)
+        let updatedDetail = try #require(model.detail(for: row.id))
+        #expect(coordinator.beginSend(followUp, detail: updatedDetail, reduceMotion: false) == .startFlight)
+        #expect(coordinator.activeFlight?.id == followUp.id)
+        coordinator.cancelFlight(clearPendingStreamRoom: true)
     }
 
     @Test func newThreadMidLaunchStaysHome() async {

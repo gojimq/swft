@@ -5,7 +5,7 @@ import SwftDesign
 import SwiftUI
 
 /// Immutable payload emitted by `AppModel.send()` when a message is dispatched inside a thread, or when Home hands a
-/// freshly launched thread over to its screen (`isHandoff`, the first message flies out of the docked composer).
+/// freshly launched thread over to its screen (`isHandoff`, where the first message fades in cleanly instead of flying).
 struct ThreadSendEvent: Equatable, Sendable {
     let id: UUID
     let threadID: String
@@ -44,19 +44,22 @@ struct ActiveSendFlight: Equatable, Sendable {
     let threadID: String
     let text: String
     var attachments: [TranscriptAttachment] = []
-    /// Where the bubble launches from; nil when the composer had not reported its frame yet (a handoff screen mounting),
-    /// in which case the overlay follows the composer's live frame.
+    /// Where the bubble launches from; nil when the composer had not reported its frame yet, in which case the overlay
+    /// follows the composer's live frame.
     let composerFrame: CGRect?
     var boundItemID: String?
+    /// Pre-flight jump target when sending from far up a long transcript (within one viewport of the end).
+    var preFlightJumpY: CGFloat? = nil
     var scrollInterrupted: Bool = false
     /// Non-nil only when deterministic snapshot/unit tests pin the flight to a specific normalized time in `[0, 1]`.
     var pinnedProgress: Double? = nil
 }
 
-/// Action returned by `SendFlightCoordinator.beginSend` telling `ThreadView` how to drive `ScrollPosition`.
+/// Action returned by `SendFlightCoordinator.beginSend` / `adoptOnAppear` telling `ThreadView` how to stage the send.
 enum SendFlightStartAction: Equatable, Sendable {
     case none
     case startFlight
+    case handoffFade
     case instantAnchor
 }
 
@@ -72,14 +75,17 @@ extension ThreadDetailState {
     }
 }
 
-/// Coordinates send flight, latest-turn stream room retention, the latest turn's reveal hold, and scroll stickiness
-/// for a single `ThreadView`. Observed properties change only on discrete events (a send, a landing, a stick flip),
-/// never per scroll or animation frame, so scrolling and flights do not re-render the transcript.
+/// Coordinates send flight, new-thread first-message fade-in, latest-turn stream room retention, the latest turn's
+/// reveal hold, display-synced scroll driving, and scroll stickiness for a single `ThreadView`. Observed properties
+/// change only on discrete events (a send, a landing, a stick flip), never per scroll or animation frame, so
+/// scrolling and flights do not re-render the transcript.
 @MainActor
 @Observable
 final class SendFlightCoordinator {
     private(set) var currentThreadID: String?
     private(set) var activeFlight: ActiveSendFlight?
+    /// First user bubble fading in cleanly when a newly launched thread takes over from Home (`isHandoff == true`).
+    private(set) var handoffFadeBubbleID: String?
     private(set) var reduceMotionFadeBubbleID: String?
     private(set) var tracker = SentAnimationTracker()
     private(set) var retainedStreamRoomTurnKey: String?
@@ -94,12 +100,14 @@ final class SendFlightCoordinator {
     private(set) var lastHandledSendID: UUID?
     /// Bumped when a landed flight needs a gentle settle to the bottom (content grew while it flew).
     private(set) var settleToBottomToken = 0
-    /// The send whose new turn is still holding its Working indicator and early rows back while the message flies.
+    /// The send whose new turn is still holding its Working indicator and early rows back while the message appears.
     private(set) var latestTurnHeldForSendID: UUID?
 
+    @ObservationIgnored let scrollDriver = SendFlightScrollDriver()
     @ObservationIgnored private(set) var stickiness = ThreadScrollStickiness()
     @ObservationIgnored private(set) var isUserInteractingWithScroll = false
     @ObservationIgnored private(set) var programmaticScrollPending = false
+    @ObservationIgnored private(set) var latestMeasuredComposerHeight: CGFloat?
     @ObservationIgnored private var completionTask: Task<Void, Never>?
     @ObservationIgnored private var holdReleaseTask: Task<Void, Never>?
 
@@ -110,8 +118,12 @@ final class SendFlightCoordinator {
         return activeFlight.pinnedProgress == nil
     }
 
-    func sentID(for detail: ThreadDetailState, latestSend: ThreadSendEvent? = nil) -> String? {
-        let lastUserID = lastUserRowID(in: detail.rows)
+    func recordMeasuredComposerHeight(_ height: CGFloat) {
+        latestMeasuredComposerHeight = height
+    }
+
+    func sentID(for detail: ThreadDetailState, rows: [TranscriptRow]? = nil, latestSend: ThreadSendEvent? = nil) -> String? {
+        let lastUserID = lastUserRowID(in: rows ?? detail.rows)
         if let tracked = tracker.sentID(for: detail.summary.id, lastUserID: lastUserID) {
             return tracked
         }
@@ -125,27 +137,86 @@ final class SendFlightCoordinator {
         return nil
     }
 
-    /// True on the frame a send's row lands in the transcript, before `beginSend` has handled it.
+    /// True on the frame a send's row lands in the transcript, before `beginSend` / `adoptOnAppear` has handled it.
     func isSendPending(_ latestSend: ThreadSendEvent?, in detail: ThreadDetailState) -> Bool {
         guard let latestSend, latestSend.threadID == detail.summary.id else { return false }
         return latestSend.id != lastHandledSendID
     }
 
-    /// The row a pending send is about to fly onto, hidden on that first frame so it never flashes in place (under
-    /// the composer's glass) before the overlay takes over.
-    func pendingFlightRowID(latestSend: ThreadSendEvent?, in detail: ThreadDetailState, reduceMotion: Bool) -> String? {
-        guard !reduceMotion, let latestSend, isSendPending(latestSend, in: detail) else { return nil }
-        return latestSend.optimisticItemID ?? (latestSend.isHandoff ? lastUserRowID(in: detail.rows) : nil)
+    /// The row a pending in-thread send is about to fly onto, hidden on that first frame so it never flashes in place
+    /// before the flight overlay takes over. Handoffs fade in directly without a flight overlay.
+    func pendingFlightRowID(latestSend: ThreadSendEvent?, in detail: ThreadDetailState, rows: [TranscriptRow]? = nil, reduceMotion: Bool) -> String? {
+        guard !reduceMotion, let latestSend, !latestSend.isHandoff, isSendPending(latestSend, in: detail) else { return nil }
+        return latestSend.optimisticItemID
     }
 
-    /// Whether the latest turn's Working indicator and non-user rows wait (hidden) while the sent message flies to the
-    /// top. They fade and rise in once it is most of the way there (`WORKING_DELAY_MS`).
-    func holdsLatestTurn(for detail: ThreadDetailState, latestSend: ThreadSendEvent?, reduceMotion: Bool) -> Bool {
+    /// The first user row of a Home → new thread handoff on its initial frame, before `adoptOnAppear` runs, so it
+    /// starts at opacity 0 and fades in cleanly without flashing.
+    func pendingHandoffFadeRowID(
+        latestSend: ThreadSendEvent?,
+        in detail: ThreadDetailState,
+        rows: [TranscriptRow]? = nil,
+        isHandoffScreen: Bool,
+        reduceMotion: Bool
+    ) -> String? {
+        guard !reduceMotion, isHandoffScreen, let latestSend, latestSend.isHandoff, isSendPending(latestSend, in: detail) else {
+            return nil
+        }
+        return latestSend.optimisticItemID ?? lastUserRowID(in: rows ?? detail.rows)
+    }
+
+    /// Resolves which user bubble (if any) should fade in for a Home handoff on this render pass.
+    func activeHandoffFadeBubbleID(
+        in detail: ThreadDetailState,
+        rows: [TranscriptRow]? = nil,
+        latestSend: ThreadSendEvent?,
+        isHandoffScreen: Bool,
+        reduceMotion: Bool
+    ) -> String? {
+        guard !reduceMotion else { return nil }
+        if let pending = pendingHandoffFadeRowID(
+            latestSend: latestSend,
+            in: detail,
+            rows: rows,
+            isHandoffScreen: isHandoffScreen,
+            reduceMotion: reduceMotion
+        ) {
+            return pending
+        }
+        if let id = handoffFadeBubbleID {
+            if !id.isEmpty { return id }
+            return sentID(for: detail, rows: rows) ?? lastUserRowID(in: rows ?? detail.rows)
+        }
+        return nil
+    }
+
+    /// Resolves which user bubble (if any) is currently hidden behind an active or pending send-flight overlay.
+    func activeHiddenFlightBubbleID(
+        in detail: ThreadDetailState,
+        rows: [TranscriptRow]? = nil,
+        pendingRowID: String? = nil
+    ) -> String? {
+        if let pendingRowID { return pendingRowID }
+        guard let flight = activeFlight, flight.threadID == detail.summary.id else { return nil }
+        return flight.boundItemID ?? sentID(for: detail, rows: rows)
+    }
+
+    /// Whether the latest turn's Working indicator and non-user rows wait (hidden) while the sent message flies up
+    /// (in-thread send) or fades in (Home → new thread handoff).
+    func holdsLatestTurn(
+        for detail: ThreadDetailState,
+        latestSend: ThreadSendEvent?,
+        isHandoffScreen: Bool = true,
+        reduceMotion: Bool
+    ) -> Bool {
         if reduceMotion { return false }
         if let flight = activeFlight, flight.threadID == detail.summary.id, let pinned = flight.pinnedProgress {
             return pinned < SendFlightTiming.workingDelay / SendFlightTiming.sendDuration
         }
-        if isSendPending(latestSend, in: detail) { return true }
+        if isSendPending(latestSend, in: detail) {
+            if latestSend?.isHandoff == true && !isHandoffScreen { return false }
+            return true
+        }
         return latestTurnHeldForSendID != nil
     }
 
@@ -154,6 +225,7 @@ final class SendFlightCoordinator {
         isBusy: Bool,
         latestTurnRows: [TranscriptRow],
         latestSend: ThreadSendEvent?,
+        isHandoffScreen: Bool = true,
         reduceMotion: Bool
     ) -> Bool {
         guard SendFlightLogic.shouldShowWorkingIndicator(
@@ -163,17 +235,22 @@ final class SendFlightCoordinator {
         ) else {
             return false
         }
-        return !holdsLatestTurn(for: detail, latestSend: latestSend, reduceMotion: reduceMotion)
+        return !holdsLatestTurn(for: detail, latestSend: latestSend, isHandoffScreen: isHandoffScreen, reduceMotion: reduceMotion)
     }
 
     /// Pass `latestSend` so the new turn has its room on the send's very first frame (an idle thread would otherwise
     /// gain it a frame later, shifting the transcript under the starting flight).
-    func hasStreamRoom(for detail: ThreadDetailState, isBusy: Bool, latestSend: ThreadSendEvent? = nil) -> Bool {
+    func hasStreamRoom(
+        for detail: ThreadDetailState,
+        rows: [TranscriptRow]? = nil,
+        isBusy: Bool,
+        latestSend: ThreadSendEvent? = nil
+    ) -> Bool {
         if isSendPending(latestSend, in: detail) { return true }
-        if pendingSendStreamRoom && activeFlight?.threadID == detail.summary.id {
+        if pendingSendStreamRoom && (activeFlight?.threadID == detail.summary.id || handoffFadeBubbleID != nil) {
             return true
         }
-        let items = SendFlightLogic.streamRoomItems(from: detail.rows)
+        let items = SendFlightLogic.streamRoomItems(from: rows ?? detail.rows)
         return SendFlightLogic.latestTurnHasStreamRoom(
             state: detail.streamRoomState,
             isBusy: isBusy,
@@ -183,10 +260,11 @@ final class SendFlightCoordinator {
     }
 
     /// Synchronizes thread-scoped state whenever the open thread, rows, or busy state changes.
-    func syncThread(detail: ThreadDetailState, isBusy: Bool) {
+    func syncThread(detail: ThreadDetailState, rows providedRows: [TranscriptRow]? = nil, isBusy: Bool) {
         let threadID = detail.summary.id
         if currentThreadID != threadID {
             cancelFlight(clearPendingStreamRoom: true)
+            handoffFadeBubbleID = nil
             reduceMotionFadeBubbleID = nil
             tracker.resetForThreadIfNeeded(threadID)
             retainedStreamRoomTurnKey = nil
@@ -198,7 +276,7 @@ final class SendFlightCoordinator {
             currentThreadID = threadID
         }
 
-        let rows = detail.rows
+        let rows = providedRows ?? detail.rows
         let lastUserID = lastUserRowID(in: rows)
         let currentSentID = tracker.sentID(for: threadID, lastUserID: lastUserID)
 
@@ -212,16 +290,29 @@ final class SendFlightCoordinator {
             }
         }
 
+        if let fadeID = handoffFadeBubbleID {
+            if fadeID.isEmpty, let currentSentID {
+                handoffFadeBubbleID = currentSentID
+                pendingSendStreamRoom = false
+            } else if !fadeID.isEmpty, pendingSendStreamRoom, rows.contains(where: { $0.id == fadeID }) {
+                pendingSendStreamRoom = false
+            }
+        }
+
         if let fadeID = reduceMotionFadeBubbleID, fadeID.isEmpty, let currentSentID {
             reduceMotionFadeBubbleID = currentSentID
         }
+
+        let resolvedSentID = currentSentID
+            ?? activeFlight?.boundItemID
+            ?? (handoffFadeBubbleID.flatMap { $0.isEmpty ? nil : $0 })
 
         let streamItems = SendFlightLogic.streamRoomItems(from: rows)
         let retained = SendFlightLogic.resolveStreamRoomTurnKey(
             state: detail.streamRoomState,
             isBusy: isBusy,
             items: streamItems,
-            sentID: currentSentID ?? activeFlight?.boundItemID,
+            sentID: resolvedSentID,
             retainedTurnKey: retainedStreamRoomTurnKey
         )
         if retained != retainedStreamRoomTurnKey { retainedStreamRoomTurnKey = retained }
@@ -230,17 +321,18 @@ final class SendFlightCoordinator {
         let advanced = SendFlightLogic.advanceConversationEntrance(
             entrance,
             items: entries,
-            sentID: currentSentID ?? activeFlight?.boundItemID
+            sentID: resolvedSentID
         )
         if advanced != entrance { entrance = advanced }
     }
 
-    /// Handles the latest send as a screen appears. A Home handoff for this very screen flies its first message;
-    /// anything else (a send made before the user left and came back) is only marked handled so it never replays.
+    /// Handles the latest send as a screen appears. A Home handoff fades the first message in cleanly (no J-curve
+    /// flight); anything else (a send made before the user left and came back) is only marked handled so it never replays.
     @discardableResult
     func adoptOnAppear(
         _ event: ThreadSendEvent?,
         detail: ThreadDetailState,
+        rows: [TranscriptRow]? = nil,
         isHandoffScreen: Bool,
         reduceMotion: Bool,
         now: Date = Date()
@@ -250,14 +342,15 @@ final class SendFlightCoordinator {
             lastHandledSendID = event.id
             return .none
         }
-        return beginSend(event, detail: detail, reduceMotion: reduceMotion, now: now)
+        return beginSend(event, detail: detail, rows: rows, reduceMotion: reduceMotion, now: now)
     }
 
-    /// Begins a send flight (or instant Reduce Motion anchor) for a message sent inside the current thread.
+    /// Begins a send flight (in-thread), first-message fade-in (Home handoff), or instant Reduce Motion anchor.
     @discardableResult
     func beginSend(
         _ event: ThreadSendEvent,
         detail: ThreadDetailState,
+        rows providedRows: [TranscriptRow]? = nil,
         reduceMotion: Bool,
         now: Date = Date()
     ) -> SendFlightStartAction {
@@ -265,23 +358,35 @@ final class SendFlightCoordinator {
         guard lastHandledSendID != event.id else { return .none }
         lastHandledSendID = event.id
 
-        // Under Reduce Motion a handoff screen crossfades in whole; there is nothing to fly.
+        // Under Reduce Motion a handoff screen crossfades in whole; no separate bubble fade or flight.
         if event.isHandoff && reduceMotion { return .none }
+
+        let rows = providedRows ?? detail.rows
+        let preFlightJump = event.isHandoff ? nil : preFlightJumpOffset()
 
         // Rapid consecutive send: finish/supersede any earlier flight cleanly so its real bubble appears immediately.
         cancelFlight(clearPendingStreamRoom: false)
 
-        // A handoff's first message is already in the transcript: bind the flight to that row.
-        let boundID = event.optimisticItemID ?? (event.isHandoff ? lastUserRowID(in: detail.rows) : nil)
-        let lastUserIDBeforeSend = lastUserRowID(in: detail.rows, excluding: boundID)
+        let boundID = event.optimisticItemID ?? (event.isHandoff ? lastUserRowID(in: rows) : nil)
+        let lastUserIDBeforeSend = lastUserRowID(in: rows, excluding: boundID)
         tracker.armSend(threadID: event.threadID, lastUserID: lastUserIDBeforeSend)
         stickiness.armStick()
-        pendingSendStreamRoom = true
         if let boundID {
             retainedStreamRoomTurnKey = boundID
         }
 
+        // Home → new thread handoff: fade the first message in cleanly without a J-curve flight overlay.
+        if event.isHandoff {
+            reduceMotionFadeBubbleID = nil
+            handoffFadeBubbleID = boundID ?? ""
+            pendingSendStreamRoom = (boundID == nil)
+            refreshScrollToBottom()
+            scheduleHoldRelease(for: event.id, delay: SendFlightTiming.handoffDuration)
+            return .handoffFade
+        }
+
         if reduceMotion {
+            handoffFadeBubbleID = nil
             releaseHold()
             reduceMotionFadeBubbleID = event.optimisticItemID ?? ""
             pendingSendStreamRoom = false
@@ -289,7 +394,9 @@ final class SendFlightCoordinator {
             return .instantAnchor
         }
 
+        handoffFadeBubbleID = nil
         reduceMotionFadeBubbleID = nil
+        pendingSendStreamRoom = true
         boundBubbleFrame = nil
         activeFlight = ActiveSendFlight(
             id: event.id,
@@ -297,25 +404,28 @@ final class SendFlightCoordinator {
             text: event.text,
             attachments: event.attachments,
             composerFrame: composerFrame.width > 0 && composerFrame.height > 0 ? composerFrame : nil,
-            boundItemID: boundID
+            boundItemID: boundID,
+            preFlightJumpY: preFlightJump
         )
         programmaticScrollPending = true
         refreshScrollToBottom()
-        scheduleHoldRelease(for: event.id)
+        scheduleHoldRelease(for: event.id, delay: SendFlightTiming.workingDelay)
         scheduleCompletionSafetyNet(for: event.id)
         return .startFlight
     }
 
-    /// Cancels an active flight if its live network dispatch threw an error.
+    /// Cancels an active flight or handoff hold if its live network dispatch threw an error.
     func failSend(_ eventID: UUID) {
         guard activeFlight?.id == eventID || latestTurnHeldForSendID == eventID else { return }
+        handoffFadeBubbleID = nil
         cancelFlight(clearPendingStreamRoom: true)
     }
 
-    /// Unconditionally clears any active flight so a ghost overlay can never persist.
+    /// Unconditionally clears any active flight and stops any in-progress programmatic scroll animation.
     func cancelFlight(clearPendingStreamRoom: Bool = false) {
         completionTask?.cancel()
         completionTask = nil
+        scrollDriver.cancelAnimation()
         if activeFlight != nil { activeFlight = nil }
         boundBubbleFrame = nil
         programmaticScrollPending = false
@@ -331,9 +441,13 @@ final class SendFlightCoordinator {
     @discardableResult
     func finishFlightIfMatching(_ id: UUID) -> Bool {
         guard let flight = activeFlight, flight.id == id else { return false }
+        if !flight.scrollInterrupted && scrollDriver.isAnimating {
+            scrollDriver.finishAnimationAtTarget()
+        }
+        let remainingDistance = scrollDriver.distanceFromBottom() ?? stickiness.lastMetrics.distanceFromBottom
         let needsSettle = !flight.scrollInterrupted
             && stickiness.isSticking
-            && stickiness.lastMetrics.distanceFromBottom > 1
+            && remainingDistance > 1
         cancelFlight(clearPendingStreamRoom: true)
         if needsSettle {
             programmaticScrollPending = true
@@ -345,12 +459,7 @@ final class SendFlightCoordinator {
     /// True while the real `UserBubble` for `rowID` is represented by the active flight overlay (or is about to be:
     /// `pendingRowID` from `pendingFlightRowID`).
     func isBubbleHiddenForFlight(rowID: String, in detail: ThreadDetailState, pendingRowID: String? = nil) -> Bool {
-        if let pendingRowID, pendingRowID == rowID { return true }
-        guard let flight = activeFlight, flight.threadID == detail.summary.id else { return false }
-        if let boundID = flight.boundItemID {
-            return boundID == rowID
-        }
-        return sentID(for: detail) == rowID
+        activeHiddenFlightBubbleID(in: detail, pendingRowID: pendingRowID) == rowID
     }
 
     /// Pins the active flight to an exact normalized progress `[0, 1]` for deterministic snapshot verification.
@@ -358,6 +467,7 @@ final class SendFlightCoordinator {
         guard var flight = activeFlight else { return }
         completionTask?.cancel()
         completionTask = nil
+        scrollDriver.cancelAnimation()
         flight.pinnedProgress = min(1.0, max(0.0, progress))
         activeFlight = flight
     }
@@ -424,6 +534,7 @@ final class SendFlightCoordinator {
     }
 
     func handleWorkFoldToggle() {
+        scrollDriver.cancelAnimation()
         stickiness.releaseStick()
         refreshScrollToBottom()
     }
@@ -434,17 +545,26 @@ final class SendFlightCoordinator {
         refreshScrollToBottom()
     }
 
+    /// Immediately hands scroll control back to the user if they start scrolling while a flight or programmatic scroll
+    /// is running. Returns `true` when an active flight was cut short.
+    @discardableResult
+    func handleUserScrollInterrupt() -> Bool {
+        isUserInteractingWithScroll = true
+        programmaticScrollPending = false
+        scrollDriver.cancelAnimation()
+        if activeFlight != nil {
+            cancelFlight(clearPendingStreamRoom: false)
+            return true
+        }
+        return false
+    }
+
     /// Returns `true` when a user gesture cut an active flight short (the caller fades the real bubble in).
     @discardableResult
     func handleScrollPhaseChange(from oldPhase: ScrollPhase, to newPhase: ScrollPhase) -> Bool {
         switch newPhase {
         case .interacting:
-            isUserInteractingWithScroll = true
-            programmaticScrollPending = false
-            if activeFlight != nil {
-                cancelFlight(clearPendingStreamRoom: false)
-                return true
-            }
+            return handleUserScrollInterrupt()
         case .idle:
             isUserInteractingWithScroll = false
             programmaticScrollPending = false
@@ -457,12 +577,17 @@ final class SendFlightCoordinator {
     /// Updates scroll stickiness from SwiftUI's `onScrollGeometryChange`.
     /// Returns `true` when the view should pin to the bottom to follow live streaming / hydration growth.
     @discardableResult
-    func handleScrollGeometryChange(_ metrics: ScrollMetrics) -> Bool {
+    func handleScrollGeometryChange(_ metrics: ScrollMetrics, isSendPending: Bool = false) -> Bool {
         defer { refreshScrollToBottom() }
         let previousContentHeight = stickiness.lastMetrics.contentHeight
         let contentGrew = metrics.contentHeight > previousContentHeight + 0.5
 
-        if activeFlight != nil {
+        if isSendPending && activeFlight == nil {
+            // Preserve pre-send scroll metrics on Frame 0 so `preFlightJumpOffset()` targets the old end.
+            return false
+        }
+
+        if activeFlight != nil || scrollDriver.isAnimating {
             stickiness.recordProgrammaticMetrics(metrics)
             return false
         }
@@ -498,11 +623,11 @@ final class SendFlightCoordinator {
         if latestTurnHeldForSendID != nil { latestTurnHeldForSendID = nil }
     }
 
-    private func scheduleHoldRelease(for sendID: UUID) {
+    private func scheduleHoldRelease(for sendID: UUID, delay: TimeInterval) {
         holdReleaseTask?.cancel()
         latestTurnHeldForSendID = sendID
         holdReleaseTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(SendFlightTiming.workingDelay))
+            try? await Task.sleep(for: .seconds(delay))
             guard !Task.isCancelled, let self, self.latestTurnHeldForSendID == sendID else { return }
             self.latestTurnHeldForSendID = nil
         }

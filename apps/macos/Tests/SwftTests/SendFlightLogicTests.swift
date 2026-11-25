@@ -661,39 +661,104 @@ struct SendFlightLogicTests {
     // MARK: - Home → New Thread Handoff
 
     @MainActor
-    @Test func handoffFliesTheFirstMessageOnlyOnTheHandoffScreen() {
+    @Test func handoffFadesTheFirstMessageWithoutFlightOnlyOnTheHandoffScreen() async throws {
         var detail = MockData.threadDetail
         detail.items = [TranscriptItem(id: "first", kind: .user("Plan the launch"))]
         detail.isRunning = true
         let handoff = ThreadSendEvent(threadID: detail.summary.id, text: "Plan the launch", isHandoff: true)
 
-        // The screen that took over from Home flies the existing first row out of the docked composer.
+        // The screen that took over from Home fades the first row in directly — NO J-curve flight overlay.
         let coordinator = SendFlightCoordinator()
         coordinator.syncThread(detail: detail, isBusy: true)
-        #expect(coordinator.holdsLatestTurn(for: detail, latestSend: handoff, reduceMotion: false))
+        #expect(coordinator.pendingFlightRowID(latestSend: handoff, in: detail, reduceMotion: false) == nil)
+        #expect(coordinator.pendingHandoffFadeRowID(latestSend: handoff, in: detail, isHandoffScreen: true, reduceMotion: false) == "first")
+        #expect(coordinator.holdsLatestTurn(for: detail, latestSend: handoff, isHandoffScreen: true, reduceMotion: false))
         let action = coordinator.adoptOnAppear(handoff, detail: detail, isHandoffScreen: true, reduceMotion: false)
-        #expect(action == .startFlight)
-        #expect(coordinator.activeFlight?.boundItemID == "first")
-        #expect(coordinator.isBubbleHiddenForFlight(rowID: "first", in: detail))
-        // Composer not measured yet on mount: the flight follows its live frame once it reports.
-        #expect(coordinator.activeFlight?.composerFrame == nil)
-        coordinator.updateComposerFrame(CGRect(x: 100, y: 700, width: 700, height: 110))
-        #expect(coordinator.launchFrame(for: coordinator.activeFlight!) == CGRect(x: 100, y: 700, width: 700, height: 110))
-        // Working (and any early live rows) are held until the message is most of the way up.
-        #expect(!coordinator.shouldShowWorking(for: detail, isBusy: true, latestTurnRows: detail.rows, latestSend: handoff, reduceMotion: false))
-        #expect(coordinator.holdsLatestTurn(for: detail, latestSend: handoff, reduceMotion: false))
+        #expect(action == .handoffFade)
+        #expect(coordinator.activeFlight == nil)
+        #expect(coordinator.handoffFadeBubbleID == "first")
+        #expect(!coordinator.isBubbleHiddenForFlight(rowID: "first", in: detail))
+        #expect(coordinator.hasStreamRoom(for: detail, isBusy: true))
+        // Working (and any early live rows) wait briefly while the first message fades in.
+        #expect(!coordinator.shouldShowWorking(for: detail, isBusy: true, latestTurnRows: detail.rows, latestSend: handoff, isHandoffScreen: true, reduceMotion: false))
+        #expect(coordinator.holdsLatestTurn(for: detail, latestSend: handoff, isHandoffScreen: true, reduceMotion: false))
 
-        // Coming back to the thread later (not a handoff screen) never replays, and never leaves Working hidden.
+        // Hold releases cleanly after the handoff beat so Working appears gracefully.
+        try await Task.sleep(for: .seconds(SendFlightTiming.handoffDuration))
+        for _ in 0..<100 where coordinator.latestTurnHeldForSendID != nil {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        #expect(coordinator.latestTurnHeldForSendID == nil)
+        #expect(coordinator.shouldShowWorking(for: detail, isBusy: true, latestTurnRows: detail.rows, latestSend: handoff, isHandoffScreen: true, reduceMotion: false))
+
+        // Every subsequent send inside this thread STILL runs the full J-curve flight.
+        var followUpDetail = detail
+        followUpDetail.items.append(TranscriptItem(id: "second", kind: .user("Now add tests")))
+        let followUp = ThreadSendEvent(threadID: detail.summary.id, text: "Now add tests", optimisticItemID: "second", isHandoff: false)
+        #expect(coordinator.pendingFlightRowID(latestSend: followUp, in: followUpDetail, reduceMotion: false) == "second")
+        let followUpAction = coordinator.beginSend(followUp, detail: followUpDetail, reduceMotion: false)
+        #expect(followUpAction == .startFlight)
+        #expect(coordinator.activeFlight?.boundItemID == "second")
+        #expect(coordinator.handoffFadeBubbleID == nil)
+        #expect(coordinator.isBubbleHiddenForFlight(rowID: "second", in: followUpDetail))
+        coordinator.cancelFlight(clearPendingStreamRoom: true)
+
+        // Coming back to the thread later (not a handoff screen) never replays, never fades, and never leaves Working hidden.
         let revisit = SendFlightCoordinator()
+        #expect(revisit.pendingHandoffFadeRowID(latestSend: handoff, in: detail, isHandoffScreen: false, reduceMotion: false) == nil)
+        #expect(!revisit.holdsLatestTurn(for: detail, latestSend: handoff, isHandoffScreen: false, reduceMotion: false))
         #expect(revisit.adoptOnAppear(handoff, detail: detail, isHandoffScreen: false, reduceMotion: false) == .none)
         #expect(revisit.activeFlight == nil)
-        #expect(revisit.shouldShowWorking(for: detail, isBusy: true, latestTurnRows: detail.rows, latestSend: handoff, reduceMotion: false))
+        #expect(revisit.handoffFadeBubbleID == nil)
+        #expect(revisit.shouldShowWorking(for: detail, isBusy: true, latestTurnRows: detail.rows, latestSend: handoff, isHandoffScreen: false, reduceMotion: false))
 
-        // Reduce Motion: the screen crossfades in whole, nothing flies and nothing is held.
+        // Reduce Motion: the screen crossfades in whole, nothing flies, nothing fades separately, and nothing is held.
         let quiet = SendFlightCoordinator()
+        #expect(quiet.pendingHandoffFadeRowID(latestSend: handoff, in: detail, isHandoffScreen: true, reduceMotion: true) == nil)
         #expect(quiet.adoptOnAppear(handoff, detail: detail, isHandoffScreen: true, reduceMotion: true) == .none)
         #expect(quiet.activeFlight == nil)
-        #expect(!quiet.holdsLatestTurn(for: detail, latestSend: handoff, reduceMotion: true))
+        #expect(quiet.handoffFadeBubbleID == nil)
+        #expect(!quiet.holdsLatestTurn(for: detail, latestSend: handoff, isHandoffScreen: true, reduceMotion: true))
+
+        // Async projection arrival: handoff armed before first user row arrives still resolves on the row's first frame.
+        var emptyDetail = detail
+        emptyDetail.items = []
+        let asyncHandoff = SendFlightCoordinator()
+        asyncHandoff.syncThread(detail: emptyDetail, isBusy: true)
+        #expect(asyncHandoff.adoptOnAppear(handoff, detail: emptyDetail, isHandoffScreen: true, reduceMotion: false) == .handoffFade)
+        #expect(asyncHandoff.handoffFadeBubbleID == "")
+        #expect(asyncHandoff.activeFlight == nil)
+        #expect(asyncHandoff.activeHandoffFadeBubbleID(in: detail, latestSend: handoff, isHandoffScreen: true, reduceMotion: false) == "first")
+        asyncHandoff.syncThread(detail: detail, isBusy: true)
+        #expect(asyncHandoff.handoffFadeBubbleID == "first")
+    }
+
+    @MainActor
+    @Test func pendingSendSuppressesAutoFollowSnapAndPreservesPreFlightJump() {
+        let coordinator = SendFlightCoordinator()
+        coordinator.syncThread(detail: MockData.threadDetail, isBusy: false)
+        // User scrolled to the top of a 2000pt transcript (old endOffsetY = 1200).
+        _ = coordinator.handleScrollGeometryChange(ScrollMetrics(offsetY: 0, contentHeight: 2000, viewportHeight: 800))
+
+        // Frame 0: stream room expands content height before beginSend runs; must NOT snap or overwrite pre-send end.
+        let shouldSnap = coordinator.handleScrollGeometryChange(
+            ScrollMetrics(offsetY: 0, contentHeight: 2650, viewportHeight: 800),
+            isSendPending: true
+        )
+        #expect(!shouldSnap)
+        #expect(coordinator.preFlightJumpOffset() == 1200)
+    }
+
+    @Test func markdownProseCachePreservesExactParsedOutput() {
+        let sample = "## Heading\nA paragraph with **bold** and `inlineCode`.\n- First item\n- Second item"
+        let firstBlocks = MarkdownProse.blocks(sample)
+        let secondBlocks = MarkdownProse.blocks(sample)
+        #expect(firstBlocks == secondBlocks)
+        #expect(firstBlocks.count == 4)
+
+        let firstInline = MarkdownProse.inline("Use **bold** and `code`", style: .body)
+        let secondInline = MarkdownProse.inline("Use **bold** and `code`", style: .body)
+        #expect(firstInline == secondInline)
     }
 
     // MARK: - Scroll Lifecycle

@@ -354,7 +354,7 @@ struct TranscriptItem: Identifiable, Hashable {
     }
 }
 
-struct ThreadDetailState {
+struct ThreadDetailState: Equatable {
     var summary: ThreadSummary
     var items: [TranscriptItem]
     /// e.g. "+142 −38"; nil hides the diff pill.

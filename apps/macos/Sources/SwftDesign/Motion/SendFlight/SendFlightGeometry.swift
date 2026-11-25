@@ -35,14 +35,38 @@ private struct SendFlightBubbleAnchorModifier: ViewModifier {
     func body(content: Content) -> some View {
         content.background {
             if let targetID {
-                GeometryReader { geo in
-                    Color.clear.preference(
-                        key: SendFlightBubbleFramesKey.self,
-                        value: [targetID: geo.frame(in: .named(SendFlightCoordinateSpace.name))]
-                    )
-                }
+                SendFlightBubbleMeasurementAnchor(targetID: targetID)
             }
         }
+    }
+}
+
+/// Measures only horizontal position and size (ignoring vertical scroll offset) so scrolling during a flight never
+/// triggers per-frame `PreferenceKey` invalidations across the transcript tree.
+private struct SendFlightBubbleMeasurementAnchor: View {
+    let targetID: String
+    @State private var measuredRect: CGRect?
+
+    var body: some View {
+        Color.clear
+            .onGeometryChange(for: CGRect?.self) { proxy in
+                let frame = proxy.frame(in: .named(SendFlightCoordinateSpace.name))
+                guard frame.width > 0, frame.height > 0 else { return nil }
+                return CGRect(
+                    x: (frame.minX * 2).rounded() / 2,
+                    y: 0,
+                    width: (frame.width * 2).rounded() / 2,
+                    height: (frame.height * 2).rounded() / 2
+                )
+            } action: { newRect in
+                if measuredRect != newRect {
+                    measuredRect = newRect
+                }
+            }
+            .preference(
+                key: SendFlightBubbleFramesKey.self,
+                value: measuredRect.map { [targetID: $0] } ?? [:]
+            )
     }
 }
 
