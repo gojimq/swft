@@ -119,7 +119,19 @@ Most code changes do not need an internal documentation change. Agents can read 
 - `packages/contracts` - Effect/Schema wire contracts plus small derived helpers. No heavy runtime logic.
 - `packages/shared` - shared runtime utils, subpath exports, no barrel.
 - `packages/client-runtime` - client connection and domain state shared by web and mobile.
+- `apps/macos` - Swft native macOS SwiftUI client (`Swft`, `SwftDesign`, `SwftKit`).
 - `.repos/` - vendored read-only references. Never edit or import from them (`vpr sync:repos` updates them; if sparse-checked-out, read via `git show origin/main:.repos/<path>`).
+
+## Swft macOS dev build workflow
+
+- Keep `/Applications/Swft.app` (the official standalone release using `~/Library/Application Support/Swft`) separate from the dev build at `/Users/jim/Projects/Swft-integration/apps/macos/build/Swft.app`. Never confuse the two.
+- At the end of every turn (primary agent only; delegated subagents do not launch GUI apps), check whether `/Users/jim/Projects/Swft-integration/apps/macos/build/Swft.app/Contents/MacOS/Swft` is running. If it is not open, launch it isolated from the main app:
+  ```bash
+  open -n \
+    --env "SWFT_HOME=$HOME/Library/Application Support/Swft-Dev" \
+    --env "SWFT_REPO_ROOT=/Users/jim/Projects/Swft-integration" \
+    /Users/jim/Projects/Swft-integration/apps/macos/build/Swft.app
+  ```
 
 ### Internal docs by area
 
