@@ -10,6 +10,16 @@ struct RootView: View {
 
     var body: some View {
         GeometryReader { geo in
+            let activeRightThreadID: String? = {
+                if case .thread(let id) = model.destination, model.rightPanel.isOpen(for: id) {
+                    return id
+                }
+                return nil
+            }()
+            let isRightPanelOpen = activeRightThreadID != nil
+            let isRightPanelMaximized = activeRightThreadID.map { model.rightPanel.isMaximized(for: $0) } ?? false
+            let panelMotion = SwftMotion.resolve(RightPanelMotion.panelLayout, reduceMotion: effectiveReduceMotion)
+
             HStack(spacing: 0) {
                 if model.sidebarVisible {
                     SidebarView()
@@ -17,48 +27,64 @@ struct RootView: View {
                         .transition(effectiveReduceMotion ? .opacity : .move(edge: .leading).combined(with: .opacity))
                 }
 
-                let activeRightThreadID: String? = {
-                    if case .thread(let id) = model.destination, model.rightPanel.isOpen(for: id) {
-                        return id
-                    }
-                    return nil
-                }()
-                let isRightPanelMaximized = activeRightThreadID.map { model.rightPanel.isMaximized(for: $0) } ?? false
-
-                if !isRightPanelMaximized {
-                    ZStack(alignment: .top) {
-                        screen
-                            .id(model.destination)
-                            .swftEntrance(reduceMotion: effectiveReduceMotion)
-                            .environment(\.swftScreenHandoff, model.newThread.isHandoff(to: model.destination))
-                        // Animate the bar only when the kind of screen changes; between threads its text swaps with the screen.
-                        TopBar()
-                            .animation(SwftMotion.resolve(SwftMotion.screenSwitch, reduceMotion: effectiveReduceMotion), value: model.selectedThreadID == nil)
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(SwftColor.canvas)
-                }
-
-                if let rightThreadID = activeRightThreadID {
-                    RightPanelContainerView(
-                        threadID: rightThreadID,
+                GeometryReader { contentGeo in
+                    let clampedPanelWidth = RightPanelLogic.clampedWidth(
+                        model.rightPanel.panelWidth,
                         availableWindowWidth: geo.size.width
                     )
-                    .frame(
-                        width: isRightPanelMaximized
-                            ? nil
-                            : RightPanelLogic.clampedWidth(model.rightPanel.panelWidth, availableWindowWidth: geo.size.width)
+                    let split = RightPanelSplitLayout.compute(
+                        availableContentWidth: contentGeo.size.width,
+                        isPanelOpen: isRightPanelOpen,
+                        isPanelMaximized: isRightPanelMaximized,
+                        clampedPanelWidth: clampedPanelWidth
                     )
-                    .frame(maxWidth: isRightPanelMaximized ? .infinity : nil, maxHeight: .infinity)
-                    .transition(effectiveReduceMotion ? .opacity : .move(edge: .trailing).combined(with: .opacity))
+
+                    HStack(spacing: 0) {
+                        // Keep the chat column mounted across split ↔ maximized so `ThreadView` preserves scroll
+                        // position and collapses smoothly without re-wrapping text on every animation frame.
+                        mainChatColumn
+                            .frame(width: split.chatContentWidth, height: contentGeo.size.height)
+                            .frame(width: split.chatContainerWidth, height: contentGeo.size.height, alignment: .leading)
+                            .clipped()
+                            .opacity(isRightPanelMaximized ? 0 : 1)
+                            .allowsHitTesting(!isRightPanelMaximized)
+                            .accessibilityHidden(isRightPanelMaximized)
+
+                        if let rightThreadID = activeRightThreadID {
+                            RightPanelContainerView(
+                                threadID: rightThreadID,
+                                availableWindowWidth: geo.size.width
+                            )
+                            .frame(width: split.panelWidth, height: contentGeo.size.height)
+                            .zIndex(1)
+                            .transition(effectiveReduceMotion ? .opacity : .move(edge: .trailing).combined(with: .opacity))
+                        }
+                    }
+                    // Animate only discrete open/close and split ↔ fullscreen toggles; live resize drags stay instant.
+                    .animation(panelMotion, value: isRightPanelOpen)
+                    .animation(panelMotion, value: isRightPanelMaximized)
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            .animation(SwftMotion.resolve(SwftMotion.screen, reduceMotion: effectiveReduceMotion), value: model.sidebarVisible)
-            .animation(SwftMotion.resolve(SwftMotion.screen, reduceMotion: effectiveReduceMotion), value: model.isRightPanelOpenForActiveThread)
+            .animation(panelMotion, value: model.sidebarVisible)
         }
         .background(SwftColor.sidebar)
         .background(WindowChrome())
         .ignoresSafeArea()
+    }
+
+    private var mainChatColumn: some View {
+        ZStack(alignment: .top) {
+            screen
+                .id(model.destination)
+                .swftEntrance(reduceMotion: effectiveReduceMotion)
+                .environment(\.swftScreenHandoff, model.newThread.isHandoff(to: model.destination))
+            // Animate the bar only when the kind of screen changes; between threads its text swaps with the screen.
+            TopBar()
+                .animation(SwftMotion.resolve(SwftMotion.screenSwitch, reduceMotion: effectiveReduceMotion), value: model.selectedThreadID == nil)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(SwftColor.canvas)
     }
 
     @ViewBuilder private var screen: some View {

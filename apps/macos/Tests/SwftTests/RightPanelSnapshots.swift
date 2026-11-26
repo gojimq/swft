@@ -62,7 +62,40 @@ struct RightPanelSnapshots {
         try Self.capture(model, appearance: appearance, name: "rp-noproject-files-\(appearance)", threadID: "t6")
     }
 
-    /// The whole window with the panel maximized over the chat column.
+    /// Single active Dia curved tab with `+` hugging its right shoulder.
+    @Test(arguments: ["light", "dark"])
+    func diaSingleTab(appearance: String) throws {
+        let model = Self.threadModel()
+        _ = model.rightPanel.openLauncherTab(for: Self.threadID)
+        try Self.capture(model, appearance: appearance, name: "dia-single-tab-\(appearance)")
+    }
+
+    /// Multi-tab strip testing active tab in first, middle, and last slots so both shoulders and inactive dividers are verified.
+    @Test(arguments: [
+        "first-light", "first-dark",
+        "middle-light", "middle-dark",
+        "last-light", "last-dark",
+    ])
+    func diaMultiTabPositions(variant: String) throws {
+        let parts = variant.split(separator: "-").map(String.init)
+        let position = parts[0]
+        let appearance = parts[1]
+        let model = Self.modelWithThreeTabs()
+        let tabs = model.rightPanel.tabs(for: Self.threadID)
+        switch position {
+        case "first":
+            if let first = tabs.first { model.rightPanel.activateTab(first.id, for: Self.threadID) }
+        case "middle":
+            if tabs.count > 1 { model.rightPanel.activateTab(tabs[1].id, for: Self.threadID) }
+        case "last":
+            if let last = tabs.last { model.rightPanel.activateTab(last.id, for: Self.threadID) }
+        default:
+            break
+        }
+        try Self.capture(model, appearance: appearance, name: "dia-multi-\(position)-\(appearance)")
+    }
+
+    /// The whole window with the panel maximized over the chat column (both with sidebar visible and hidden for traffic-light clearance).
     @Test(arguments: ["light", "dark"])
     func maximized(appearance: String) throws {
         let model = Self.modelWithAllTabs()
@@ -70,12 +103,24 @@ struct RightPanelSnapshots {
             model.rightPanel.activateTab(files.id, for: Self.threadID)
         }
         model.rightPanel.setMaximized(true, for: Self.threadID)
-        try Snapshots.capture(model, appearance: appearance, name: "rp-maximized-\(appearance)")
+        try Self.captureMaximized(model, appearance: appearance, name: "dia-maximized-sidebar-open-\(appearance)")
+
+        model.sidebarVisible = false
+        try Self.captureMaximized(model, appearance: appearance, name: "dia-maximized-sidebar-hidden-\(appearance)")
     }
 
     private static func threadModel() -> AppModel {
         let model = AppModel.mock()
         model.destination = .thread(threadID)
+        return model
+    }
+
+    private static func modelWithThreeTabs() -> AppModel {
+        let model = threadModel()
+        let panel = model.rightPanel
+        panel.openBrowser(urlString: "http://localhost:5173", pageTitle: "Swft App", for: threadID)
+        panel.openFiles(selectedFilePath: "Package.swift", for: threadID)
+        panel.openLinkedItems(for: threadID)
         return model
     }
 
@@ -88,6 +133,22 @@ struct RightPanelSnapshots {
         panel.openDevice(for: threadID)
         panel.openSideChat(sideThreadId: "mock-side-review", title: "URL edge cases", for: threadID)
         return model
+    }
+
+    private static func captureMaximized(_ model: AppModel, appearance: String, name: String, threadID: String = threadID) throws {
+        let size = CGSize(width: 1120, height: 780)
+        let root = HStack(spacing: 0) {
+            if model.sidebarVisible {
+                SidebarView()
+                    .frame(width: SwftLayout.sidebarWidth)
+            }
+            RightPanelContainerView(threadID: threadID, availableWindowWidth: size.width)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .frame(width: size.width, height: size.height)
+        .background(SwftColor.sidebar)
+        .environment(model)
+        try Self.renderSnapshot(root: root, size: size, appearance: appearance, name: name)
     }
 
     private static func capture(_ model: AppModel, appearance: String, name: String, threadID: String = threadID) throws {
@@ -105,7 +166,10 @@ struct RightPanelSnapshots {
         }
         .frame(width: size.width, height: size.height)
         .environment(model)
+        try Self.renderSnapshot(root: root, size: size, appearance: appearance, name: name)
+    }
 
+    private static func renderSnapshot<V: View>(root: V, size: CGSize, appearance: String, name: String) throws {
         SwftFonts.register()
         let window = NSWindow(
             contentRect: CGRect(origin: CGPoint(x: -4000, y: -4000), size: size),
