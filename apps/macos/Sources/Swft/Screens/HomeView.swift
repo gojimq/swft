@@ -3,13 +3,26 @@ import SwiftUI
 
 struct HomeView: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.sendFlightForceReduceMotion) private var forceReduceMotion
     @State private var docked = false
+    @State private var launchPreview: NewThreadLaunchPreview?
+
+    private var effectiveReduceMotion: Bool { reduceMotion || forceReduceMotion }
 
     var body: some View {
         @Bindable var model = model
         ZStack {
             GlowBackground()
                 .swftBloom(fading: docked)
+            if let preview = launchPreview, !effectiveReduceMotion {
+                NewThreadFirstMessagePreview(message: preview.message, visible: docked) {
+                    if launchPreview?.token == preview.token && !docked {
+                        launchPreview = nil
+                    }
+                }
+                .id(preview.token)
+            }
             VStack(spacing: 0) {
                 Spacer(minLength: SwftLayout.titlebarHeight)
                 // Reserve only the resting greeting footprint so the composer stays pinned while
@@ -83,7 +96,7 @@ struct HomeView: View {
             }
             .padding(.horizontal, 32)
         }
-        .newThreadLaunchStage(docked: $docked)
+        .newThreadLaunchStage(docked: $docked, launchPreview: $launchPreview)
     }
 
     private var greetingText: some View {

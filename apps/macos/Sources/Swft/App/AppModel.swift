@@ -1647,7 +1647,7 @@ final class AppModel {
         composerText = ""
         actionError = nil
         isSubmitting = true
-        let launchToken = newThread.begin(text: text)
+        let launchToken = newThread.begin(text: text, attachments: attachments)
 
         Task {
             do {
@@ -1721,7 +1721,7 @@ final class AppModel {
         let id = created.summary.id
         mockBacking?.threads.insert(created.summary, at: 0)
         mockBacking?.details[id] = created
-        let token = newThread.begin(text: text)
+        let token = newThread.begin(text: text, attachments: attachments)
         Task {
             guard await self.newThread.awaitHandoff(token: token, threadID: id) else { return }
             self.destination = .thread(id)

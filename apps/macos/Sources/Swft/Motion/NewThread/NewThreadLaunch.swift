@@ -1,10 +1,24 @@
 import Foundation
 import Observation
+import SwftDesign
+
+/// Payload for the first message sent from Home so Home can fade it in at the transcript's top
+/// simultaneously while the composer slides down to dock.
+struct NewThreadLaunchMessage: Equatable, Sendable {
+    let text: String
+    let attachments: [TranscriptAttachment]
+
+    init(text: String, attachments: [TranscriptAttachment] = []) {
+        self.text = text
+        self.attachments = attachments
+    }
+}
 
 /// Home → new thread, as pure state. Sending from Home starts a launch: Home's greeting and suggestions step aside
-/// while the composer docks to the bottom. The thread's screen takes over only once both the dock has settled and the
-/// server has created the thread, whichever comes last. Anything that leaves Home (or returns to a fresh Home)
-/// cancels, and a late server reply for a cancelled launch is ignored, so it never yanks the user elsewhere.
+/// while the composer docks to the bottom and the first message fades into its resting top-of-transcript position.
+/// The thread's screen takes over once both the dock has settled and the server has created the thread, whichever
+/// comes last. Anything that leaves Home (or returns to a fresh Home) cancels, and a late server reply for a
+/// cancelled launch is ignored, so it never yanks the user elsewhere.
 struct NewThreadLaunchState: Equatable {
     enum Phase: Equatable {
         case idle
@@ -76,10 +90,10 @@ struct NewThreadLaunchState: Equatable {
 }
 
 extension Notification.Name {
-    /// Posted on the main actor when a new thread is cleared to take over from Home (the composer has docked and the
-    /// server has created the thread); the thread becomes the destination in the same or the next main-actor turn.
-    /// `userInfo`: `"threadID"` (String) and `"text"` (String, the first message). `AppModel` then emits a handoff
-    /// `ThreadSendEvent`, and the thread's screen fades the first message in cleanly as the composer settles.
+    /// Posted on the main actor when a new thread is cleared to take over from Home (the composer has docked while
+    /// the first message faded into place, and the server has created the thread); the thread becomes the destination
+    /// in the same or the next main-actor turn. `userInfo`: `"threadID"` (String) and `"text"` (String, the first
+    /// message). `AppModel` then emits a handoff `ThreadSendEvent` so `ThreadView` takes over seamlessly in place.
     static let swftNewThreadDidHandOff = Notification.Name("SwftNewThreadDidHandOff")
 }
 
@@ -89,6 +103,8 @@ extension Notification.Name {
 @Observable
 final class NewThreadLauncher {
     private(set) var state = NewThreadLaunchState()
+    /// The first message currently fading in on Home during a launch; cleared on handoff, failure, or cancellation.
+    private(set) var launchingMessage: NewThreadLaunchMessage?
     @ObservationIgnored private var waiter: (token: Int, continuation: CheckedContinuation<Bool, Never>)?
     @ObservationIgnored private var firstMessage = ""
 
@@ -100,9 +116,10 @@ final class NewThreadLauncher {
         return destination == .thread(id)
     }
 
-    func begin(text: String) -> Int {
+    func begin(text: String, attachments: [TranscriptAttachment] = []) -> Int {
         resumeWaiter(false)
         firstMessage = text
+        launchingMessage = NewThreadLaunchMessage(text: text, attachments: attachments)
         return state.begin()
     }
 
@@ -129,11 +146,15 @@ final class NewThreadLauncher {
 
     func fail(token: Int) {
         state.fail(token: token)
-        if !state.isLaunching { resumeWaiter(false) }
+        if !state.isLaunching {
+            launchingMessage = nil
+            resumeWaiter(false)
+        }
     }
 
     func cancel() {
         state.cancel()
+        launchingMessage = nil
         resumeWaiter(false)
     }
 
@@ -143,6 +164,7 @@ final class NewThreadLauncher {
     }
 
     private func handedOff(_ threadID: String) {
+        launchingMessage = nil
         NotificationCenter.default.post(name: .swftNewThreadDidHandOff, object: nil, userInfo: ["threadID": threadID, "text": firstMessage])
     }
 

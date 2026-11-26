@@ -661,34 +661,27 @@ struct SendFlightLogicTests {
     // MARK: - Home → New Thread Handoff
 
     @MainActor
-    @Test func handoffFadesTheFirstMessageWithoutFlightOnlyOnTheHandoffScreen() async throws {
+    @Test func handoffAdoptsFirstMessageInPlaceWithoutFlightOrDoubleFade() {
         var detail = MockData.threadDetail
         detail.items = [TranscriptItem(id: "first", kind: .user("Plan the launch"))]
         detail.isRunning = true
         let handoff = ThreadSendEvent(threadID: detail.summary.id, text: "Plan the launch", isHandoff: true)
 
-        // The screen that took over from Home fades the first row in directly — NO J-curve flight overlay.
+        // Home already faded the first message in while docking the composer: ThreadView adopts it in place with
+        // NO J-curve flight overlay, NO bubble hiding/re-fading, and NO artificial stall before Working rises in.
         let coordinator = SendFlightCoordinator()
         coordinator.syncThread(detail: detail, isBusy: true)
         #expect(coordinator.pendingFlightRowID(latestSend: handoff, in: detail, reduceMotion: false) == nil)
-        #expect(coordinator.pendingHandoffFadeRowID(latestSend: handoff, in: detail, isHandoffScreen: true, reduceMotion: false) == "first")
+        // Frame 0 (before adoptOnAppear): Working waits briefly so it rises cleanly on appear instead of hard-popping.
         #expect(coordinator.holdsLatestTurn(for: detail, latestSend: handoff, isHandoffScreen: true, reduceMotion: false))
         let action = coordinator.adoptOnAppear(handoff, detail: detail, isHandoffScreen: true, reduceMotion: false)
-        #expect(action == .handoffFade)
+        #expect(action == .handoff)
         #expect(coordinator.activeFlight == nil)
-        #expect(coordinator.handoffFadeBubbleID == "first")
         #expect(!coordinator.isBubbleHiddenForFlight(rowID: "first", in: detail))
         #expect(coordinator.hasStreamRoom(for: detail, isBusy: true))
-        // Working (and any early live rows) wait briefly while the first message fades in.
-        #expect(!coordinator.shouldShowWorking(for: detail, isBusy: true, latestTurnRows: detail.rows, latestSend: handoff, isHandoffScreen: true, reduceMotion: false))
-        #expect(coordinator.holdsLatestTurn(for: detail, latestSend: handoff, isHandoffScreen: true, reduceMotion: false))
-
-        // Hold releases cleanly after the handoff beat so Working appears gracefully.
-        try await Task.sleep(for: .seconds(SendFlightTiming.handoffDuration))
-        for _ in 0..<100 where coordinator.latestTurnHeldForSendID != nil {
-            try await Task.sleep(for: .milliseconds(20))
-        }
+        // Hold releases immediately on adoptOnAppear — no extra 220ms/340ms stall after the message is already visible.
         #expect(coordinator.latestTurnHeldForSendID == nil)
+        #expect(!coordinator.holdsLatestTurn(for: detail, latestSend: handoff, isHandoffScreen: true, reduceMotion: false))
         #expect(coordinator.shouldShowWorking(for: detail, isBusy: true, latestTurnRows: detail.rows, latestSend: handoff, isHandoffScreen: true, reduceMotion: false))
 
         // Every subsequent send inside this thread STILL runs the full J-curve flight.
@@ -699,38 +692,32 @@ struct SendFlightLogicTests {
         let followUpAction = coordinator.beginSend(followUp, detail: followUpDetail, reduceMotion: false)
         #expect(followUpAction == .startFlight)
         #expect(coordinator.activeFlight?.boundItemID == "second")
-        #expect(coordinator.handoffFadeBubbleID == nil)
         #expect(coordinator.isBubbleHiddenForFlight(rowID: "second", in: followUpDetail))
         coordinator.cancelFlight(clearPendingStreamRoom: true)
 
-        // Coming back to the thread later (not a handoff screen) never replays, never fades, and never leaves Working hidden.
+        // Coming back to the thread later (not a handoff screen) never replays and never leaves Working hidden.
         let revisit = SendFlightCoordinator()
-        #expect(revisit.pendingHandoffFadeRowID(latestSend: handoff, in: detail, isHandoffScreen: false, reduceMotion: false) == nil)
         #expect(!revisit.holdsLatestTurn(for: detail, latestSend: handoff, isHandoffScreen: false, reduceMotion: false))
         #expect(revisit.adoptOnAppear(handoff, detail: detail, isHandoffScreen: false, reduceMotion: false) == .none)
         #expect(revisit.activeFlight == nil)
-        #expect(revisit.handoffFadeBubbleID == nil)
         #expect(revisit.shouldShowWorking(for: detail, isBusy: true, latestTurnRows: detail.rows, latestSend: handoff, isHandoffScreen: false, reduceMotion: false))
 
-        // Reduce Motion: the screen crossfades in whole, nothing flies, nothing fades separately, and nothing is held.
+        // Reduce Motion: the screen crossfades in whole, nothing flies, and nothing is held.
         let quiet = SendFlightCoordinator()
-        #expect(quiet.pendingHandoffFadeRowID(latestSend: handoff, in: detail, isHandoffScreen: true, reduceMotion: true) == nil)
         #expect(quiet.adoptOnAppear(handoff, detail: detail, isHandoffScreen: true, reduceMotion: true) == .none)
         #expect(quiet.activeFlight == nil)
-        #expect(quiet.handoffFadeBubbleID == nil)
         #expect(!quiet.holdsLatestTurn(for: detail, latestSend: handoff, isHandoffScreen: true, reduceMotion: true))
 
-        // Async projection arrival: handoff armed before first user row arrives still resolves on the row's first frame.
+        // Async projection arrival: handoff armed before first user row arrives retains stream room until row lands.
         var emptyDetail = detail
         emptyDetail.items = []
         let asyncHandoff = SendFlightCoordinator()
         asyncHandoff.syncThread(detail: emptyDetail, isBusy: true)
-        #expect(asyncHandoff.adoptOnAppear(handoff, detail: emptyDetail, isHandoffScreen: true, reduceMotion: false) == .handoffFade)
-        #expect(asyncHandoff.handoffFadeBubbleID == "")
+        #expect(asyncHandoff.adoptOnAppear(handoff, detail: emptyDetail, isHandoffScreen: true, reduceMotion: false) == .handoff)
         #expect(asyncHandoff.activeFlight == nil)
-        #expect(asyncHandoff.activeHandoffFadeBubbleID(in: detail, latestSend: handoff, isHandoffScreen: true, reduceMotion: false) == "first")
+        #expect(asyncHandoff.hasStreamRoom(for: emptyDetail, isBusy: true))
         asyncHandoff.syncThread(detail: detail, isBusy: true)
-        #expect(asyncHandoff.handoffFadeBubbleID == "first")
+        #expect(asyncHandoff.hasStreamRoom(for: detail, isBusy: false))
     }
 
     @MainActor

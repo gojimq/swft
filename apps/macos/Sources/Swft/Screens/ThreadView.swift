@@ -64,17 +64,7 @@ struct ThreadView: View {
             rows: rows,
             pendingRowID: pendingFlightRowID
         )
-        let handoffFadeID = sendFlight.activeHandoffFadeBubbleID(
-            in: detail,
-            rows: rows,
-            latestSend: latestSend,
-            isHandoffScreen: isHandoffScreen,
-            reduceMotion: effectiveReduceMotion
-        )
         let (fadeBubbleID, fadeStyle): (String?, SendBubbleFadeStyle) = {
-            if let handoffFadeID {
-                return (handoffFadeID, .handoff)
-            }
             if effectiveReduceMotion, let rmID = sendFlight.reduceMotionFadeBubbleID, !rmID.isEmpty {
                 return (rmID, .reduceMotion)
             }

@@ -75,15 +75,12 @@ private struct SendFlightFlyer: View {
 /// Fade-in cadence for a user bubble appearing directly in place (no J-curve flight).
 enum SendBubbleFadeStyle: Equatable, Sendable {
     case none
-    /// First user message handing off from Home as the composer settles at the bottom.
-    case handoff
     /// In-thread send under Reduce Motion.
     case reduceMotion
 
     var animation: Animation {
         switch self {
         case .none: .linear(duration: 0)
-        case .handoff: SwftMotion.handoffFade
         case .reduceMotion: .easeInOut(duration: 0.18)
         }
     }
@@ -156,6 +153,10 @@ struct SendFlightTurnSection: View, Equatable {
                 .sendFlightBubbleTarget(id: hidden ? id : nil)
                 .opacity(hidden ? 0 : 1)
                 .modifier(SendBubbleFadeModifier(style: rowFadeStyle))
+                .newThreadBubbleProbe(
+                    .threadBubble,
+                    opacity: hidden ? 0 : (rowFadeStyle == .none ? 1 : 0)
+                )
         case .assistant(_, let blocks, let streaming):
             AssistantMessage {
                 ForEach(Array(blocks.enumerated()), id: \.offset) { index, block in
@@ -226,11 +227,76 @@ private struct SendBubbleFadeModifier: ViewModifier {
     }
 }
 
+/// Test-only sample reported for the first user bubble across Home's launching preview and `ThreadView`'s real row.
+struct NewThreadBubbleProbeSample: Equatable {
+    enum Source: Equatable {
+        case homePreview
+        case threadBubble
+    }
+
+    let source: Source
+    let frameInWindow: CGRect
+    let targetOpacity: Double
+    let timestamp: CFAbsoluteTime
+}
+
+/// Test-only recorder collecting window-space geometry and opacity samples across Home → `ThreadView` handoff.
+@MainActor
+final class NewThreadBubbleProbe {
+    private(set) var samples: [NewThreadBubbleProbeSample] = []
+
+    func record(_ sample: NewThreadBubbleProbeSample) {
+        samples.append(sample)
+    }
+}
+
+private struct NewThreadBubbleProbeModifier: ViewModifier {
+    let source: NewThreadBubbleProbeSample.Source
+    let opacity: Double
+    @Environment(\.newThreadBubbleProbe) private var probe
+    @State private var measuredFrame: CGRect = .zero
+
+    func body(content: Content) -> some View {
+        if let probe {
+            content
+                .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) { frame in
+                    measuredFrame = frame
+                    guard frame.width > 0, frame.height > 0 else { return }
+                    probe.record(NewThreadBubbleProbeSample(
+                        source: source,
+                        frameInWindow: frame,
+                        targetOpacity: opacity,
+                        timestamp: CFAbsoluteTimeGetCurrent()
+                    ))
+                }
+                .onChange(of: opacity) { _, newOpacity in
+                    guard measuredFrame.width > 0, measuredFrame.height > 0 else { return }
+                    probe.record(NewThreadBubbleProbeSample(
+                        source: source,
+                        frameInWindow: measuredFrame,
+                        targetOpacity: newOpacity,
+                        timestamp: CFAbsoluteTimeGetCurrent()
+                    ))
+                }
+        } else {
+            content
+        }
+    }
+}
+
+extension View {
+    func newThreadBubbleProbe(_ source: NewThreadBubbleProbeSample.Source, opacity: Double) -> some View {
+        modifier(NewThreadBubbleProbeModifier(source: source, opacity: opacity))
+    }
+}
+
 extension EnvironmentValues {
     /// Test-only hook allowing offscreen snapshot tests to pin an active send flight to an exact normalized time.
     @Entry var sendFlightPinnedProgress: Double? = nil
     /// Test-only hook allowing offscreen snapshot tests to force Reduce Motion independently of system Accessibility.
     @Entry var sendFlightForceReduceMotion: Bool = false
+    /// Test-only hook observing real window-space bubble geometry and opacity across Home → ThreadView handoff.
+    @Entry var newThreadBubbleProbe: NewThreadBubbleProbe? = nil
 }
 
 /// Wires send-flight coordinate space, geometry observers, scroll phase/stickiness, and flight overlay onto `ThreadView`.
@@ -282,7 +348,7 @@ struct ThreadSendFlightHostModifier: ViewModifier {
                     }
                 }
                 coordinator.syncThread(detail: detail, rows: rows, isBusy: isBusy)
-                // Home → new thread: the first message fades in cleanly without a J-curve flight overlay.
+                // Home → new thread: Home already faded the first message in while docking; adopt stream room in place.
                 let action = coordinator.adoptOnAppear(
                     latestThreadSend,
                     detail: detail,
@@ -336,7 +402,7 @@ struct ThreadSendFlightHostModifier: ViewModifier {
                     if !coordinator.scrollDriver.scrollToBottomImmediately() {
                         scrollPosition.scrollTo(edge: .bottom)
                     }
-                case .handoffFade, .none:
+                case .handoff, .none:
                     break
                 }
             }
