@@ -34,6 +34,7 @@ public final class ThreadStore {
     public var thread: AppThread? { projection?.thread }
     public var visibleItems: [ProjectedTurnItem] { projection?.visibleTurnItems ?? [] }
     public var runs: [Run] { projection?.runs ?? [] }
+    public var subagents: [SubagentSummary] { projection?.subagents ?? [] }
     public var messages: [ConversationMessage] { projection?.messages ?? [] }
     public var plans: [PlanArtifact] { projection?.plans ?? [] }
 
@@ -130,7 +131,25 @@ public final class ThreadStore {
 
     internal func apply(_ item: ThreadStreamItem) {
         switch item {
-        case .snapshot(let snapshotSequence, let nextProjection):
+        case .snapshot(let snapshotSequence, var nextProjection):
+            if !nextProjection.subagents.isEmpty {
+                for index in nextProjection.turnItems.indices {
+                    nextProjection.turnItems[index] = hydrateSubagentBodies(nextProjection.turnItems[index], in: nextProjection)
+                }
+                for index in nextProjection.visibleTurnItems.indices {
+                    let hydrated = hydrateSubagentBodies(nextProjection.visibleTurnItems[index].item, in: nextProjection)
+                    if hydrated != nextProjection.visibleTurnItems[index].item {
+                        let existing = nextProjection.visibleTurnItems[index]
+                        nextProjection.visibleTurnItems[index] = ProjectedTurnItem(
+                            position: existing.position,
+                            visibility: existing.visibility,
+                            sourceThreadId: existing.sourceThreadId,
+                            sourceItemId: existing.sourceItemId,
+                            item: hydrated
+                        )
+                    }
+                }
+            }
             projection = nextProjection
             projectionVersion &+= 1
             lastSequence = snapshotSequence
@@ -190,7 +209,8 @@ public final class ThreadStore {
             pruneHiddenVisibleItems(&current)
 
         case .subagentUpdated(let subagent):
-            upsert(subagent, into: &current.subagents)
+            let previous = current.subagents.first { $0.id == subagent.id }
+            upsert(subagent.restoringDedupedBodies(from: previous), into: &current.subagents)
             current.updatedAt = event.occurredAt
 
         case .providerThreadUpdated(let providerThread):
@@ -212,7 +232,8 @@ public final class ThreadStore {
             upsert(plan, into: &current.plans)
             current.updatedAt = event.occurredAt
 
-        case .turnItemUpdated(let item):
+        case .turnItemUpdated(let rawItem):
+            let item = hydrateSubagentBodies(rawItem, in: current)
             upsertFromEnd(item, into: &current.turnItems)
             current.updatedAt = event.occurredAt
             if isItemVisible(item, in: current) {
@@ -227,6 +248,69 @@ public final class ThreadStore {
 
         projection = current
         projectionVersion &+= 1
+    }
+
+    private func hydrateSubagentBodies(_ item: TurnItem, in projection: ThreadProjection) -> TurnItem {
+        guard case .subagent(
+            let subagentId,
+            let origin,
+            let driver,
+            let providerInstanceId,
+            let childThreadId,
+            let remoteChild,
+            let prompt,
+            let progress,
+            let result,
+            let promptOmitted,
+            let resultOmitted
+        ) = item.kind, promptOmitted || resultOmitted else {
+            return item
+        }
+        let subagent = projection.subagents.first { $0.id == subagentId }
+        let previousItem = projection.turnItems.last { $0.id == item.id }
+        let previousPrompt: String?
+        let previousResult: String?
+        if case .subagent(_, _, _, _, _, _, let prevPrompt, _, let prevResult, _, _) = previousItem?.kind {
+            previousPrompt = prevPrompt
+            previousResult = prevResult
+        } else {
+            previousPrompt = nil
+            previousResult = nil
+        }
+        let resolvedPrompt = (promptOmitted && prompt.isEmpty)
+            ? ((subagent?.prompt.isEmpty == false ? subagent?.prompt : nil) ?? previousPrompt ?? prompt)
+            : prompt
+        let resolvedResult = (resultOmitted && (result == nil || result?.isEmpty == true))
+            ? (subagent?.result ?? previousResult ?? result)
+            : result
+        return TurnItem(
+            id: item.id,
+            threadId: item.threadId,
+            runId: item.runId,
+            nodeId: item.nodeId,
+            providerThreadId: item.providerThreadId,
+            providerTurnId: item.providerTurnId,
+            parentItemId: item.parentItemId,
+            ordinal: item.ordinal,
+            status: item.status,
+            title: item.title,
+            startedAt: item.startedAt,
+            completedAt: item.completedAt,
+            updatedAt: item.updatedAt,
+            kind: .subagent(
+                subagentId: subagentId,
+                origin: origin,
+                driver: driver,
+                providerInstanceId: providerInstanceId,
+                childThreadId: childThreadId,
+                remoteChild: remoteChild,
+                prompt: resolvedPrompt,
+                progress: progress,
+                result: resolvedResult,
+                promptOmitted: false,
+                resultOmitted: false
+            )
+        )
     }
 
     private func isItemVisible(_ item: TurnItem, in projection: ThreadProjection) -> Bool {

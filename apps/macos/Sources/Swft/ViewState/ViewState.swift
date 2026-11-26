@@ -344,11 +344,108 @@ struct PendingUserMessage: Equatable, Sendable {
     var attachments: [TranscriptAttachment] = []
 }
 
+struct SubagentItem: Identifiable, Hashable, Sendable {
+    let id: String
+    let subagentID: String
+    var runID: String?
+    var providerTurnID: String?
+    var origin: String
+    var title: String
+    var provider: ProviderKind
+    var providerDriver: String
+    var providerInstanceID: String
+    var providerDisplayName: String?
+    var providerIconURL: String?
+    var modelName: String?
+    var status: SubagentStatus
+    var prompt: String
+    var progress: String?
+    var result: String?
+    var childThreadID: String?
+    var remoteEnvironmentID: String?
+    var remoteEnvironmentLabel: String?
+    var remoteThreadID: String?
+    var worktreeBranch: String?
+    var worktreePath: String?
+    var startedAt: Date?
+    var completedAt: Date?
+
+    init(
+        id: String,
+        subagentID: String? = nil,
+        runID: String? = nil,
+        providerTurnID: String? = nil,
+        origin: String = "app_owned",
+        title: String,
+        provider: ProviderKind,
+        providerDriver: String? = nil,
+        providerInstanceID: String? = nil,
+        providerDisplayName: String? = nil,
+        providerIconURL: String? = nil,
+        modelName: String? = nil,
+        status: SubagentStatus,
+        prompt: String = "",
+        progress: String? = nil,
+        result: String? = nil,
+        childThreadID: String? = nil,
+        remoteEnvironmentID: String? = nil,
+        remoteEnvironmentLabel: String? = nil,
+        remoteThreadID: String? = nil,
+        worktreeBranch: String? = nil,
+        worktreePath: String? = nil,
+        startedAt: Date? = nil,
+        completedAt: Date? = nil
+    ) {
+        self.id = id
+        self.subagentID = subagentID ?? id
+        self.runID = runID
+        self.providerTurnID = providerTurnID
+        self.origin = origin
+        self.title = title
+        self.provider = provider
+        self.providerDriver = providerDriver ?? provider.driverIdentifier
+        self.providerInstanceID = providerInstanceID ?? provider.rawValue
+        self.providerDisplayName = providerDisplayName
+        self.providerIconURL = providerIconURL
+        self.modelName = modelName
+        self.status = status
+        self.prompt = prompt
+        self.progress = progress
+        self.result = result
+        self.childThreadID = childThreadID
+        self.remoteEnvironmentID = remoteEnvironmentID
+        self.remoteEnvironmentLabel = remoteEnvironmentLabel
+        self.remoteThreadID = remoteThreadID
+        self.worktreeBranch = worktreeBranch
+        self.worktreePath = worktreePath
+        self.startedAt = startedAt
+        self.completedAt = completedAt
+    }
+
+    var workspaceLabel: String? {
+        if let branch = worktreeBranch?.trimmingCharacters(in: .whitespacesAndNewlines), !branch.isEmpty {
+            return branch
+        }
+        if let path = worktreePath?.trimmingCharacters(in: .whitespacesAndNewlines), !path.isEmpty {
+            return (path as NSString).lastPathComponent
+        }
+        return nil
+    }
+}
+
+struct SubagentGroup: Identifiable, Hashable, Sendable {
+    let id: String
+    var members: [SubagentItem]
+
+    var hasActive: Bool { members.contains { $0.status.isActive } }
+}
+
 struct TranscriptItem: Identifiable, Hashable {
     enum Kind: Hashable {
         case user(String, attachments: [TranscriptAttachment] = [])
         case assistant(blocks: [MessageBlock], streaming: Bool)
         case toolCall(ToolCallItem)
+        case subagent(SubagentItem)
         case approval(ApprovalItem)
         case notice(title: String, message: String, isError: Bool)
     }
@@ -372,6 +469,8 @@ struct ThreadDetailState: Equatable {
     var diffStat: String?
     /// The thread has an active run, so its latest turn renders as live work.
     var isRunning: Bool = false
+    /// When this thread is a delegated subagent child, links back to its parent thread.
+    var parentLink: SubagentParentLink? = nil
 
     var rows: [TranscriptRow] { TranscriptLayout.rows(for: items, isRunning: isRunning) }
 }
@@ -405,6 +504,8 @@ enum TranscriptRow: Identifiable, Hashable {
     case user(id: String, text: String, attachments: [TranscriptAttachment] = [])
     case assistant(id: String, blocks: [MessageBlock], streaming: Bool)
     case work(WorkFold)
+    case subagent(SubagentItem)
+    case subagentGroup(SubagentGroup)
     case approval(id: String, ApprovalItem)
     case note(id: String, title: String, message: String, isError: Bool)
 
@@ -412,10 +513,20 @@ enum TranscriptRow: Identifiable, Hashable {
         switch self {
         case .user(let id, _, _), .assistant(let id, _, _), .approval(let id, _), .note(let id, _, _, _): id
         case .work(let fold): fold.id
+        case .subagent(let item): item.id
+        case .subagentGroup(let group): group.id
         }
     }
 
     var workFoldID: String? {
         if case .work(let fold) = self { fold.id } else { nil }
+    }
+
+    var subagentDisclosureIDs: [String] {
+        switch self {
+        case .subagent(let item): [item.id]
+        case .subagentGroup(let group): [group.id] + group.members.map(\.id)
+        default: []
+        }
     }
 }

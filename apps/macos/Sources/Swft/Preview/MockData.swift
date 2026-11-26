@@ -325,4 +325,230 @@ enum MockData {
         diffStat: nil,
         isRunning: true
     )
+
+    /// Realistic subagent showcase: a completed single delegated subagent, a parallel 3-subagent fan-out group
+    /// (running, completed, failed), a waiting subagent, and a native expandable subagent without a child thread.
+    static let subagentsDetail = ThreadDetailState(
+        summary: threads[3],
+        items: [
+            .init(id: "sa-u1", kind: .user("Audit our WebSocket reconnect path and propose a concrete refactor plan."), startedAt: at(0)),
+            .init(id: "sa-t1", kind: .toolCall(.init(kind: .read, title: "Read", detail: "Sources/SwftKit/ServerConnection.swift", status: .succeeded, duration: 0.2, output: nil)), startedAt: at(1), completedAt: at(1.2)),
+            .init(
+                id: "sa-single-1",
+                kind: .subagent(
+                    SubagentItem(
+                        id: "sa-single-1",
+                        subagentID: "node-sa-1",
+                        runID: "run-sa-1",
+                        providerTurnID: "turn-sa-1",
+                        origin: "app_owned",
+                        title: "Codebase Researcher",
+                        provider: .claude,
+                        providerDriver: "claudeAgent",
+                        providerInstanceID: "claudeAgent",
+                        providerDisplayName: "Claude",
+                        modelName: "Opus 5.5",
+                        status: .completed,
+                        prompt: "Trace WebSocket reconnect backoff, resume sequences, and subscription replay across ServerConnection and ThreadStore.",
+                        progress: "Mapped reconnect state transitions",
+                        result: "Found 2 stale sequence edge cases in ServerConnection and verified ThreadStore deduplication.",
+                        childThreadID: "t4-sub-research",
+                        worktreeBranch: "swft/reconnect-audit",
+                        startedAt: at(2),
+                        completedAt: at(44)
+                    )
+                ),
+                startedAt: at(2),
+                completedAt: at(44)
+            ),
+            .init(
+                id: "sa-a1",
+                kind: .assistant(blocks: [
+                    .text("The researcher traced both reconnect edge cases — `ServerConnection` can drop a pending completion marker when a ticket expires mid-handshake. I'll fan out the fix, test coverage, and migration check in parallel."),
+                ], streaming: false),
+                startedAt: at(45),
+                completedAt: at(48)
+            ),
+            .init(id: "sa-u2", kind: .user("Go ahead and run the parallel implementation passes now."), startedAt: at(60)),
+            .init(
+                id: "sa-group-1",
+                kind: .subagent(
+                    SubagentItem(
+                        id: "sa-group-1",
+                        subagentID: "node-sa-2",
+                        runID: "run-sa-2",
+                        providerTurnID: "turn-sa-2",
+                        origin: "app_owned",
+                        title: "Reconnect Fixer",
+                        provider: .codex,
+                        providerDriver: "codex",
+                        providerInstanceID: "codex",
+                        providerDisplayName: "Codex",
+                        modelName: "GPT-6.1",
+                        status: .running,
+                        prompt: "Guard ticket expiry during WebSocket handshake and reset resume sequence safely.",
+                        progress: "Editing Sources/SwftKit/ServerConnection.swift",
+                        result: nil,
+                        childThreadID: "t4-sub-ui",
+                        worktreeBranch: "fix/ws-handshake",
+                        startedAt: at(62),
+                        completedAt: nil
+                    )
+                ),
+                startedAt: at(62)
+            ),
+            .init(
+                id: "sa-group-2",
+                kind: .subagent(
+                    SubagentItem(
+                        id: "sa-group-2",
+                        subagentID: "node-sa-3",
+                        runID: "run-sa-2",
+                        providerTurnID: "turn-sa-2",
+                        origin: "app_owned",
+                        title: "Store Replay Tests",
+                        provider: .claude,
+                        providerDriver: "claudeAgent",
+                        providerInstanceID: "claudeAgent",
+                        providerDisplayName: "Claude",
+                        modelName: "Haiku 5.5",
+                        status: .completed,
+                        prompt: "Add deterministic ThreadStore replay and sequence deduplication tests.",
+                        progress: nil,
+                        result: "Added 6 unit tests covering out-of-order replay and snapshot recovery.",
+                        childThreadID: "t4-sub-tests",
+                        startedAt: at(62),
+                        completedAt: at(88)
+                    )
+                ),
+                startedAt: at(62),
+                completedAt: at(88)
+            ),
+            .init(
+                id: "sa-group-3",
+                kind: .subagent(
+                    SubagentItem(
+                        id: "sa-group-3",
+                        subagentID: "node-sa-4",
+                        runID: "run-sa-2",
+                        providerTurnID: "turn-sa-2",
+                        origin: "app_owned",
+                        title: "Contract Compatibility Check",
+                        provider: .gemini,
+                        providerDriver: "antigravity",
+                        providerInstanceID: "antigravity",
+                        providerDisplayName: "Antigravity",
+                        modelName: "Gemini 3 Pro",
+                        status: .failed,
+                        prompt: "Verify backwards compatibility against protocol v2 fixtures.",
+                        progress: nil,
+                        result: "Fixture mismatch on `snapshot-required` envelope in legacy server v0.1.9.",
+                        childThreadID: nil,
+                        startedAt: at(63),
+                        completedAt: at(76)
+                    )
+                ),
+                startedAt: at(63),
+                completedAt: at(76)
+            ),
+            .init(
+                id: "sa-native-1",
+                kind: .subagent(
+                    SubagentItem(
+                        id: "sa-native-1",
+                        subagentID: "node-sa-5",
+                        runID: "run-sa-2",
+                        providerTurnID: "turn-sa-3",
+                        origin: "provider_native",
+                        title: "Native Doc Verifier",
+                        provider: .cursor,
+                        providerDriver: "cursor",
+                        providerInstanceID: "cursor",
+                        providerDisplayName: "Cursor",
+                        modelName: "Composer 2",
+                        status: .waiting,
+                        prompt: "Check whether `docs/internals/09_connection-runtime.md` documents the new reconnect sequence.",
+                        progress: "Waiting on file lock before reading connection runtime docs",
+                        result: nil,
+                        childThreadID: nil,
+                        worktreeBranch: "studio",
+                        startedAt: at(70),
+                        completedAt: nil
+                    )
+                ),
+                startedAt: at(70)
+            ),
+        ],
+        diffStat: "+84 −19",
+        isRunning: true
+    )
+
+    static let subagentChildDetails: [ThreadDetailState] = [
+        ThreadDetailState(
+            summary: ThreadSummary(
+                id: "t4-sub-research",
+                title: "Codebase Researcher",
+                project: studio,
+                location: .branch("swft/reconnect-audit"),
+                provider: .claude,
+                providerDisplayName: "Claude",
+                activity: .idle,
+                updatedAt: ago(28),
+                providerDriver: "claudeAgent"
+            ),
+            items: [
+                .init(id: "sub-r-u1", kind: .user("Trace WebSocket reconnect backoff, resume sequences, and subscription replay across ServerConnection and ThreadStore."), startedAt: at(2)),
+                .init(id: "sub-r-t1", kind: .toolCall(.init(kind: .search, title: "Searched", detail: "lastSequence", status: .succeeded, duration: 0.3, output: nil)), startedAt: at(4), completedAt: at(4.3)),
+                .init(id: "sub-r-t2", kind: .toolCall(.init(kind: .read, title: "Read", detail: "Sources/SwftKit/Stores/ThreadStore.swift", status: .succeeded, duration: 0.2, output: nil)), startedAt: at(5), completedAt: at(5.2)),
+                .init(id: "sub-r-a1", kind: .assistant(blocks: [
+                    .text("Found 2 stale sequence edge cases in `ServerConnection`:\n- Expired bootstrap tickets retry without clearing `resumeSequence`.\n- `ThreadStore` already deduplicates strictly via `sequence <= lastSequence`."),
+                ], streaming: false), startedAt: at(40), completedAt: at(44)),
+            ],
+            diffStat: nil,
+            isRunning: false,
+            parentLink: SubagentParentLink(threadID: threads[3].id, title: threads[3].title, environmentID: nil)
+        ),
+        ThreadDetailState(
+            summary: ThreadSummary(
+                id: "t4-sub-ui",
+                title: "Reconnect Fixer",
+                project: studio,
+                location: .branch("fix/ws-handshake"),
+                provider: .codex,
+                providerDisplayName: "Codex",
+                activity: .running,
+                updatedAt: ago(1),
+                providerDriver: "codex"
+            ),
+            items: [
+                .init(id: "sub-u-u1", kind: .user("Guard ticket expiry during WebSocket handshake and reset resume sequence safely."), startedAt: at(62)),
+                .init(id: "sub-u-t1", kind: .toolCall(.init(kind: .edit, title: "Editing", detail: "Sources/SwftKit/ServerConnection.swift", status: .running, duration: nil, output: nil)), startedAt: at(65)),
+            ],
+            diffStat: "+24 −8",
+            isRunning: true,
+            parentLink: SubagentParentLink(threadID: threads[3].id, title: threads[3].title, environmentID: nil)
+        ),
+        ThreadDetailState(
+            summary: ThreadSummary(
+                id: "t4-sub-tests",
+                title: "Store Replay Tests",
+                project: studio,
+                location: .branch("studio"),
+                provider: .claude,
+                providerDisplayName: "Claude",
+                activity: .idle,
+                updatedAt: ago(2),
+                providerDriver: "claudeAgent"
+            ),
+            items: [
+                .init(id: "sub-t-u1", kind: .user("Add deterministic ThreadStore replay and sequence deduplication tests."), startedAt: at(62)),
+                .init(id: "sub-t-a1", kind: .assistant(blocks: [
+                    .text("Added 6 unit tests covering out-of-order replay and snapshot recovery in `StoreTests.swift`. All passing."),
+                ], streaming: false), startedAt: at(84), completedAt: at(88)),
+            ],
+            diffStat: "+60 −11",
+            isRunning: false,
+            parentLink: SubagentParentLink(threadID: threads[3].id, title: threads[3].title, environmentID: nil)
+        ),
+    ]
 }

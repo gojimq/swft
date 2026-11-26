@@ -35,6 +35,7 @@ enum TranscriptLayout {
         switch item.kind {
         case .assistant(_, let streaming): streaming
         case .toolCall(let call): call.status == .running
+        case .subagent(let subagent): subagent.status.isActive
         case .approval(let approval): approval.status == .pending
         default: false
         }
@@ -43,14 +44,71 @@ enum TranscriptLayout {
     private static func fold(_ turn: [TranscriptItem], live: Bool) -> [TranscriptRow] {
         guard let first = turn.first else { return [] }
         let answerIndex = answerIndex(in: turn, live: live)
+        let hasSubagents = turn.contains { if case .subagent = $0.kind { true } else { false } }
+        let answerStreaming: Bool = {
+            guard let answerIndex, case .assistant(_, let streaming) = turn[answerIndex].kind else { return false }
+            return streaming
+        }()
 
         var rows: [TranscriptRow] = []
         var steps: [WorkStep] = []
+        var segmentItems: [TranscriptItem] = []
         var foldPosition: Int?
+        var flushedFoldCount = 0
 
-        func addStep(_ step: WorkStep) {
+        func addStep(_ step: WorkStep, item: TranscriptItem) {
             if foldPosition == nil { foldPosition = rows.count }
             steps.append(step)
+            segmentItems.append(item)
+        }
+
+        func flushWorkSegment(isTail: Bool) {
+            guard let position = foldPosition, !steps.isEmpty else {
+                steps.removeAll()
+                segmentItems.removeAll()
+                foldPosition = nil
+                return
+            }
+            defer {
+                steps.removeAll()
+                segmentItems.removeAll()
+                foldPosition = nil
+            }
+
+            let segmentLive: Bool
+            if isTail {
+                let hasBlockingApproval = rows[position...].contains {
+                    if case .approval = $0 { true } else { false }
+                }
+                segmentLive = live && !answerStreaming && !hasBlockingApproval
+            } else {
+                segmentLive = false
+            }
+
+            // A turn whose only "work" is a notice reads better as that notice's single quiet line.
+            let notes = steps.compactMap { step -> TranscriptRow? in
+                guard case .note(let title, let message) = step.kind else { return nil }
+                return .note(id: step.id, title: title, message: message, isError: false)
+            }
+            if !segmentLive, notes.count == steps.count {
+                rows.insert(contentsOf: notes, at: position)
+                return
+            }
+
+            let foldID = flushedFoldCount == 0
+                ? "work:\(first.id)"
+                : "work:\(first.id):\(steps[0].id)"
+            flushedFoldCount += 1
+
+            let fold = makeFold(
+                id: foldID,
+                steps: steps,
+                timingItems: hasSubagents ? segmentItems : turn,
+                turn: turn,
+                answerIndex: isTail ? answerIndex : nil,
+                live: segmentLive
+            )
+            rows.insert(.work(fold), at: position)
         }
 
         for (index, item) in turn.enumerated() {
@@ -61,54 +119,48 @@ enum TranscriptLayout {
                 if index == answerIndex {
                     rows.append(.assistant(id: item.id, blocks: blocks, streaming: streaming))
                 } else {
-                    addStep(WorkStep(id: item.id, kind: .commentary(blocks)))
+                    addStep(WorkStep(id: item.id, kind: .commentary(blocks)), item: item)
                 }
             case .toolCall(let call):
                 if call.kind == .thinking {
-                    addStep(WorkStep(id: item.id, kind: .thought(call.output ?? call.detail)))
+                    addStep(WorkStep(id: item.id, kind: .thought(call.output ?? call.detail)), item: item)
                 } else {
-                    addStep(WorkStep(id: item.id, kind: .tool(call)))
+                    addStep(WorkStep(id: item.id, kind: .tool(call)), item: item)
                 }
+            case .subagent(let subagent):
+                flushWorkSegment(isTail: false)
+                if let last = rows.last {
+                    switch last {
+                    case .subagent(let previous) where SubagentDisplayLogic.canGroupConsecutive(previous, subagent):
+                        rows[rows.count - 1] = .subagentGroup(
+                            SubagentGroup(id: "subagent-group:\(previous.id)", members: [previous, subagent])
+                        )
+                        continue
+                    case .subagentGroup(var group) where group.members.last.map({ SubagentDisplayLogic.canGroupConsecutive($0, subagent) }) == true:
+                        group.members.append(subagent)
+                        rows[rows.count - 1] = .subagentGroup(group)
+                        continue
+                    default:
+                        break
+                    }
+                }
+                rows.append(.subagent(subagent))
             case .approval(let approval):
                 if approval.status == .pending {
                     rows.append(.approval(id: item.id, approval))
                 } else {
-                    addStep(WorkStep(id: item.id, kind: .approval(approval)))
+                    addStep(WorkStep(id: item.id, kind: .approval(approval)), item: item)
                 }
             case .notice(let title, let message, let isError):
                 if isError {
                     rows.append(.note(id: item.id, title: title, message: message, isError: true))
                 } else {
-                    addStep(WorkStep(id: item.id, kind: .note(title: title, message: message)))
+                    addStep(WorkStep(id: item.id, kind: .note(title: title, message: message)), item: item)
                 }
             }
         }
 
-        guard let position = foldPosition else { return rows }
-
-        // A turn whose only "work" is a notice reads better as that notice's single quiet line.
-        let notes = steps.compactMap { step -> TranscriptRow? in
-            guard case .note(let title, let message) = step.kind else { return nil }
-            return .note(id: step.id, title: title, message: message, isError: false)
-        }
-        if !live, notes.count == steps.count {
-            rows.insert(contentsOf: notes, at: position)
-            return rows
-        }
-
-        let answerStreaming: Bool = {
-            guard let answerIndex, case .assistant(_, let streaming) = turn[answerIndex].kind else { return false }
-            return streaming
-        }()
-        let fold = makeFold(
-            id: "work:\(first.id)",
-            steps: steps,
-            turn: turn,
-            answerIndex: answerIndex,
-            // Streaming the answer or waiting on an approval: the work itself is done, so it reads as settled.
-            live: live && !answerStreaming && !rows.contains { if case .approval = $0 { true } else { false } }
-        )
-        rows.insert(.work(fold), at: position)
+        flushWorkSegment(isTail: true)
         return rows
     }
 
@@ -126,6 +178,7 @@ enum TranscriptLayout {
     private static func makeFold(
         id: String,
         steps: [WorkStep],
+        timingItems: [TranscriptItem],
         turn: [TranscriptItem],
         answerIndex: Int?,
         live: Bool
@@ -146,7 +199,7 @@ enum TranscriptLayout {
 
         let summary = summaryLabel(steps)
         let title: String
-        if let answerIndex, case .assistant(_, false) = turn[answerIndex].kind, let seconds = workedSeconds(turn), seconds >= 1 {
+        if let answerIndex, case .assistant(_, false) = turn[answerIndex].kind, let seconds = workedSeconds(timingItems), seconds >= 1 {
             title = "Worked for \(formatDuration(seconds))"
         } else {
             title = summary ?? "Worked"

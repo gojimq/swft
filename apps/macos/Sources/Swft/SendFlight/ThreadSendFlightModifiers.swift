@@ -109,9 +109,55 @@ struct SendFlightTurnSection: View, Equatable {
     let fadeStyle: SendBubbleFadeStyle
     /// Work-fold IDs expanded inside this turn only.
     let expandedFoldIDs: Set<String>
+    /// Subagent group and inline-detail IDs expanded inside this turn only.
+    let expandedSubagentIDs: Set<String>
+    let parentEnvironmentID: String?
+    let knownEnvironmentIDs: Set<String>
     let reduceMotion: Bool
     let onToggleWorkFold: (String) -> Void
+    let onToggleSubagentExpansion: (String) -> Void
+    let onOpenSubagentThread: (SubagentNavigationTarget) -> Void
     let onResolveApproval: (String, Bool) -> Void
+
+    init(
+        threadID: String,
+        turn: TranscriptTurn,
+        isLatest: Bool,
+        streamRoomHeight: CGFloat?,
+        showWorking: Bool,
+        holdsRows: Bool,
+        hiddenBubbleID: String?,
+        fadeBubbleID: String?,
+        fadeStyle: SendBubbleFadeStyle,
+        expandedFoldIDs: Set<String>,
+        expandedSubagentIDs: Set<String> = [],
+        parentEnvironmentID: String? = nil,
+        knownEnvironmentIDs: Set<String> = [],
+        reduceMotion: Bool,
+        onToggleWorkFold: @escaping (String) -> Void,
+        onToggleSubagentExpansion: @escaping (String) -> Void = { _ in },
+        onOpenSubagentThread: @escaping (SubagentNavigationTarget) -> Void = { _ in },
+        onResolveApproval: @escaping (String, Bool) -> Void
+    ) {
+        self.threadID = threadID
+        self.turn = turn
+        self.isLatest = isLatest
+        self.streamRoomHeight = streamRoomHeight
+        self.showWorking = showWorking
+        self.holdsRows = holdsRows
+        self.hiddenBubbleID = hiddenBubbleID
+        self.fadeBubbleID = fadeBubbleID
+        self.fadeStyle = fadeStyle
+        self.expandedFoldIDs = expandedFoldIDs
+        self.expandedSubagentIDs = expandedSubagentIDs
+        self.parentEnvironmentID = parentEnvironmentID
+        self.knownEnvironmentIDs = knownEnvironmentIDs
+        self.reduceMotion = reduceMotion
+        self.onToggleWorkFold = onToggleWorkFold
+        self.onToggleSubagentExpansion = onToggleSubagentExpansion
+        self.onOpenSubagentThread = onOpenSubagentThread
+        self.onResolveApproval = onResolveApproval
+    }
 
     nonisolated static func == (lhs: SendFlightTurnSection, rhs: SendFlightTurnSection) -> Bool {
         lhs.threadID == rhs.threadID
@@ -124,6 +170,9 @@ struct SendFlightTurnSection: View, Equatable {
             && lhs.fadeBubbleID == rhs.fadeBubbleID
             && lhs.fadeStyle == rhs.fadeStyle
             && lhs.expandedFoldIDs == rhs.expandedFoldIDs
+            && lhs.expandedSubagentIDs == rhs.expandedSubagentIDs
+            && lhs.parentEnvironmentID == rhs.parentEnvironmentID
+            && lhs.knownEnvironmentIDs == rhs.knownEnvironmentIDs
             && lhs.reduceMotion == rhs.reduceMotion
     }
 
@@ -181,6 +230,32 @@ struct SendFlightTurnSection: View, Equatable {
             WorkFoldView(fold: fold, isExpanded: expandedFoldIDs.contains(fold.id)) {
                 onToggleWorkFold(fold.id)
             }
+            .opacity(held ? 0 : 1)
+            .offset(y: held ? 8 : 0)
+            .transition(.swftRise(reduceMotion: reduceMotion))
+        case .subagent(let subagent):
+            SubagentSingleRowView(
+                item: subagent,
+                parentEnvironmentID: parentEnvironmentID,
+                knownEnvironmentIDs: knownEnvironmentIDs,
+                isExpanded: expandedSubagentIDs.contains(subagent.id),
+                onToggleExpansion: onToggleSubagentExpansion,
+                onOpenThread: onOpenSubagentThread
+            )
+            .equatable()
+            .opacity(held ? 0 : 1)
+            .offset(y: held ? 8 : 0)
+            .transition(.swftRise(reduceMotion: reduceMotion))
+        case .subagentGroup(let group):
+            SubagentGroupRowView(
+                group: group,
+                parentEnvironmentID: parentEnvironmentID,
+                knownEnvironmentIDs: knownEnvironmentIDs,
+                expandedIDs: expandedSubagentIDs,
+                onToggleExpansion: onToggleSubagentExpansion,
+                onOpenThread: onOpenSubagentThread
+            )
+            .equatable()
             .opacity(held ? 0 : 1)
             .offset(y: held ? 8 : 0)
             .transition(.swftRise(reduceMotion: reduceMotion))

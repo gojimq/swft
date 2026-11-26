@@ -753,6 +753,40 @@ extension ShellStreamItem: Decodable {
 
 // MARK: - Thread Detail Projection & Turn Items
 
+public struct DelegatedFrom: Codable, Sendable, Equatable, Hashable {
+    public let environmentId: String
+    public let threadId: String
+    public let title: String
+
+    public init(environmentId: String, threadId: String, title: String) {
+        self.environmentId = environmentId
+        self.threadId = threadId
+        self.title = title
+    }
+}
+
+public struct RemoteTaskChild: Codable, Sendable, Equatable, Hashable {
+    public let environmentId: String
+    public let threadId: String
+    public let label: String
+    public let title: String?
+    public let runId: String?
+
+    public init(
+        environmentId: String,
+        threadId: String,
+        label: String,
+        title: String? = nil,
+        runId: String? = nil
+    ) {
+        self.environmentId = environmentId
+        self.threadId = threadId
+        self.label = label
+        self.title = title
+        self.runId = runId
+    }
+}
+
 public struct AppThread: Codable, Sendable, Equatable, Identifiable {
     public let id: String
     public let projectId: String
@@ -764,6 +798,8 @@ public struct AppThread: Codable, Sendable, Equatable, Identifiable {
     public let branch: String?
     public let worktreePath: String?
     public var activeProviderThreadId: String?
+    public let creationSource: String?
+    public let delegatedFrom: DelegatedFrom?
     public let lineage: ThreadLineage
     public let createdAt: Date
     public let updatedAt: Date
@@ -774,6 +810,10 @@ public struct AppThread: Codable, Sendable, Equatable, Identifiable {
     public let pinnedAt: Date?
     public var lastVisitedAt: Date?
     public let deletedAt: Date?
+
+    public var isProviderNativeSubagent: Bool {
+        lineage.relationshipToParent == "subagent" && creationSource == "provider"
+    }
 
     public init(
         id: String,
@@ -786,6 +826,8 @@ public struct AppThread: Codable, Sendable, Equatable, Identifiable {
         branch: String? = nil,
         worktreePath: String? = nil,
         activeProviderThreadId: String? = nil,
+        creationSource: String? = nil,
+        delegatedFrom: DelegatedFrom? = nil,
         lineage: ThreadLineage? = nil,
         createdAt: Date,
         updatedAt: Date,
@@ -807,6 +849,8 @@ public struct AppThread: Codable, Sendable, Equatable, Identifiable {
         self.branch = branch
         self.worktreePath = worktreePath
         self.activeProviderThreadId = activeProviderThreadId
+        self.creationSource = creationSource
+        self.delegatedFrom = delegatedFrom
         self.lineage = lineage ?? ThreadLineage(rootThreadId: id)
         self.createdAt = createdAt
         self.updatedAt = updatedAt
@@ -1281,19 +1325,145 @@ public struct SubagentSummary: Codable, Sendable, Equatable, Identifiable {
     public let id: String
     public let threadId: String
     public let runId: String?
+    public let parentNodeId: String?
     public let origin: String
     public let driver: String
     public let providerInstanceId: String
+    public let providerThreadId: String?
     public let childThreadId: String?
+    public let remoteChild: RemoteTaskChild?
     public let prompt: String
     public let title: String?
     public let model: String?
+    public let modelSelection: ModelSelection?
+    public let executedModel: String?
     public let status: String
     public let progress: String?
     public let result: String?
     public let startedAt: Date?
     public let completedAt: Date?
     public let updatedAt: Date
+    public let promptOmitted: Bool?
+    public let resultOmitted: Bool?
+
+    public var isActive: Bool {
+        switch status {
+        case "pending", "queued", "preparing", "starting", "running", "working", "in_progress", "waiting":
+            return true
+        default:
+            return false
+        }
+    }
+
+    public init(
+        id: String,
+        threadId: String,
+        runId: String? = nil,
+        parentNodeId: String? = nil,
+        origin: String = "app_owned",
+        driver: String,
+        providerInstanceId: String,
+        providerThreadId: String? = nil,
+        childThreadId: String? = nil,
+        remoteChild: RemoteTaskChild? = nil,
+        prompt: String = "",
+        title: String? = nil,
+        model: String? = nil,
+        modelSelection: ModelSelection? = nil,
+        executedModel: String? = nil,
+        status: String,
+        progress: String? = nil,
+        result: String? = nil,
+        startedAt: Date? = nil,
+        completedAt: Date? = nil,
+        updatedAt: Date,
+        promptOmitted: Bool? = nil,
+        resultOmitted: Bool? = nil
+    ) {
+        self.id = id
+        self.threadId = threadId
+        self.runId = runId
+        self.parentNodeId = parentNodeId
+        self.origin = origin
+        self.driver = driver
+        self.providerInstanceId = providerInstanceId
+        self.providerThreadId = providerThreadId
+        self.childThreadId = childThreadId
+        self.remoteChild = remoteChild
+        self.prompt = prompt
+        self.title = title
+        self.model = model
+        self.modelSelection = modelSelection
+        self.executedModel = executedModel
+        self.status = status
+        self.progress = progress
+        self.result = result
+        self.startedAt = startedAt
+        self.completedAt = completedAt
+        self.updatedAt = updatedAt
+        self.promptOmitted = promptOmitted
+        self.resultOmitted = resultOmitted
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try c.decode(String.self, forKey: .id)
+        self.threadId = try c.decode(String.self, forKey: .threadId)
+        self.runId = try c.decodeIfPresent(String.self, forKey: .runId)
+        self.parentNodeId = try c.decodeIfPresent(String.self, forKey: .parentNodeId)
+        self.origin = try c.decodeIfPresent(String.self, forKey: .origin) ?? "app_owned"
+        self.driver = try c.decodeIfPresent(String.self, forKey: .driver) ?? ""
+        self.providerInstanceId = try c.decodeIfPresent(String.self, forKey: .providerInstanceId) ?? ""
+        self.providerThreadId = try c.decodeIfPresent(String.self, forKey: .providerThreadId)
+        self.childThreadId = try c.decodeIfPresent(String.self, forKey: .childThreadId)
+        self.remoteChild = try c.decodeIfPresent(RemoteTaskChild.self, forKey: .remoteChild)
+        self.prompt = try c.decodeIfPresent(String.self, forKey: .prompt) ?? ""
+        self.title = try c.decodeIfPresent(String.self, forKey: .title)
+        self.model = try c.decodeIfPresent(String.self, forKey: .model)
+        self.modelSelection = try c.decodeIfPresent(ModelSelection.self, forKey: .modelSelection)
+        self.executedModel = try c.decodeIfPresent(String.self, forKey: .executedModel)
+        self.status = try c.decode(String.self, forKey: .status)
+        self.progress = try c.decodeIfPresent(String.self, forKey: .progress)
+        self.result = try c.decodeIfPresent(String.self, forKey: .result)
+        self.startedAt = try c.decodeIfPresent(Date.self, forKey: .startedAt)
+        self.completedAt = try c.decodeIfPresent(Date.self, forKey: .completedAt)
+        self.updatedAt = try c.decode(Date.self, forKey: .updatedAt)
+        self.promptOmitted = try c.decodeIfPresent(Bool.self, forKey: .promptOmitted)
+        self.resultOmitted = try c.decodeIfPresent(Bool.self, forKey: .resultOmitted)
+    }
+
+    /// Restores deduped `prompt`/`result` fields from an earlier record on the same stream.
+    public func restoringDedupedBodies(from previous: SubagentSummary?) -> SubagentSummary {
+        guard let previous else { return self }
+        let restoredPrompt = (promptOmitted == true && prompt.isEmpty) ? previous.prompt : prompt
+        let restoredResult = (resultOmitted == true && (result == nil || result?.isEmpty == true)) ? previous.result : result
+        if restoredPrompt == prompt && restoredResult == result { return self }
+        return SubagentSummary(
+            id: id,
+            threadId: threadId,
+            runId: runId,
+            parentNodeId: parentNodeId,
+            origin: origin,
+            driver: driver,
+            providerInstanceId: providerInstanceId,
+            providerThreadId: providerThreadId,
+            childThreadId: childThreadId,
+            remoteChild: remoteChild,
+            prompt: restoredPrompt,
+            title: title,
+            model: model,
+            modelSelection: modelSelection,
+            executedModel: executedModel,
+            status: status,
+            progress: progress,
+            result: restoredResult,
+            startedAt: startedAt,
+            completedAt: completedAt,
+            updatedAt: updatedAt,
+            promptOmitted: nil,
+            resultOmitted: nil
+        )
+    }
 }
 
 // MARK: - TurnItem
@@ -1364,9 +1534,12 @@ public enum TurnItemKind: Sendable, Equatable {
         driver: String,
         providerInstanceId: String,
         childThreadId: String?,
+        remoteChild: RemoteTaskChild? = nil,
         prompt: String,
         progress: String?,
-        result: String?
+        result: String?,
+        promptOmitted: Bool = false,
+        resultOmitted: Bool = false
     )
     case checkpoint(checkpointId: String, scopeId: String, files: [CheckpointFileSummary])
     case notification(outcome: String, summary: String, detail: String?)
@@ -1487,7 +1660,8 @@ extension TurnItem: Decodable {
         case toolName, viewedImagePath
         case requestId, requestKind, prompt, reason, fullAccessOverride, appName, options
         case questions, responseMode
-        case subagentId, origin, driver, providerInstanceId, childThreadId, progress, result
+        case subagentId, origin, driver, providerInstanceId, childThreadId, remoteChild, progress, result
+        case promptOmitted, resultOmitted
         case checkpointId, scopeId, files
         case outcome, summary, detail
         case message, unresponsiveAt, level, failure
@@ -1606,13 +1780,16 @@ extension TurnItem: Decodable {
         case "subagent":
             self.kind = .subagent(
                 subagentId: try c.decode(String.self, forKey: .subagentId),
-                origin: try c.decode(String.self, forKey: .origin),
-                driver: try c.decode(String.self, forKey: .driver),
-                providerInstanceId: try c.decode(String.self, forKey: .providerInstanceId),
+                origin: try c.decodeIfPresent(String.self, forKey: .origin) ?? "app_owned",
+                driver: try c.decodeIfPresent(String.self, forKey: .driver) ?? "",
+                providerInstanceId: try c.decodeIfPresent(String.self, forKey: .providerInstanceId) ?? "",
                 childThreadId: try c.decodeIfPresent(String.self, forKey: .childThreadId),
-                prompt: try c.decode(String.self, forKey: .prompt),
+                remoteChild: try c.decodeIfPresent(RemoteTaskChild.self, forKey: .remoteChild),
+                prompt: try c.decodeIfPresent(String.self, forKey: .prompt) ?? "",
                 progress: try c.decodeIfPresent(String.self, forKey: .progress),
-                result: try c.decodeIfPresent(String.self, forKey: .result)
+                result: try c.decodeIfPresent(String.self, forKey: .result),
+                promptOmitted: try c.decodeIfPresent(Bool.self, forKey: .promptOmitted) ?? false,
+                resultOmitted: try c.decodeIfPresent(Bool.self, forKey: .resultOmitted) ?? false
             )
         case "checkpoint":
             self.kind = .checkpoint(
