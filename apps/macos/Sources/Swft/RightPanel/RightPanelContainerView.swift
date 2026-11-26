@@ -18,25 +18,57 @@ struct RightPanelContainerView: View {
     }
 
     @State private var dragStartWidth: CGFloat?
+    @State private var hoveredTabID: String?
+    @State private var tabsContentWidth: CGFloat = 0
+    @State private var scrollEdges = TabStripScrollEdges()
+
+    private struct TabStripScrollEdges: Equatable {
+        var canScrollLeading = false
+        var canScrollTrailing = false
+    }
+
+    private var tabLifecycleAnimation: Animation {
+        SwftMotion.resolve(RightPanelMotion.tabLifecycle, reduceMotion: reduceMotion)
+    }
+
+    private var tabSwitchAnimation: Animation {
+        SwftMotion.resolve(RightPanelMotion.tabSwitch, reduceMotion: reduceMotion)
+    }
+
+    private var panelLayoutAnimation: Animation {
+        SwftMotion.resolve(RightPanelMotion.panelLayout, reduceMotion: reduceMotion)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
             tabBar
-                .zIndex(1)
-            Rectangle().fill(SwftColor.borderSubtle).frame(height: 1)
-                .zIndex(1)
+                .zIndex(2)
             // Surfaces paint `.background(canvas)`, which extends into the toolbar's top safe area; clip it so
             // it can never wash over the tab bar sitting in that titlebar band.
-            surfaceBody
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .clipped()
+            ZStack {
+                surfaceBody
+                    .transition(.opacity)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .clipped()
+            .animation(
+                SwftMotion.resolve(SwftMotion.screenSwitch, reduceMotion: reduceMotion),
+                value: activeTab?.id
+            )
         }
         .background(SwftColor.canvas)
         .frame(maxHeight: .infinity)
         .overlay(alignment: .leading) {
+            // Keep a crisp leading edge beside the chat column or open left sidebar; fade out against the window edge.
+            let showLeadingEdge = !panelState.isMaximized || model.sidebarVisible
+            Rectangle()
+                .fill(SwftColor.borderSubtle)
+                .frame(width: 1)
+                .opacity(showLeadingEdge ? 1 : 0)
+                .allowsHitTesting(false)
+                .animation(panelLayoutAnimation, value: showLeadingEdge)
+
             if !panelState.isMaximized {
-                Rectangle().fill(SwftColor.borderSubtle).frame(width: 1)
-                    .allowsHitTesting(false)
                 // Straddles the split edge without taking layout width, so no gutter shows between columns.
                 RightPanelResizeHandle { travel in
                     let start = dragStartWidth
@@ -54,86 +86,145 @@ struct RightPanelContainerView: View {
     // MARK: - Top Tab Bar
 
     private var tabBar: some View {
-        HStack(spacing: 6) {
+        HStack(alignment: .bottom, spacing: 0) {
             if panelState.isMaximized && !model.sidebarVisible {
-                // Leave room for the traffic lights, mirroring `TopBar`.
-                Color.clear.frame(width: 68, height: 1)
-                IconButton("sidebar.left", help: "Show sidebar", size: 28, action: model.toggleSidebar)
+                HStack(spacing: 4) {
+                    // Leave room for the traffic lights, mirroring `TopBar`.
+                    Color.clear.frame(width: 74, height: 1)
+                    IconButton("sidebar.left", help: "Show sidebar", size: 28, action: model.toggleSidebar)
+                }
+                .padding(.trailing, 4)
+                .padding(.bottom, 11)
+                .transition(.swftPop(reduceMotion: reduceMotion, scale: 0.8))
             }
 
             tabStrip
 
-            HStack(spacing: 0) {
-                IconButton("plus", help: "Open a surface", size: 28) {
-                    _ = model.rightPanel.openLauncherTab(for: threadID)
-                }
+            addTabControl
+                .padding(.leading, panelState.tabs.isEmpty ? 4 : 2)
+                .padding(.bottom, 11)
 
-                Menu {
-                    ForEach(RightPanelSurfaceKind.allCases) { kind in
-                        Button {
-                            model.rightPanel.openSurface(kind, for: threadID)
-                        } label: {
-                            Label(kind.title, systemImage: kind.iconName)
-                        }
-                        .disabled(!surfaceAvailability(kind).available)
-                    }
-                } label: {
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: 9, weight: .semibold))
-                        .foregroundStyle(SwftColor.textTertiary)
-                        .frame(width: 16, height: 28)
-                        .contentShape(Rectangle())
-                }
-                .menuStyle(.button)
-                .buttonStyle(.plain)
-                .menuIndicator(.hidden)
-                .fixedSize()
-                .help("Open a surface in a new tab")
-            }
+            Spacer(minLength: 8)
 
-            Rectangle()
-                .fill(SwftColor.border)
-                .frame(width: 1, height: 16)
-                .padding(.horizontal, 2)
+            HStack(spacing: 2) {
+                Rectangle()
+                    .fill(RightPanelColor.tabDivider)
+                    .frame(width: 1, height: 16)
+                    .padding(.horizontal, 4)
 
-            HStack(spacing: 0) {
                 IconButton(
                     panelState.isMaximized ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right",
                     help: panelState.isMaximized ? "Restore split view" : "Expand right panel",
                     size: 28
                 ) {
-                    model.rightPanel.toggleMaximized(for: threadID)
+                    withAnimation(panelLayoutAnimation) {
+                        model.rightPanel.toggleMaximized(for: threadID)
+                    }
                 }
 
                 IconButton("xmark", help: "Close right panel (⌘⌥B)", size: 28) {
-                    model.rightPanel.closePanel(for: threadID)
+                    withAnimation(panelLayoutAnimation) {
+                        model.rightPanel.closePanel(for: threadID)
+                    }
                 }
             }
+            .padding(.bottom, 11)
         }
         .padding(.leading, 8)
         .padding(.trailing, 10)
         .frame(height: RightPanelMetrics.tabBarHeight)
-        .background(SwftColor.canvas)
+        .background {
+            RightPanelColor.tabStripBackground
+                .overlay(alignment: .bottom) {
+                    Rectangle()
+                        .fill(RightPanelColor.tabBorder)
+                        .frame(height: 1)
+                }
+        }
+        .animation(panelLayoutAnimation, value: panelState.isMaximized && !model.sidebarVisible)
+    }
+
+    private var addTabControl: some View {
+        HStack(spacing: 0) {
+            IconButton("plus", help: "Open a surface", size: 28, weight: .medium) {
+                withAnimation(tabLifecycleAnimation) {
+                    _ = model.rightPanel.openLauncherTab(for: threadID)
+                }
+            }
+
+            Menu {
+                ForEach(RightPanelSurfaceKind.allCases) { kind in
+                    Button {
+                        withAnimation(tabLifecycleAnimation) {
+                            _ = model.rightPanel.openSurface(kind, for: threadID)
+                        }
+                    } label: {
+                        Label(kind.title, systemImage: kind.iconName)
+                    }
+                    .disabled(!surfaceAvailability(kind).available)
+                }
+            } label: {
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 8.5, weight: .semibold))
+                    .foregroundStyle(SwftColor.textTertiary)
+                    .frame(width: 16, height: 24)
+                    .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+            }
+            .menuStyle(.button)
+            .buttonStyle(HoverFillStyle(shape: RoundedRectangle(cornerRadius: 6, style: .continuous), pressScale: 0.92))
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .help("Open a surface in a new tab")
+        }
     }
 
     private var tabStrip: some View {
-        ScrollViewReader { proxy in
+        let tabs = panelState.tabs
+        let tabIDs = tabs.map(\.id)
+        let activeID = activeTab?.id
+        let shoulder = RightPanelMetrics.tabShoulderRadius
+
+        return ScrollViewReader { proxy in
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 2) {
-                    ForEach(panelState.tabs) { tab in
+                HStack(alignment: .bottom, spacing: 0) {
+                    ForEach(Array(tabs.enumerated()), id: \.element.id) { index, tab in
+                        let isActive = activeID == tab.id
+                        let showDivider = DiaTabStripLayout.showsTrailingDivider(
+                            at: index,
+                            tabIDs: tabIDs,
+                            activeTabID: activeID,
+                            hoveredTabID: hoveredTabID
+                        )
+
                         RightPanelTabButton(
                             icon: tab.iconName,
                             title: tab.title,
-                            isActive: activeTab?.id == tab.id,
+                            isActive: isActive,
                             statusDotColor: statusDotColor(for: tab),
+                            showTrailingDivider: showDivider,
+                            onHoverChanged: { isHovering in
+                                if isHovering {
+                                    hoveredTabID = tab.id
+                                } else if hoveredTabID == tab.id {
+                                    hoveredTabID = nil
+                                }
+                            },
                             onActivate: {
-                                model.rightPanel.activateTab(tab.id, for: threadID)
+                                withAnimation(tabSwitchAnimation) {
+                                    model.rightPanel.activateTab(tab.id, for: threadID)
+                                }
                             },
                             onClose: {
                                 closeTab(tab)
                             }
                         )
+                        // Include outer concave shoulder clearance inside `.id(tab.id)` so `scrollTo` brings
+                        // the first/last active tab's full curved shoulder cleanly onscreen without edge fading.
+                        .padding(.leading, index == 0 ? shoulder : 0)
+                        .padding(.trailing, index == tabs.count - 1 ? shoulder : 0)
                         .id(tab.id)
+                        .zIndex(isActive ? 2 : (hoveredTabID == tab.id ? 1 : 0))
+                        .transition(.diaTabTransition(reduceMotion: reduceMotion))
                         .contextMenu {
                             Button("Close Tab") {
                                 closeTab(tab)
@@ -141,32 +232,57 @@ struct RightPanelContainerView: View {
                             Button("Close Other Tabs") {
                                 let removed = panelState.tabs.filter { $0.id != tab.id }
                                 removed.forEach(releaseBrowserControllerIfNeeded)
-                                model.rightPanel.closeOtherTabs(keeping: tab.id, for: threadID)
+                                withAnimation(tabLifecycleAnimation) {
+                                    model.rightPanel.closeOtherTabs(keeping: tab.id, for: threadID)
+                                }
                             }
                             .disabled(panelState.tabs.count <= 1)
                             Divider()
                             Button("Close All Tabs", role: .destructive) {
                                 panelState.tabs.forEach(releaseBrowserControllerIfNeeded)
-                                model.rightPanel.closeAllTabs(for: threadID)
+                                withAnimation(tabLifecycleAnimation) {
+                                    model.rightPanel.closeAllTabs(for: threadID)
+                                }
                             }
                         }
                     }
                 }
-                .padding(.vertical, 6)
-                .padding(.horizontal, 2)
+                .padding(.top, RightPanelMetrics.tabTopInset)
+                .frame(height: RightPanelMetrics.tabBarHeight, alignment: .bottom)
+                .animation(tabLifecycleAnimation, value: tabIDs)
+                .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width in
+                    tabsContentWidth = width
+                }
             }
-            // Soft edges so a clipped tab fades out instead of being cut against the buttons.
+            .frame(maxWidth: tabs.isEmpty ? 0 : (tabsContentWidth > 0 ? tabsContentWidth : nil))
+            .frame(height: RightPanelMetrics.tabBarHeight)
+            .animation(tabLifecycleAnimation, value: tabsContentWidth)
+            .onScrollGeometryChange(for: TabStripScrollEdges.self) { geo in
+                TabStripScrollEdges(
+                    canScrollLeading: geo.contentOffset.x > 2,
+                    canScrollTrailing: geo.contentSize.width - geo.containerSize.width - geo.contentOffset.x > 2
+                )
+            } action: { _, next in
+                scrollEdges = next
+            }
+            // Only fade edges when tabs actually overflow offscreen so first/last active tab shoulders stay crisp.
             .mask {
                 HStack(spacing: 0) {
-                    LinearGradient(colors: [.clear, .black], startPoint: .leading, endPoint: .trailing).frame(width: 10)
+                    if scrollEdges.canScrollLeading {
+                        LinearGradient(colors: [.clear, .black], startPoint: .leading, endPoint: .trailing)
+                            .frame(width: 12)
+                    }
                     Color.black
-                    LinearGradient(colors: [.black, .clear], startPoint: .leading, endPoint: .trailing).frame(width: 14)
+                    if scrollEdges.canScrollTrailing {
+                        LinearGradient(colors: [.black, .clear], startPoint: .leading, endPoint: .trailing)
+                            .frame(width: 16)
+                    }
                 }
             }
             .onAppear {
-                if let id = activeTab?.id { proxy.scrollTo(id) }
+                if let id = activeID { proxy.scrollTo(id) }
             }
-            .onChange(of: activeTab?.id) { _, id in
+            .onChange(of: activeID) { _, id in
                 guard let id else { return }
                 withAnimation(SwftMotion.resolve(SwftMotion.standard, reduceMotion: reduceMotion)) {
                     proxy.scrollTo(id)
@@ -260,7 +376,10 @@ struct RightPanelContainerView: View {
 
     private func closeTab(_ tab: RightPanelTab) {
         releaseBrowserControllerIfNeeded(tab)
-        model.rightPanel.closeTab(tab.id, for: threadID)
+        if hoveredTabID == tab.id { hoveredTabID = nil }
+        withAnimation(tabLifecycleAnimation) {
+            model.rightPanel.closeTab(tab.id, for: threadID)
+        }
     }
 
     private func releaseBrowserControllerIfNeeded(_ tab: RightPanelTab) {
@@ -274,11 +393,16 @@ struct RightPanelContainerView: View {
 
 struct RightPanelLauncherView: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let threadID: String
     let replacingLauncherTabID: String?
     let availability: (RightPanelSurfaceKind) -> (available: Bool, disabledReason: String?)
 
     @State private var monitorToken = UUID()
+
+    private var tabLifecycleAnimation: Animation {
+        SwftMotion.resolve(RightPanelMotion.tabLifecycle, reduceMotion: reduceMotion)
+    }
 
     var body: some View {
         GeometryReader { geo in
@@ -304,11 +428,13 @@ struct RightPanelLauncherView: View {
                                 isAvailable: status.available,
                                 disabledReason: status.disabledReason
                             ) {
-                                model.rightPanel.openSurface(
-                                    kind,
-                                    for: threadID,
-                                    replacingLauncherTabID: replacingLauncherTabID
-                                )
+                                withAnimation(tabLifecycleAnimation) {
+                                    _ = model.rightPanel.openSurface(
+                                        kind,
+                                        for: threadID,
+                                        replacingLauncherTabID: replacingLauncherTabID
+                                    )
+                                }
                             }
                         }
                     }
@@ -329,11 +455,13 @@ struct RightPanelLauncherView: View {
                     hasCommandOrControlOrOption: hasModifiers
                 ) else { return false }
                 guard availability(kind).available else { return false }
-                model.rightPanel.openSurface(
-                    kind,
-                    for: threadID,
-                    replacingLauncherTabID: replacingLauncherTabID
-                )
+                withAnimation(tabLifecycleAnimation) {
+                    _ = model.rightPanel.openSurface(
+                        kind,
+                        for: threadID,
+                        replacingLauncherTabID: replacingLauncherTabID
+                    )
+                }
                 return true
             }
         }

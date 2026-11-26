@@ -13,9 +13,8 @@ extension AppModel {
 
     func toggleRightPanel() {
         guard let threadID = selectedThreadID else { return }
-        withAnimation(.snappy(duration: 0.22)) {
-            rightPanel.togglePanel(for: threadID)
-        }
+        // RootView animates open/close with `RightPanelMotion.panelLayout` honoring `effectiveReduceMotion`.
+        rightPanel.togglePanel(for: threadID)
     }
 
     /// Opens a Side chat tab in the right panel from `/side` or `/btw`, optionally seeding its composer.
