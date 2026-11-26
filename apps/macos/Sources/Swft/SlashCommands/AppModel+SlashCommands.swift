@@ -143,7 +143,7 @@ extension AppModel {
             providerDriver: activeSlashCommandProviderDriver,
             isAtPromptStart: trigger.isAtPromptStart,
             supportsFreshSession: supportsFreshSessionInActiveContext,
-            supportsSideChat: onSideChatCommand != nil,
+            supportsSideChat: selectedThreadID != nil && onSideChatCommand != nil,
             supportsPlanModeToggle: supportsPlanToggle,
             currentInteractionMode: activeInteractionMode
         )

@@ -134,6 +134,10 @@ struct SideChatSurfaceView: View {
         }
         .background(SwftColor.canvas)
         .task(id: "\(threadID)::\(tabID)::\(sideThreadId ?? "none")") {
+            if let seeded = model.rightPanel.takePendingSideChatDraft(forTabID: tabID) {
+                draftText = seeded
+                composerFocused = true
+            }
             await attachOrForkIfNeeded()
         }
         .onChange(of: liveStore?.thread?.title) { _, newTitle in
@@ -264,6 +268,22 @@ struct SideChatSurfaceView: View {
             .padding(.horizontal, 8)
             .padding(.vertical, 5)
             .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(SwftColor.surfaceMuted))
+        case .subagent(let subagent):
+            SubagentSingleRowView(
+                item: subagent,
+                parentEnvironmentID: model.threadSummary(for: threadID)?.environmentID ?? model.activeThreadEnvironmentID,
+                knownEnvironmentIDs: model.knownEnvironmentIDs,
+                isExpanded: model.expandedSubagentRows.contains(subagent.id),
+                onToggleExpansion: { subagentRowID in
+                    withAnimation(SwftMotion.resolve(SwftMotion.disclosure, reduceMotion: reduceMotion)) {
+                        model.toggleSubagentRow(subagentRowID)
+                    }
+                },
+                onOpenThread: { target in
+                    model.openSubagentThread(target, fromThreadID: sideThreadId ?? threadID)
+                }
+            )
+            .equatable()
         case .approval(let approval):
             ApprovalCard(
                 title: approval.title,

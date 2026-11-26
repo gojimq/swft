@@ -18,6 +18,16 @@ extension AppModel {
         }
     }
 
+    /// Opens a Side chat tab in the right panel from `/side` or `/btw`, optionally seeding its composer.
+    func handleSideChatSlashCommand(prompt: String) {
+        guard let threadID = selectedThreadID else { return }
+        let tab = rightPanel.openSideChat(for: threadID)
+        let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty {
+            rightPanel.pendingSideChatDrafts[tab.id] = trimmed
+        }
+    }
+
     /// Returns the `ServerConnection` owning `threadID` (supports both local and paired remote environments).
     func connection(forThreadID threadID: String) -> ServerConnection? {
         guard !isMock else { return nil }

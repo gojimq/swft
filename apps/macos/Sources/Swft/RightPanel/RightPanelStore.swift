@@ -14,6 +14,12 @@ final class RightPanelStore {
     private(set) var sideChatStores: [String: ThreadStore] = [:]
     /// Optimistic user messages sent in a side chat before server echo.
     var pendingSideChatMessages: [String: [PendingUserMessage]] = [:]
+    /// Pending draft prompt seeded into a side-chat tab (e.g. from `/side <prompt>`).
+    var pendingSideChatDrafts: [String: String] = [:]
+
+    func takePendingSideChatDraft(forTabID tabID: String) -> String? {
+        pendingSideChatDrafts.removeValue(forKey: tabID)
+    }
     /// Mock-mode transcripts keyed by side-chat tab/thread ID.
     var mockSideChatItems: [String: [TranscriptItem]] = [:]
     /// Mock-mode linked PR/issue overrides keyed by thread ID so unlinking/linking updates immediately in mock mode.

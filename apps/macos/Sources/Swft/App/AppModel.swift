@@ -249,6 +249,9 @@ final class AppModel {
         self.openProviderSettingsAction = { [weak self] harnessID in
             self?.openSettings(section: .providers, providerID: harnessID)
         }
+        self.onSideChatCommand = { [weak self] prompt in
+            self?.handleSideChatSlashCommand(prompt: prompt)
+        }
         self.onOpenProviderSettings = { [weak self] instanceID in
             self?.openSettings(section: .providers, providerID: instanceID)
         }
