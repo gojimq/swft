@@ -14,10 +14,12 @@ public extension RPCMethod {
 public enum AssetResource: Codable, Sendable, Hashable {
     case attachment(attachmentId: String, fileName: String? = nil, mimeType: String? = nil, disposition: String? = "inline")
     case mediaFile(threadId: String, path: String)
+    case workspaceFile(threadId: String, path: String)
+    case draftWorkspaceFile(cwd: String, path: String)
     case toolOutputImage(threadId: String, itemId: String, index: Int)
 
     private enum CodingKeys: String, CodingKey {
-        case _tag, attachmentId, fileName, mimeType, disposition, threadId, path, itemId, index
+        case _tag, attachmentId, fileName, mimeType, disposition, threadId, cwd, path, itemId, index
     }
 
     public func encode(to encoder: any Encoder) throws {
@@ -32,6 +34,14 @@ public enum AssetResource: Codable, Sendable, Hashable {
         case .mediaFile(let threadId, let path):
             try c.encode("media-file", forKey: ._tag)
             try c.encode(threadId, forKey: .threadId)
+            try c.encode(path, forKey: .path)
+        case .workspaceFile(let threadId, let path):
+            try c.encode("workspace-file", forKey: ._tag)
+            try c.encode(threadId, forKey: .threadId)
+            try c.encode(path, forKey: .path)
+        case .draftWorkspaceFile(let cwd, let path):
+            try c.encode("draft-workspace-file", forKey: ._tag)
+            try c.encode(cwd, forKey: .cwd)
             try c.encode(path, forKey: .path)
         case .toolOutputImage(let threadId, let itemId, let index):
             try c.encode("tool-output-image", forKey: ._tag)
@@ -54,6 +64,10 @@ public enum AssetResource: Codable, Sendable, Hashable {
             )
         case "media-file":
             self = .mediaFile(threadId: try c.decode(String.self, forKey: .threadId), path: try c.decode(String.self, forKey: .path))
+        case "workspace-file":
+            self = .workspaceFile(threadId: try c.decode(String.self, forKey: .threadId), path: try c.decode(String.self, forKey: .path))
+        case "draft-workspace-file":
+            self = .draftWorkspaceFile(cwd: try c.decode(String.self, forKey: .cwd), path: try c.decode(String.self, forKey: .path))
         case "tool-output-image":
             self = .toolOutputImage(
                 threadId: try c.decode(String.self, forKey: .threadId),

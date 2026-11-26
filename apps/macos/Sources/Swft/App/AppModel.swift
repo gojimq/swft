@@ -89,6 +89,8 @@ final class AppModel {
     var expandedSubagentRows: Set<String> = []
     /// Settings screen coordinator (preferences, server settings RPCs, provider setup streams).
     let settings = SettingsController()
+    /// Native macOS right sidebar ("Open a surface") tab state and side-chat stores.
+    let rightPanel = RightPanelStore()
     /// Hook invoked when the model picker's signed-out action deep-links to provider settings.
     var openProviderSettingsAction: ((String) -> Void)?
     /// Home → new thread staging (composer docking, hand-off); see `Motion/NewThread`.
@@ -418,6 +420,7 @@ final class AppModel {
 
         activeThreadStore?.stop()
         activeThreadStore = nil
+        rightPanel.shutdown()
         threadsStore?.stop()
         threadsStore = nil
 
@@ -449,6 +452,7 @@ final class AppModel {
     private func restartServerAndConnect() async {
         activeThreadStore?.stop()
         activeThreadStore = nil
+        rightPanel.shutdown()
         threadsStore?.stop()
         threadsStore = nil
         await unregisterLocalEnvironment()
@@ -1987,6 +1991,34 @@ final class AppModel {
         guard let index = mockBacking?.threads.firstIndex(where: { $0.id == id }) else { return }
         mockBacking?.threads[index].title = title
         mockBacking?.details[id]?.summary.title = title
+    }
+
+    /// Seeds a mock thread entry if needed so opening a mock side chat or related thread in the main view renders cleanly.
+    func ensureMockThread(
+        id: ThreadSummary.ID,
+        title: String,
+        project: ProjectRef?,
+        items: [TranscriptItem]
+    ) {
+        guard isMock, mockBacking != nil else { return }
+        if mockBacking?.threads.contains(where: { $0.id == id }) == false {
+            let summary = ThreadSummary(
+                id: id,
+                title: title,
+                project: project,
+                location: .branch("main"),
+                provider: selectedModel?.provider ?? .claude,
+                providerDisplayName: selectedModel?.providerDisplayName,
+                activity: .idle,
+                updatedAt: now
+            )
+            mockBacking?.threads.insert(summary, at: 0)
+            mockBacking?.details[id] = ThreadDetailState(summary: summary, items: items, diffStat: nil)
+        } else if mockBacking?.details[id] == nil,
+                  let existing = mockBacking?.threads.first(where: { $0.id == id })
+        {
+            mockBacking?.details[id] = ThreadDetailState(summary: existing, items: items, diffStat: nil)
+        }
     }
 
     func stopActiveRun() {
