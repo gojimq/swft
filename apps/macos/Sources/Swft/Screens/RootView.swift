@@ -77,9 +77,8 @@ struct RootView: View {
         ZStack(alignment: .top) {
             screen
                 .id(model.destination)
-                .swftEntrance(reduceMotion: effectiveReduceMotion)
                 .environment(\.swftScreenHandoff, model.newThread.isHandoff(to: model.destination))
-            // Animate the bar only when the kind of screen changes; between threads its text swaps with the screen.
+            // Animate the bar only when the kind of screen changes; between threads the title settles with the transcript.
             TopBar()
                 .animation(SwftMotion.resolve(SwftMotion.screenSwitch, reduceMotion: effectiveReduceMotion), value: model.selectedThreadID == nil)
         }
@@ -91,14 +90,16 @@ struct RootView: View {
         switch model.destination {
         case .thread(let id):
             if let detail = model.detail(for: id) {
-                ThreadView(detail: detail)
+                ThreadView(detail: detail, anchorsComposer: model.isSwitchingBetweenThreads)
             } else {
                 HomeView()
             }
         case .projects:
             ProjectsView()
+                .swftEntrance(reduceMotion: effectiveReduceMotion)
         case .settings:
             SettingsView()
+                .swftEntrance(reduceMotion: effectiveReduceMotion)
         default:
             HomeView()
         }
@@ -109,7 +110,10 @@ struct RootView: View {
 struct TopBar: View {
     @Environment(AppModel.self) private var model
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.sendFlightForceReduceMotion) private var forceReduceMotion
     @State private var showingServerPopover = false
+
+    private var effectiveReduceMotion: Bool { reduceMotion || forceReduceMotion }
 
     var body: some View {
         HStack(spacing: 8) {
@@ -120,7 +124,7 @@ struct TopBar: View {
                     IconButton("sidebar.left", help: "Show sidebar", action: model.toggleSidebar)
                     IconButton("square.and.pencil", help: "New thread", action: model.goHome)
                 }
-                .transition(.swftPop(reduceMotion: reduceMotion, scale: 0.7))
+                .transition(.swftPop(reduceMotion: effectiveReduceMotion, scale: 0.7))
             }
             if case .thread(let id) = model.destination, let summary = model.threadSummary(for: id) {
                 let parentLink = model.parentThreadLink(for: id)
@@ -142,8 +146,15 @@ struct TopBar: View {
                         Text(summary.project?.name ?? "No project").font(SwftType.caption).foregroundStyle(SwftColor.textTertiary)
                     }
                 }
+                .swftEntrance(
+                    reduceMotion: effectiveReduceMotion,
+                    distance: SwftMotion.threadTitleSwitchOffset,
+                    animation: SwftMotion.threadSwitch,
+                    bypass: !model.isSwitchingBetweenThreads
+                )
+                .id(id)
                 .padding(.leading, model.sidebarVisible ? 12 : 4)
-                .transition(.swftRise(reduceMotion: reduceMotion, distance: -6))
+                .transition(.swftRise(reduceMotion: effectiveReduceMotion, distance: -6))
             }
             Spacer(minLength: 12)
             trailingPills

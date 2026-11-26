@@ -14,12 +14,24 @@ final class AppModel {
     var destination: SidebarDestination = .home {
         didSet {
             guard oldValue != destination else { return }
+            previousDestination = oldValue
             modelPicker = nil
             isProjectPickerOpen = false
             resetSlashCommandMenuState()
             // A send belongs to the screen it was made on; a screen opened later must never replay it.
             latestThreadSend = nil
         }
+    }
+    /// Previous destination captured synchronously before the new screen mounts, so thread-to-thread switches
+    /// can keep shared chrome (like the bottom composer) anchored while transitioning the conversation.
+    private(set) var previousDestination: SidebarDestination?
+
+    /// True when the active navigation just switched directly from one thread to another.
+    var isSwitchingBetweenThreads: Bool {
+        guard case .thread(let previousID) = previousDestination,
+              case .thread(let currentID) = destination
+        else { return false }
+        return previousID != currentID
     }
     /// The open model picker, or nil when it is closed.
     var modelPicker: ModelPickerSession?

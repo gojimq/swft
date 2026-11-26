@@ -47,6 +47,12 @@ public enum SwftMotion {
     public static let screen = Animation.spring(response: 0.42, dampingFraction: 0.9)
     /// Switching screens or threads: short and critically damped, so a new click retargets instead of queueing.
     public static let screenSwitch = Animation.snappy(duration: 0.18)
+    /// Fast, subtle one-shot entrance when switching threads: critically damped with zero overshoot.
+    public static let threadSwitch = Animation.snappy(duration: 0.16, extraBounce: 0)
+    /// Subtle vertical settle distance for a thread transcript entrance.
+    public static let threadSwitchOffset: CGFloat = 6
+    /// Smaller settle distance for the top bar title inside the titlebar band.
+    public static let threadTitleSwitchOffset: CGFloat = 4
     /// Work folds opening and closing.
     public static let disclosure = Animation.spring(response: 0.28, dampingFraction: 0.92)
     /// Selection pill gliding between rows.
@@ -105,27 +111,133 @@ extension AnyTransition {
     }
 }
 
+/// Pure visual state for one-shot screen and thread entrances (`swftEntrance`).
+public struct SwftEntranceVisualState: Equatable, Sendable {
+    public let opacity: Double
+    public let offsetY: CGFloat
+
+    public init(opacity: Double, offsetY: CGFloat) {
+        self.opacity = opacity
+        self.offsetY = offsetY
+    }
+}
+
+public enum SwftEntranceLogic {
+    /// Whether the entrance should settle immediately with zero fade or offset.
+    public static func bypassesEntrance(
+        bypass: Bool = false,
+        screenHandoff: Bool,
+        reduceMotion: Bool
+    ) -> Bool {
+        bypass || (screenHandoff && !reduceMotion)
+    }
+
+    /// Opacity and vertical offset for the current entrance state.
+    public static func visualState(
+        shown: Bool,
+        bypass: Bool = false,
+        screenHandoff: Bool,
+        reduceMotion: Bool,
+        distance: CGFloat
+    ) -> SwftEntranceVisualState {
+        let visible = shown || bypassesEntrance(
+            bypass: bypass,
+            screenHandoff: screenHandoff,
+            reduceMotion: reduceMotion
+        )
+        return SwftEntranceVisualState(
+            opacity: visible ? 1 : 0,
+            offsetY: visible || reduceMotion ? 0 : distance
+        )
+    }
+
+    /// Animation used to reveal the incoming view (`nil` when bypassing entrance motion).
+    public static func revealAnimation(
+        base: Animation,
+        bypass: Bool = false,
+        screenHandoff: Bool,
+        reduceMotion: Bool
+    ) -> Animation? {
+        if bypassesEntrance(bypass: bypass, screenHandoff: screenHandoff, reduceMotion: reduceMotion) {
+            return nil
+        }
+        return SwftMotion.resolve(base, reduceMotion: reduceMotion)
+    }
+}
+
 extension View {
-    /// One-shot entrance for a freshly inserted screen: it settles from a hair below while fading in.
-    /// Screens swap without a transition (the old one leaves at once), so rapid switching never stacks two screens,
-    /// and a click mid-entrance simply starts the next screen's entrance.
-    public func swftEntrance(reduceMotion: Bool) -> some View {
-        modifier(SwftEntrance(reduceMotion: reduceMotion))
+    /// One-shot entrance for a freshly inserted screen or transcript: settles from a hair below while fading in.
+    /// Apply *before* `.id(...)` so each identity swap starts a fresh entrance without stacking outgoing screens.
+    public func swftEntrance(
+        reduceMotion: Bool,
+        distance: CGFloat = SwftMotion.threadSwitchOffset,
+        animation: Animation = SwftMotion.screenSwitch,
+        ready: Bool = true,
+        bypass: Bool = false
+    ) -> some View {
+        modifier(
+            SwftEntrance(
+                reduceMotion: reduceMotion,
+                distance: distance,
+                animation: animation,
+                ready: ready,
+                bypass: bypass
+            )
+        )
     }
 }
 
 private struct SwftEntrance: ViewModifier {
     let reduceMotion: Bool
+    let distance: CGFloat
+    let animation: Animation
+    let ready: Bool
+    let bypass: Bool
     @State private var shown = false
     @Environment(\.swftScreenHandoff) private var screenHandoff
 
     func body(content: Content) -> some View {
-        let handoff = screenHandoff && !reduceMotion
+        let visual = SwftEntranceLogic.visualState(
+            shown: shown,
+            bypass: bypass,
+            screenHandoff: screenHandoff,
+            reduceMotion: reduceMotion,
+            distance: distance
+        )
         content
-            .opacity(shown || handoff ? 1 : 0)
-            .offset(y: shown || reduceMotion || handoff ? 0 : 6)
+            .opacity(visual.opacity)
+            .offset(y: visual.offsetY)
             .onAppear {
-                withAnimation(SwftMotion.resolve(SwftMotion.screenSwitch, reduceMotion: reduceMotion)) { shown = true }
+                revealIfReady()
             }
+            .onChange(of: ready) { _, isReady in
+                if isReady { revealIfReady() }
+            }
+            .onChange(of: bypass) { _, isBypassed in
+                if isBypassed { shown = true }
+            }
+    }
+
+    private func revealIfReady() {
+        guard !shown else { return }
+        if SwftEntranceLogic.bypassesEntrance(
+            bypass: bypass,
+            screenHandoff: screenHandoff,
+            reduceMotion: reduceMotion
+        ) {
+            shown = true
+            return
+        }
+        guard ready else { return }
+        if let resolved = SwftEntranceLogic.revealAnimation(
+            base: animation,
+            bypass: bypass,
+            screenHandoff: screenHandoff,
+            reduceMotion: reduceMotion
+        ) {
+            withAnimation(resolved) { shown = true }
+        } else {
+            shown = true
+        }
     }
 }

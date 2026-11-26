@@ -31,8 +31,8 @@ struct SettingsView: View {
                 }
 
                 sectionContent(for: settings.section)
-                    .id(settings.section)
                     .swftEntrance(reduceMotion: reduceMotion)
+                    .id(settings.section)
             }
             .frame(maxWidth: SwftLayout.contentMaxWidth, alignment: .leading)
             .padding(.horizontal, 32)

@@ -7,6 +7,9 @@ struct ThreadView: View {
     @Environment(\.sendFlightForceReduceMotion) private var forceReduceMotion
     @Environment(\.swftScreenHandoff) private var isHandoffScreen
     let detail: ThreadDetailState
+    /// Keeps the floating bottom composer rooted when switching directly from another thread so only the
+    /// transcript transitions instead of blinking the shared input capsule.
+    let anchorsComposer: Bool
     @State private var scrollPosition = ScrollPosition()
     @State private var composerHeight: CGFloat = 110
     @State private var sendFlight = SendFlightCoordinator()
@@ -16,8 +19,13 @@ struct ThreadView: View {
     /// The image open in the lightbox, if any.
     @State private var imagePreview: SwftImagePreview?
 
-    init(detail: ThreadDetailState, initialImagePreview: SwftImagePreview? = nil) {
+    init(
+        detail: ThreadDetailState,
+        anchorsComposer: Bool = false,
+        initialImagePreview: SwftImagePreview? = nil
+    ) {
         self.detail = detail
+        self.anchorsComposer = anchorsComposer
         _imagePreview = State(initialValue: initialImagePreview)
     }
 
@@ -134,6 +142,13 @@ struct ThreadView: View {
             // Room for the floating composer, so the latest message rests above it rather than under the glass.
             .padding(.bottom, bottomInset)
             .frame(maxWidth: .infinity)
+            .swftEntrance(
+                reduceMotion: effectiveReduceMotion,
+                distance: SwftMotion.threadSwitchOffset,
+                animation: SwftMotion.threadSwitch,
+                ready: !rows.isEmpty,
+                bypass: isSendPending || sendFlight.isFlightAnimating
+            )
             .swftOverlayScrollbars()
             .background(SendFlightScrollAnchor(driver: sendFlight.scrollDriver).frame(width: 0, height: 0))
             .animation(animatesRows ? SwftMotion.resolve(SwftMotion.settle, reduceMotion: effectiveReduceMotion) : nil, value: rows.map(\.id))
@@ -151,6 +166,12 @@ struct ThreadView: View {
         // The composer floats over the transcript; the transcript keeps scrolling underneath its glass.
         .overlay(alignment: .bottom) {
             composerBar
+                .swftEntrance(
+                    reduceMotion: effectiveReduceMotion,
+                    distance: SwftMotion.threadSwitchOffset,
+                    animation: SwftMotion.threadSwitch,
+                    bypass: anchorsComposer
+                )
                 .onGeometryChange(for: CGFloat.self, of: \.size.height) { height in
                     let quantized = (height * 2).rounded() / 2
                     sendFlight.recordMeasuredComposerHeight(quantized)
