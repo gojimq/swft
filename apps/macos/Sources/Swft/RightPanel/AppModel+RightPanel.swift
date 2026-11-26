@@ -40,6 +40,141 @@ extension AppModel {
         return owningEnvironment(forThreadID: threadID)?.threadsStore ?? activeThreadsStore
     }
 
+    /// Returns the `ServerConnection` for an explicit environment ID, falling back to `fallbackThreadID`'s environment.
+    func connection(forEnvironmentID environmentID: String?, fallbackThreadID: String? = nil) -> ServerConnection? {
+        guard !isMock else { return nil }
+        if let environmentID, let env = environmentRegistry.environment(id: environmentID) {
+            return env.connection
+        }
+        if let fallbackThreadID {
+            return connection(forThreadID: fallbackThreadID)
+        }
+        return activeConnection
+    }
+
+    /// Returns the `ThreadsStore` for an explicit environment ID, falling back to `fallbackThreadID`'s environment.
+    func threadsStore(forEnvironmentID environmentID: String?, fallbackThreadID: String? = nil) -> ThreadsStore? {
+        guard !isMock else { return nil }
+        if let environmentID, let env = environmentRegistry.environment(id: environmentID) {
+            return env.threadsStore
+        }
+        if let fallbackThreadID {
+            return threadsStore(forThreadID: fallbackThreadID)
+        }
+        return activeThreadsStore
+    }
+
+    /// Whether the target environment (or owning environment of `fallbackThreadID`) is currently connected.
+    func isEnvironmentConnected(environmentID: String?, fallbackThreadID: String? = nil) -> Bool {
+        if isMock { return true }
+        if let environmentID, let env = environmentRegistry.environment(id: environmentID) {
+            return env.isConnected
+        }
+        if let fallbackThreadID, let env = owningEnvironment(forThreadID: fallbackThreadID) {
+            return env.isConnected
+        }
+        return serverStatus.isConnected
+    }
+
+    /// Opens or activates a subagent child thread as a tab inside `parentThreadID`'s right sidebar
+    /// without navigating the main chat view away from the parent thread.
+    @discardableResult
+    func openSubagentInRightPanel(
+        _ target: SubagentNavigationTarget,
+        item: SubagentItem? = nil,
+        for parentThreadID: String? = nil
+    ) -> RightPanelTab? {
+        guard let resolvedParentID = parentThreadID ?? selectedThreadID else { return nil }
+        let matchedItem = item ?? findSubagentItem(matching: target, inParentThreadID: resolvedParentID)
+        let parentSummary = threadSummary(for: resolvedParentID)
+        let parentEnvironmentID = parentSummary?.environmentID
+            ?? owningEnvironment(forThreadID: resolvedParentID)?.id
+            ?? activeThreadEnvironmentID
+        let targetEnvironmentID = target.environmentID ?? parentEnvironmentID
+
+        let resolvedTitle = [matchedItem?.title, target.title]
+            .compactMap { $0?.nilIfBlank }
+            .first ?? "Subagent"
+
+        let resolvedStatus: SubagentStatus = {
+            if let itemStatus = matchedItem?.status {
+                return itemStatus
+            }
+            if isMock, let mockDetail = rightPanel.mockSubagentDetails[target.threadID] ?? detail(for: target.threadID) {
+                return mockDetail.isRunning ? .running : .completed
+            }
+            if let existing = rightPanel.subagentTabState(
+                subagentThreadId: target.threadID,
+                environmentId: targetEnvironmentID,
+                for: resolvedParentID
+            ) {
+                return existing.status
+            }
+            return .idle
+        }()
+
+        let childShell = threadShell(
+            forThreadID: target.threadID,
+            in: threadsStore(forEnvironmentID: targetEnvironmentID, fallbackThreadID: resolvedParentID)
+        )
+        let resolvedWorkspace = matchedItem?.workspaceLabel
+            ?? childShell?.branch?.nilIfBlank
+            ?? childShell?.worktreePath.flatMap { path in
+                let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+                return trimmed.isEmpty ? nil : (trimmed as NSString).lastPathComponent
+            }
+
+        let resolvedModel: String? = {
+            if let modelName = matchedItem?.modelName?.nilIfBlank {
+                return modelName
+            }
+            if let shell = childShell {
+                let store = threadsStore(forEnvironmentID: targetEnvironmentID, fallbackThreadID: resolvedParentID)
+                let provider = store?.provider(for: shell.modelSelection.instanceId)
+                return SubagentDisplayLogic.resolveModelLabel(
+                    reportedModel: nil,
+                    executedModel: nil,
+                    modelSelection: shell.modelSelection,
+                    childModelSelection: nil,
+                    provider: provider
+                )
+            }
+            return nil
+        }()
+
+        let tabState = SubagentTabState(
+            subagentThreadId: target.threadID,
+            environmentId: targetEnvironmentID,
+            title: resolvedTitle,
+            status: resolvedStatus,
+            modelLabel: resolvedModel,
+            providerDisplayName: matchedItem?.providerDisplayName?.nilIfBlank
+                ?? target.providerDisplayName?.nilIfBlank
+                ?? target.provider.displayName,
+            providerDriver: matchedItem?.providerDriver.nilIfBlank ?? target.providerDriver.nilIfBlank,
+            providerInstanceId: matchedItem?.providerInstanceID.nilIfBlank ?? childShell?.providerInstanceId.nilIfBlank,
+            providerIconUrl: matchedItem?.providerIconURL?.nilIfBlank ?? target.providerIconURL?.nilIfBlank,
+            prompt: matchedItem?.prompt.nilIfBlank,
+            workspaceLabel: resolvedWorkspace
+        )
+
+        return rightPanel.openSubagentTab(tabState, for: resolvedParentID)
+    }
+
+    private func findSubagentItem(
+        matching target: SubagentNavigationTarget,
+        inParentThreadID parentThreadID: String
+    ) -> SubagentItem? {
+        guard let detail = detail(for: parentThreadID) else { return nil }
+        for item in detail.items {
+            guard case .subagent(let subagent) = item.kind else { continue }
+            if subagent.childThreadID == target.threadID || subagent.remoteThreadID == target.threadID {
+                return subagent
+            }
+        }
+        return nil
+    }
+
     /// Resolves the workspace root directory (`worktreePath` preferred over non-scratch `project.workspaceRoot`)
     /// for the given thread on its owning environment.
     func workspaceRoot(forThreadID threadID: String) -> String? {

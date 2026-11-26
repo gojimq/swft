@@ -202,6 +202,9 @@ struct RightPanelContainerView: View {
             case .sideChat(let sideChatState):
                 SideChatSurfaceView(threadID: threadID, tabID: tab.id, sideChatState: sideChatState)
                     .id(tab.id)
+            case .subagent(let subagentState):
+                SubagentSurfaceView(threadID: threadID, tabID: tab.id, subagentState: subagentState)
+                    .id(tab.id)
             }
         } else {
             RightPanelLauncherView(
@@ -232,14 +235,27 @@ struct RightPanelContainerView: View {
     }
 
     private func statusDotColor(for tab: RightPanelTab) -> Color? {
-        if case .sideChat(let state) = tab.payload,
-           let sideID = state.sideThreadId,
-           let store = model.rightPanel.sideChatStores[sideID]
-        {
-            if !store.pendingApprovals.isEmpty { return SwftColor.warning }
-            if store.isRunning { return SwftColor.accent }
+        switch tab.payload {
+        case .sideChat(let state):
+            if let sideID = state.sideThreadId,
+               let store = model.rightPanel.sideChatStores[sideID]
+            {
+                if !store.pendingApprovals.isEmpty { return SwftColor.warning }
+                if store.isRunning { return SwftColor.accent }
+            }
+            return nil
+        case .subagent(let state):
+            let store = model.rightPanel.subagentStores[state.subagentThreadId]
+            let hasPendingApprovals = store.map { !$0.pendingApprovals.isEmpty || !$0.pendingUserInputs.isEmpty } ?? false
+            let isLiveRunning = store?.isRunning == true
+            return RightPanelLogic.subagentStatusDotTone(
+                status: state.status,
+                hasPendingApprovals: hasPendingApprovals,
+                isLiveRunning: isLiveRunning
+            ).map(RightPanelLogic.statusDotColor(for:))
+        default:
+            return nil
         }
-        return nil
     }
 
     private func closeTab(_ tab: RightPanelTab) {

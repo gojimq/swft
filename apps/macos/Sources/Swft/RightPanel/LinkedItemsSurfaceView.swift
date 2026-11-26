@@ -5,6 +5,7 @@ import SwiftUI
 
 struct LinkedItemsSurfaceView: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let threadID: String
 
     @State private var familyThreads: [ThreadShell] = []
@@ -394,11 +395,7 @@ struct LinkedItemsSurfaceView: View {
             HStack(spacing: 4) {
                 if item.relation == .sideChat || item.relation == .subagent {
                     IconButton("rectangle.righthalf.inset.filled", help: "Open in right panel tab", size: 22) {
-                        model.rightPanel.openSideChat(
-                            sideThreadId: item.id,
-                            title: item.title,
-                            for: threadID
-                        )
+                        openRelatedInRightPanel(item)
                     }
                 }
                 IconButton("arrow.up.right", help: "Open in main view", size: 22) {
@@ -411,13 +408,38 @@ struct LinkedItemsSurfaceView: View {
         .rightPanelCard()
         .onTapGesture {
             if item.relation == .sideChat || item.relation == .subagent {
-                model.rightPanel.openSideChat(
+                openRelatedInRightPanel(item)
+            } else {
+                model.open(item.id)
+            }
+        }
+    }
+
+    private func openRelatedInRightPanel(_ item: LinkedThreadSummaryItem) {
+        withAnimation(SwftMotion.resolve(SwftMotion.screen, reduceMotion: reduceMotion)) {
+            if item.relation == .subagent {
+                let status: SubagentStatus = switch item.status {
+                case .running: .running
+                case .needsApproval: .waiting
+                case .failed: .failed
+                case .idle, .unread: .idle
+                }
+                let envID = model.threadSummary(for: threadID)?.environmentID ?? model.activeThreadEnvironmentID
+                _ = model.rightPanel.openSubagentTab(
+                    SubagentTabState(
+                        subagentThreadId: item.id,
+                        environmentId: envID,
+                        title: item.title,
+                        status: status
+                    ),
+                    for: threadID
+                )
+            } else {
+                _ = model.rightPanel.openSideChat(
                     sideThreadId: item.id,
                     title: item.title,
                     for: threadID
                 )
-            } else {
-                model.open(item.id)
             }
         }
     }

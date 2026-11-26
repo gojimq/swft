@@ -78,6 +78,9 @@ struct ThreadView: View {
         let knownEnvironmentIDs = model.knownEnvironmentIDs
         let threadID = detail.summary.id
         let parentEnvironmentID = detail.summary.environmentID ?? model.activeThreadEnvironmentID
+        let subagentItems: [SubagentItem] = detail.items.compactMap {
+            if case .subagent(let item) = $0.kind { item } else { nil }
+        }
 
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 32) {
@@ -111,7 +114,12 @@ struct ThreadView: View {
                             }
                         },
                         onOpenSubagentThread: { target in
-                            model.openSubagentThread(target, fromThreadID: threadID)
+                            let matchedItem = subagentItems.first {
+                                $0.childThreadID == target.threadID || $0.remoteThreadID == target.threadID
+                            }
+                            withAnimation(SwftMotion.resolve(SwftMotion.screen, reduceMotion: effectiveReduceMotion)) {
+                                _ = model.openSubagentInRightPanel(target, item: matchedItem, for: threadID)
+                            }
                         },
                         onResolveApproval: { itemID, approved in
                             model.resolveApproval(itemID: itemID, in: threadID, approved: approved)
@@ -181,6 +189,13 @@ struct ThreadView: View {
         }
         // Transcript, flight overlay and lightbox all resolve images through this thread's own environment.
         .environment(\.swftImageLoader, model.imageLoader(forThreadID: detail.summary.id))
+        .onChange(of: subagentItems) { _, updated in
+            model.rightPanel.syncSubagentTabs(
+                from: updated,
+                parentEnvironmentID: parentEnvironmentID,
+                for: threadID
+            )
+        }
     }
 
     private static func expandedFoldIDs(for turn: TranscriptTurn, in expanded: Set<String>) -> Set<String> {

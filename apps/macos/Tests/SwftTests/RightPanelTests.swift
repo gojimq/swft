@@ -411,4 +411,176 @@ struct RightPanelTests {
         #expect(remoteRegistry.environment(owningThreadID: "thr-mini-1")?.id == "env-mini")
         #expect(model.connection(forThreadID: "thr-local-wt") === localConn)
     }
+
+    // MARK: - Subagent Tabs
+
+    @Test @MainActor func subagentTabLifecycleDeduplicatesReplacesSoleLauncherAndPreservesNeighbors() {
+        let store = RightPanelStore()
+        let parentID = "thr-parent"
+
+        // Opening a subagent when only an unused .launcher tab exists replaces the launcher tab.
+        let launcher = store.openLauncherTab(for: parentID)
+        #expect(store.tabs(for: parentID).map(\.id) == [launcher.id])
+
+        let first = store.openSubagentTab(
+            SubagentTabState(
+                subagentThreadId: "sub-1",
+                environmentId: "env-local",
+                title: "Codebase Researcher",
+                status: .running,
+                modelLabel: "Opus 5.5",
+                providerDisplayName: "Claude",
+                providerDriver: "claudeAgent",
+                workspaceLabel: "swft/audit"
+            ),
+            for: parentID
+        )
+        #expect(store.isOpen(for: parentID))
+        #expect(store.tabs(for: parentID).count == 1)
+        #expect(store.activeTab(for: parentID)?.id == first.id)
+        #expect(first.surfaceKind == nil)
+        #expect(first.title == "Codebase Researcher")
+        #expect(first.iconName == "cpu")
+
+        // Opening a second subagent appends a second tab alongside the first.
+        let second = store.openSubagentTab(
+            SubagentTabState(
+                subagentThreadId: "sub-2",
+                environmentId: "env-local",
+                title: "Test Author",
+                status: .waiting,
+                modelLabel: "GPT-6.1"
+            ),
+            for: parentID
+        )
+        #expect(store.tabs(for: parentID).count == 2)
+        #expect(store.activeTab(for: parentID)?.id == second.id)
+
+        // Re-opening the first subagent reuses and activates its tab while merging updated metadata.
+        let reopened = store.openSubagentTab(
+            SubagentTabState(
+                subagentThreadId: "sub-1",
+                environmentId: "env-local",
+                title: "Codebase Researcher",
+                status: .completed
+            ),
+            for: parentID
+        )
+        #expect(reopened.id == first.id)
+        #expect(store.tabs(for: parentID).count == 2)
+        #expect(store.activeTab(for: parentID)?.id == first.id)
+        if case .subagent(let merged) = store.activeTab(for: parentID)?.payload {
+            #expect(merged.status == .completed)
+            #expect(merged.modelLabel == "Opus 5.5")
+            #expect(merged.workspaceLabel == "swft/audit")
+        } else {
+            Issue.record("Expected merged .subagent payload")
+        }
+
+        // Closing one subagent tab preserves the other and selects it.
+        store.closeTab(first.id, for: parentID)
+        #expect(store.tabs(for: parentID).map(\.id) == [second.id])
+        #expect(store.activeTab(for: parentID)?.id == second.id)
+
+        // Launcher tab is NOT replaced if another tab already exists alongside it.
+        _ = store.openLauncherTab(for: parentID)
+        #expect(store.tabs(for: parentID).count == 2)
+        let third = store.openSubagentTab(
+            SubagentTabState(subagentThreadId: "sub-3", environmentId: "env-local", title: "Reviewer", status: .idle),
+            for: parentID
+        )
+        #expect(store.tabs(for: parentID).count == 3)
+        #expect(store.activeTab(for: parentID)?.id == third.id)
+    }
+
+    @Test func resolvesSubagentTabTitlesAndStatusDotTones() {
+        let blankTitleTab = RightPanelTab(
+            id: "subagent:local:s0",
+            payload: .subagent(SubagentTabState(subagentThreadId: "s0", title: "   ", status: .idle))
+        )
+        #expect(blankTitleTab.title == "Subagent")
+        #expect(blankTitleTab.iconName == "cpu")
+        #expect(blankTitleTab.surfaceKind == nil)
+
+        let namedTab = RightPanelTab(
+            id: "subagent:local:s1",
+            payload: .subagent(SubagentTabState(subagentThreadId: "s1", title: "Reconnect Fixer", status: .running))
+        )
+        #expect(namedTab.title == "Reconnect Fixer")
+
+        // Status dot tones for each subagent lifecycle status & live overrides
+        #expect(RightPanelLogic.subagentStatusDotTone(status: .pending) == .accent)
+        #expect(RightPanelLogic.subagentStatusDotTone(status: .running) == .accent)
+        #expect(RightPanelLogic.subagentStatusDotTone(status: .waiting) == .warning)
+        #expect(RightPanelLogic.subagentStatusDotTone(status: .completed) == .success)
+        #expect(RightPanelLogic.subagentStatusDotTone(status: .failed) == .danger)
+        #expect(RightPanelLogic.subagentStatusDotTone(status: .idle) == nil)
+        #expect(RightPanelLogic.subagentStatusDotTone(status: .cancelled) == nil)
+        #expect(RightPanelLogic.subagentStatusDotTone(status: .interrupted) == nil)
+
+        // Live store overrides take precedence (approvals -> warning, live run -> accent)
+        #expect(RightPanelLogic.subagentStatusDotTone(status: .completed, isLiveRunning: true) == .accent)
+        #expect(RightPanelLogic.subagentStatusDotTone(status: .running, hasPendingApprovals: true, isLiveRunning: true) == .warning)
+    }
+
+    @Test @MainActor func syncsSubagentTabsFromParentUpdatesAndCleansUpStoresOnReleaseAndClose() {
+        let store = RightPanelStore()
+        let parentID = "thr-parent-sync"
+        let conn = ServerConnection(httpBaseURL: URL(string: "http://127.0.0.1:4199")!, credential: .bootstrapToken("tok"))
+
+        let tab = store.openSubagentTab(
+            SubagentTabState(
+                subagentThreadId: "child-sync-1",
+                environmentId: "env-local",
+                title: "Initial title",
+                status: .running
+            ),
+            for: parentID
+        )
+
+        // Sync from updated parent SubagentItem refreshes title, status, model, and branch.
+        let updatedItem = SubagentItem(
+            id: "item-sync-1",
+            title: "Updated Auditor",
+            provider: .codex,
+            providerDriver: "codex",
+            providerDisplayName: "Codex",
+            modelName: "GPT-6.1",
+            status: .completed,
+            prompt: "Audit sync",
+            childThreadID: "child-sync-1",
+            worktreeBranch: "fix/sync"
+        )
+        store.syncSubagentTabs(from: [updatedItem], parentEnvironmentID: "env-local", for: parentID)
+        if case .subagent(let synced) = store.activeTab(for: parentID)?.payload {
+            #expect(synced.title == "Updated Auditor")
+            #expect(synced.status == .completed)
+            #expect(synced.modelLabel == "GPT-6.1")
+            #expect(synced.workspaceLabel == "fix/sync")
+        } else {
+            Issue.record("Expected synced .subagent tab")
+        }
+
+        // ThreadStore attach/release lifecycle prevents subscription leaks on tab switch and tab close.
+        let threadStore = store.ensureSubagentStore(
+            subagentThreadId: "child-sync-1",
+            connection: conn,
+            holderTabID: tab.id
+        )
+        #expect(store.subagentStores["child-sync-1"] === threadStore)
+
+        // Switching away releases the holder and stops/removes the live store without closing the tab.
+        store.releaseSubagentStore(subagentThreadId: "child-sync-1", holderTabID: tab.id)
+        #expect(store.subagentStores["child-sync-1"] == nil)
+        #expect(store.tabs(for: parentID).count == 1)
+
+        // Re-attaching and closing the tab cleans up the store and pending/optimistic maps.
+        _ = store.ensureSubagentStore(subagentThreadId: "child-sync-1", connection: conn, holderTabID: tab.id)
+        store.pendingSubagentMessages["child-sync-1"] = [PendingUserMessage(messageID: "m1", text: "hi")]
+        store.optimisticSubagentApprovals["child-sync-1"] = ["req-1": .approved]
+        store.closeTab(tab.id, for: parentID)
+        #expect(store.subagentStores["child-sync-1"] == nil)
+        #expect(store.pendingSubagentMessages["child-sync-1"] == nil)
+        #expect(store.optimisticSubagentApprovals["child-sync-1"] == nil)
+    }
 }

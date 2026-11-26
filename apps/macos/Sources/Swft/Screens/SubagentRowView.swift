@@ -61,7 +61,7 @@ struct SubagentSingleRowView: View, Equatable {
             modelBadge,
             item.status.displayLabel,
             item.workspaceLabel,
-            target != nil ? "Click to open subagent thread" : nil,
+            target != nil ? "Click to open subagent in right sidebar" : nil,
         ].compactMap { $0 }.filter { !$0.isEmpty }
 
         return SubagentRowModel(
