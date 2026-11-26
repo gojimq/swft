@@ -94,6 +94,17 @@ runtime inside `Swft.app/Contents/Resources/`:
    `Contents/Resources/server/` with Hardened Runtime entitlements (`com.apple.security.cs.allow-jit`,
    `allow-unsigned-executable-memory` as needed by V8) before signing and notarizing `Swft.app`.
 
+## Remote access (Cloudflare Tunnel)
+
+Both **Share this Mac** (Mac → iPhone / another Mac) and **Servers** (connecting Swft to a dedicated Mac Mini or Linux server) use permanent named Cloudflare Tunnels over HTTPS so servers stay loopback-only instead of exposing LAN HTTP:
+
+- **Share this Mac (`Settings → Connections`):** Select **Named**, choose your tunnel, and enter its `https://` hostname. Swft persists the config in `<SWFT_HOME>/tunnel.json`, auto-starts `cloudflared` on launch (`--config /dev/null` so an unrelated `~/.cloudflared/config.yml` cannot interfere), rebinds automatically when the bundled server restarts on a new loopback port, and upgrades pairing QR codes / links to the public HTTPS origin.
+- **Dedicated remote server (e.g. Mac Mini):** Run `Swft-Server` loopback-only (`T3CODE_LAN=false` in `<SWFT_HOME>/service.env`) behind a dedicated named tunnel (`cloudflared tunnel create <name>`, `cloudflared tunnel --config <path>.yml route dns <name> <hostname>`, and a LaunchAgent/systemd service pointing ingress at `http://127.0.0.1:<port>`). Mint an HTTPS pairing link on the server with:
+  ```bash
+  ~/.local/bin/t3 auth pairing create --base-dir "<SWFT_HOME>" --base-url https://<your-tunnel-host>
+  ```
+  Then paste the returned `pairUrl` into **Settings → Connections → + Add server** (or scan/enter it in Swft iOS).
+
 ## Safety
 
 Never start a dev server against `~/.t3/userdata` (the user's live install). Swft defaults to

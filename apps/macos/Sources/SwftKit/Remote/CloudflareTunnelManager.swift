@@ -202,6 +202,34 @@ public enum CloudflareTunnelHelpers {
         return CloudflareTunnelConfig(mode: config.mode, publicUrl: normalizedURL, tunnelName: trimmedName)
     }
 
+    public static func namedTunnelArguments(targetURL: String, tunnelName: String) -> [String] {
+        // Explicit empty config prevents an unrelated ~/.cloudflared/config.yml from overriding the tunnel or ingress.
+        ["tunnel", "--no-autoupdate", "--config", "/dev/null", "run", "--url", targetURL, tunnelName]
+    }
+
+    public static func shouldAutoStart(
+        config: CloudflareTunnelConfig,
+        localPort: Int?,
+        runningPort: Int?,
+        isProcessRunning: Bool,
+        userStopped: Bool
+    ) -> Bool {
+        guard !userStopped, let localPort, (1...65535).contains(localPort) else {
+            return false
+        }
+        switch config.mode {
+        case .named:
+            guard !config.tunnelName.isEmpty, normalizePublicURL(config.publicUrl) != nil else {
+                return false
+            }
+            return !isProcessRunning || runningPort != localPort
+        case .quick:
+            return isProcessRunning && runningPort != localPort
+        case .off, .external:
+            return false
+        }
+    }
+
     public static func summarizeOutputTail(_ tail: String) -> String? {
         tail.split(whereSeparator: \.isNewline)
             .map { $0.trimmingCharacters(in: .whitespaces) }
@@ -233,6 +261,8 @@ public final class CloudflareTunnelController {
     @ObservationIgnored private var stopping = false
     @ObservationIgnored private var outputTail = ""
     @ObservationIgnored private var localPort: Int?
+    @ObservationIgnored private var runningPort: Int?
+    @ObservationIgnored private var userStopped = false
 
     public init(
         baseDirectory: URL = ServerLaunchConfiguration.defaultBaseDirectory,
@@ -291,6 +321,20 @@ public final class CloudflareTunnelController {
         status.localPort = port
     }
 
+    /// Starts a saved named tunnel on launch or rebinds an active tunnel after a local server port change.
+    public func startIfConfigured() async {
+        guard !isBusy,
+              CloudflareTunnelHelpers.shouldAutoStart(
+                  config: config,
+                  localPort: localPort,
+                  runningPort: runningPort,
+                  isProcessRunning: process?.isRunning == true,
+                  userStopped: userStopped
+              )
+        else { return }
+        await start()
+    }
+
     public func configure(
         mode: CloudflareTunnelMode? = nil,
         publicUrl: String? = nil,
@@ -317,6 +361,11 @@ public final class CloudflareTunnelController {
 
         let modeChanged = nextMode != config.mode
         let nameChanged = nextTunnelName != config.tunnelName
+        let urlChanged = nextPublicURL != config.publicUrl
+
+        if modeChanged || nameChanged || urlChanged {
+            userStopped = false
+        }
 
         config = CloudflareTunnelConfig(mode: nextMode, publicUrl: nextPublicURL, tunnelName: nextTunnelName)
         _ = try? CloudflareTunnelHelpers.writeConfig(config, to: baseDirectory)
@@ -370,6 +419,7 @@ public final class CloudflareTunnelController {
     public func start() async {
         isBusy = true
         defer { isBusy = false }
+        userStopped = false
 
         let binaryPath = resolveBinary()
         status.cloudflaredInstalled = binaryPath != nil
@@ -433,7 +483,7 @@ public final class CloudflareTunnelController {
                 return
             }
             expectedNamedURL = normalized
-            args = ["tunnel", "--no-autoupdate", "run", "--url", targetURL, config.tunnelName]
+            args = CloudflareTunnelHelpers.namedTunnelArguments(targetURL: targetURL, tunnelName: config.tunnelName)
         case .off, .external:
             return
         }
@@ -501,6 +551,7 @@ public final class CloudflareTunnelController {
         }
 
         process = child
+        runningPort = port
         stdoutPipe = stdout
         stderrPipe = stderr
         trackedPID.withLock { $0 = child.processIdentifier }
@@ -519,6 +570,7 @@ public final class CloudflareTunnelController {
     public func stop() async {
         isBusy = true
         defer { isBusy = false }
+        userStopped = true
         await stopChildProcess()
         status.phase = .off
         status.activePublicUrl = nil
@@ -580,6 +632,7 @@ public final class CloudflareTunnelController {
         stdoutPipe = nil
         stderrPipe = nil
         process = nil
+        runningPort = nil
         trackedPID.withLock { $0 = nil }
 
         if stopping {
@@ -619,6 +672,7 @@ public final class CloudflareTunnelController {
         stdoutPipe = nil
         stderrPipe = nil
         process = nil
+        runningPort = nil
         trackedPID.withLock { $0 = nil }
     }
 

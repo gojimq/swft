@@ -133,6 +133,19 @@ Most code changes do not need an internal documentation change. Agents can read 
     /Users/jim/Projects/Swft-integration/apps/macos/build/Swft.app
   ```
 
+## Swft remote access & Cloudflare Tunnels
+
+Remote access to both this Mac and dedicated servers runs over permanent named **Cloudflare Tunnels** (loopback-only servers behind HTTPS) instead of plain LAN HTTP:
+
+- **Share this Mac (MacBook Pro → iPhone / other Macs):** Named tunnel `swft` routed to `https://swft.jimssecondbrain.win`, managed by Swft (`Settings → Connections → Share this Mac`, persisted in `~/Library/Application Support/Swft/tunnel.json`). Auto-starts on launch and tracks the bundled server's ephemeral loopback port. Keep `Swft-Dev` (`~/Library/Application Support/Swft-Dev`) tunnel mode `Off` so dev builds never compete with `/Applications/Swft.app` for the `swft` tunnel.
+- **Dedicated server (`Servers` — Mac Mini Server):** Standalone `Swft-Server` runs loopback-only (`T3CODE_PORT=3793`, `T3CODE_LAN=false` in `~/Library/Application Support/Swft-Server/service.env`) behind dedicated named tunnel `swft-mini` → `https://swft-mini.jimssecondbrain.win` (`~/.cloudflared/swft-mini.yml` + `~/Library/LaunchAgents/com.swft.cloudflared.plist`). Mint an HTTPS pairing link on the server with:
+  ```bash
+  ~/.local/bin/t3 auth pairing create \
+    --base-dir "$HOME/Library/Application Support/Swft-Server" \
+    --base-url https://swft-mini.jimssecondbrain.win
+  ```
+- **`cloudflared` gotcha:** Always pass `--config <file>` (or `--config /dev/null` for CLI `--url` runs) with `cloudflared tunnel run` and `route dns` so an unrelated `~/.cloudflared/config.yml` cannot override the tunnel ID or ingress rules.
+
 ### Internal docs by area
 
 Read the matching doc before changing code in that area; code review enforces them.

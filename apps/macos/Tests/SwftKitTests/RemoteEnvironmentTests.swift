@@ -127,6 +127,69 @@ struct RemoteEnvironmentTests {
         )
         #expect(written == CloudflareTunnelConfig(mode: .external, publicUrl: "https://studio.mydomain.com", tunnelName: "home-mac"))
         #expect(CloudflareTunnelHelpers.readConfig(from: tempDir) == written)
+
+        #expect(
+            CloudflareTunnelHelpers.namedTunnelArguments(targetURL: "http://127.0.0.1:54197", tunnelName: "swft")
+                == ["tunnel", "--no-autoupdate", "--config", "/dev/null", "run", "--url", "http://127.0.0.1:54197", "swft"]
+        )
+
+        let namedConfig = CloudflareTunnelConfig(mode: .named, publicUrl: "https://swft.example.com", tunnelName: "swft")
+        #expect(CloudflareTunnelHelpers.shouldAutoStart(
+            config: namedConfig,
+            localPort: 54197,
+            runningPort: nil,
+            isProcessRunning: false,
+            userStopped: false
+        ))
+        #expect(!CloudflareTunnelHelpers.shouldAutoStart(
+            config: namedConfig,
+            localPort: 54197,
+            runningPort: 54197,
+            isProcessRunning: true,
+            userStopped: false
+        ))
+        #expect(CloudflareTunnelHelpers.shouldAutoStart(
+            config: namedConfig,
+            localPort: 55000,
+            runningPort: 54197,
+            isProcessRunning: true,
+            userStopped: false
+        ))
+        #expect(!CloudflareTunnelHelpers.shouldAutoStart(
+            config: namedConfig,
+            localPort: 54197,
+            runningPort: nil,
+            isProcessRunning: false,
+            userStopped: true
+        ))
+        #expect(!CloudflareTunnelHelpers.shouldAutoStart(
+            config: CloudflareTunnelConfig(mode: .named, publicUrl: "", tunnelName: "swft"),
+            localPort: 54197,
+            runningPort: nil,
+            isProcessRunning: false,
+            userStopped: false
+        ))
+        #expect(CloudflareTunnelHelpers.shouldAutoStart(
+            config: CloudflareTunnelConfig(mode: .quick),
+            localPort: 55000,
+            runningPort: 54197,
+            isProcessRunning: true,
+            userStopped: false
+        ))
+        #expect(!CloudflareTunnelHelpers.shouldAutoStart(
+            config: CloudflareTunnelConfig(mode: .quick),
+            localPort: 54197,
+            runningPort: nil,
+            isProcessRunning: false,
+            userStopped: false
+        ))
+        #expect(!CloudflareTunnelHelpers.shouldAutoStart(
+            config: CloudflareTunnelConfig(mode: .off),
+            localPort: 54197,
+            runningPort: nil,
+            isProcessRunning: false,
+            userStopped: false
+        ))
     }
 
     @Test func parsesTailscaleStatusAndClassifiesPrivateAddresses() {

@@ -128,7 +128,7 @@ struct ConnectionsSettingsView: View {
                         Image(systemName: "network")
                             .font(.system(size: 13))
                             .foregroundStyle(SwftColor.textTertiary)
-                        Text("Connect another Mac or server to run threads remotely. Paste a pairing link or generate a one-time pairing code on that machine.")
+                        Text("Connect another Mac or server over Cloudflare Tunnel, Tailscale, or LAN. Paste a pairing link or enter its HTTPS URL and one-time token.")
                             .font(SwftType.caption)
                             .foregroundStyle(SwftColor.textSecondary)
                             .fixedSize(horizontal: false, vertical: true)
@@ -330,7 +330,7 @@ private struct RemoteConnectForm: View {
                 TextField(
                     "",
                     text: $address,
-                    prompt: Text("Pairing link or server URL (e.g. https://mac.example.com/pair#token=…)")
+                    prompt: Text("Pairing link or server URL (e.g. https://swft-mini.example.com/pair#token=…)")
                         .foregroundStyle(SwftColor.placeholder)
                 )
                 .textFieldStyle(.plain)
@@ -516,6 +516,9 @@ private struct ShareThisMacCard: View {
             tunnelNameDraft = tunnel.status.tunnelName
             publicURLDraft = tunnel.status.publicUrl
             refreshNetwork()
+            if tunnel.status.mode == .named && tunnel.namedTunnels.isEmpty {
+                Task { await tunnel.refreshNamedTunnels() }
+            }
         }
         .onChange(of: tunnel.status.tunnelName) { _, newValue in
             if tunnelNameDraft != newValue { tunnelNameDraft = newValue }
@@ -616,6 +619,11 @@ private struct ShareThisMacCard: View {
                                 set: { setTunnelName($0) }
                             )) {
                                 Text("Select a tunnel…").tag("")
+                                if !tunnel.status.tunnelName.isEmpty,
+                                   !tunnel.namedTunnels.contains(where: { $0.name == tunnel.status.tunnelName })
+                                {
+                                    Text(tunnel.status.tunnelName).tag(tunnel.status.tunnelName)
+                                }
                                 ForEach(tunnel.namedTunnels) { item in
                                     let suffix = item.connectionsCount > 0 ? " (\(item.connectionsCount) active)" : ""
                                     Text("\(item.name)\(suffix)").tag(item.name)
@@ -669,6 +677,11 @@ private struct ShareThisMacCard: View {
                             .foregroundStyle(SwftColor.warning)
                     }
 
+                    Text("Auto-starts when Swft launches and follows the local server port automatically.")
+                        .font(SwftType.caption)
+                        .foregroundStyle(SwftColor.textTertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+
                     HStack(spacing: 8) {
                         if isRunningOrStarting {
                             ConnectionsPillButton("Stop tunnel", systemName: "stop.fill", prominent: false, disabled: tunnel.isBusy) {
@@ -683,7 +696,9 @@ private struct ShareThisMacCard: View {
                             ) {
                                 Task {
                                     await tunnel.configure(publicUrl: publicURLDraft, tunnelName: tunnelNameDraft)
-                                    await tunnel.start()
+                                    if tunnel.status.error == nil {
+                                        await tunnel.start()
+                                    }
                                 }
                             }
                         }
@@ -1008,6 +1023,7 @@ private struct ShareThisMacCard: View {
     }
 
     private func setTunnelName(_ name: String) {
+        tunnelNameDraft = name
         Task { await tunnel.configure(tunnelName: name) }
     }
 

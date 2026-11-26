@@ -217,6 +217,9 @@ extension AppModel {
     ) {
         environmentRegistry.registerLocal(endpoint: endpoint, connection: connection, threadsStore: store)
         tunnelController.updateLocalPort(endpoint.port)
+        Task { @MainActor [weak self] in
+            await self?.tunnelController.startIfConfigured()
+        }
     }
 
     func unregisterLocalEnvironment() async {
