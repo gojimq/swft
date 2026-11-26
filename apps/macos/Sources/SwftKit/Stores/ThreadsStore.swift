@@ -520,8 +520,25 @@ public final class ThreadsStore {
                 refreshModels: refreshModels
             )
         )
-        providers = result.providers
+        if !result.providers.isEmpty {
+            providers = result.providers
+        }
         return result.providers
+    }
+
+    /// Refreshes a single provider's workspace snapshot (slash commands and skills for `cwd`) on demand.
+    @discardableResult
+    public func refreshWorkspaceSnapshot(
+        instanceId: String,
+        cwd: String,
+        fresh: Bool = false
+    ) async throws -> [ServerProvider] {
+        try await refreshProviders(
+            instanceId: instanceId,
+            cwd: cwd,
+            fresh: fresh,
+            refreshModels: nil
+        )
     }
 
     @discardableResult

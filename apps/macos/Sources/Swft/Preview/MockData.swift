@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import SwftDesign
+import SwftKit
 
 /// Mock view state for SwiftUI previews and `-SwftMock`/`-SwftScreen`/`-SwftAppearance` screenshot runs.
 enum MockData {
@@ -81,6 +82,93 @@ enum MockData {
     ]
 
     static let pickerCatalog = PickerCatalog(harnesses: harnesses, models: models)
+
+    static let defaultSlashCommands: [ServerProviderSlashCommand] = [
+        ServerProviderSlashCommand(
+            name: "learn",
+            description: "Persist corrections or project setup rules for future tasks",
+            input: ServerProviderSlashCommandInput(hint: "topic or rule")
+        ),
+        ServerProviderSlashCommand(
+            name: "compact",
+            description: "Compact and summarize the conversation to free context window",
+            input: ServerProviderSlashCommandInput(hint: "focus instructions")
+        ),
+        ServerProviderSlashCommand(
+            name: "plan",
+            description: "Create a careful step-by-step plan before making edits",
+            input: ServerProviderSlashCommandInput(hint: "goal")
+        ),
+        ServerProviderSlashCommand(
+            name: "goal",
+            description: "Work thoroughly until the full goal is achieved and verified",
+            input: ServerProviderSlashCommandInput(hint: "objective")
+        ),
+        ServerProviderSlashCommand(
+            name: "grill-me",
+            description: "Align on design decisions through a short interactive interview"
+        ),
+        ServerProviderSlashCommand(
+            name: "schedule",
+            description: "Run an instruction on a recurring schedule or one-time timer",
+            input: ServerProviderSlashCommandInput(hint: "cadence & task")
+        ),
+        ServerProviderSlashCommand(
+            name: "boost",
+            description: "Deep thinking, multiple perspectives, and rigorous verification"
+        ),
+    ]
+
+    static let codexSlashCommands: [ServerProviderSlashCommand] = [
+        ServerProviderSlashCommand(
+            name: "compact",
+            description: "Summarize earlier conversation to reduce context usage"
+        ),
+        ServerProviderSlashCommand(
+            name: "review",
+            description: "Review local changes and highlight bugs or regressions",
+            input: ServerProviderSlashCommandInput(hint: "branch or scope")
+        ),
+        ServerProviderSlashCommand(
+            name: "plan",
+            description: "Outline an implementation plan before editing files"
+        ),
+        ServerProviderSlashCommand(
+            name: "learn",
+            description: "Save project conventions and troubleshooting notes"
+        ),
+    ]
+
+    static let defaultSkills: [ServerProviderSkill] = [
+        ServerProviderSkill(
+            name: "test-t3-app",
+            description: "Test the web and desktop UI through the built-in Browser panel",
+            path: "/Users/dev/swft/.agents/skills/test-t3-app/SKILL.md",
+            scope: "repo",
+            enabled: true,
+            shortDescription: "Verify web & desktop UI in Browser panel"
+        ),
+        ServerProviderSkill(
+            name: "launch-video",
+            description: "Build a 1920x1080 feature demo video from the real app",
+            path: "/Users/dev/swft/.agents/skills/launch-video/SKILL.md",
+            scope: "project",
+            enabled: true,
+            shortDescription: "Record a short launch demo video"
+        ),
+    ]
+
+    static func slashCommands(forInstanceId instanceId: String?) -> [ServerProviderSlashCommand] {
+        guard let instanceId else { return defaultSlashCommands }
+        if instanceId.hasPrefix("codex") {
+            return codexSlashCommands
+        }
+        return defaultSlashCommands
+    }
+
+    static func skills(forInstanceId instanceId: String?) -> [ServerProviderSkill] {
+        defaultSkills
+    }
 
     private static func inMinutes(_ minutes: Double) -> Date { now.addingTimeInterval(minutes * 60) }
 

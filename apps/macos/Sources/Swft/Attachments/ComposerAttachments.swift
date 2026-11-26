@@ -335,6 +335,12 @@ final class ComposerAttachments {
         connections.removeValue(forKey: localID)
     }
 
+    func clear() {
+        for id in staged.map(\.id) {
+            remove(id)
+        }
+    }
+
     /// Hands the uploaded attachments to a send and clears them from the tray; failed ones stay for the user to remove.
     func takeReady(keepPinned: Bool) -> [TranscriptAttachment] {
         let sent = ready

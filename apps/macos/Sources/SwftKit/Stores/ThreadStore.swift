@@ -358,7 +358,8 @@ public final class ThreadStore {
         interactionMode: ProviderInteractionMode? = nil,
         dispatchMode: MessageDispatchMode? = nil,
         deliveryIntent: MessageDeliveryIntent? = .auto,
-        attachments: [ChatAttachment] = []
+        attachments: [ChatAttachment] = [],
+        freshContext: Bool? = nil
     ) async throws -> DispatchCommandResult {
         if let runtimeMode, runtimeMode != thread?.runtimeMode {
             try await setRuntimeMode(runtimeMode)
@@ -385,7 +386,8 @@ public final class ThreadStore {
                 attachments: attachments,
                 modelSelection: modelSelection,
                 deliveryIntent: deliveryIntent,
-                dispatchMode: resolvedDispatchMode
+                dispatchMode: resolvedDispatchMode,
+                freshContext: freshContext
             )
         )
     }

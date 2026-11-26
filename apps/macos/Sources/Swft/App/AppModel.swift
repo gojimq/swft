@@ -16,6 +16,7 @@ final class AppModel {
             guard oldValue != destination else { return }
             modelPicker = nil
             isProjectPickerOpen = false
+            resetSlashCommandMenuState()
             // A send belongs to the screen it was made on; a screen opened later must never replay it.
             latestThreadSend = nil
         }
@@ -33,7 +34,44 @@ final class AppModel {
             defaults?.set(isSettledExpanded, forKey: SettledThreadsLogic.expandedDefaultsKey)
         }
     }
-    var composerText = ""
+    var composerText = "" {
+        didSet {
+            guard oldValue != composerText else { return }
+            guard !isApplyingProgrammaticComposerEdit else { return }
+            pendingComposerCursorUTF16 = nil
+            let app: NSApplication? = NSApp
+            if let textView = app?.keyWindow?.firstResponder as? NSTextView,
+               textView.string == composerText
+            {
+                composerCursorUTF16 = max(0, min(composerText.utf16.count, textView.selectedRange().location))
+            } else {
+                composerCursorUTF16 = composerText.utf16.count
+            }
+            syncSlashTriggerDismissal()
+        }
+    }
+    /// Current caret position in `composerText` (UTF-16 code units).
+    var composerCursorUTF16 = 0
+    /// Target caret position applied by `ComposerCursorObserver` after inserting a slash command.
+    var pendingComposerCursorUTF16: Int?
+    var composerCursorRequestID: UInt64 = 0
+    @ObservationIgnored var isApplyingProgrammaticComposerEdit = false
+    /// Highlighted row ID in the slash-command menu.
+    var slashCommandHighlightedID: String?
+    /// UTF-16 start offset of a `/` token dismissed via Escape (stays closed until the token changes).
+    var dismissedSlashTriggerStart: Int?
+    /// Threads where `/clear` has armed a fresh provider session for the next message.
+    var freshSessionThreadIDs: Set<String> = []
+    /// Interaction mode for Home / mock threads when switched via `/plan` or `/default`.
+    var composerInteractionMode: ProviderInteractionMode = .default
+    /// Optional hook invoked when `/side` or `/btw` is submitted.
+    @ObservationIgnored var onSideChatCommand: ((String) -> Void)?
+    /// Per-workspace snapshot refresh timestamps to avoid redundant `server.refreshProviders` calls.
+    @ObservationIgnored var workspaceSnapshotRequests: [String: Date] = [:]
+    /// Mock-mode slash command and skill overrides for previews and tests.
+    var mockSlashCommandsByProvider: [String: [ServerProviderSlashCommand]] = [:]
+    var mockSlashCommandsByEnvironment: [String: [ServerProviderSlashCommand]] = [:]
+    var mockSkillsByProvider: [String: [ServerProviderSkill]] = [:]
     /// Files and images staged in the composer; each uploads to the composer's environment as soon as it is attached.
     let composerAttachments = ComposerAttachments()
     var composerMode: ComposerMode = .chat
@@ -95,7 +133,7 @@ final class AppModel {
     private var serverProcess: ServerProcess?
     private var connection: ServerConnection?
     private(set) var threadsStore: ThreadsStore?
-    private var activeThreadStore: ThreadStore?
+    private(set) var activeThreadStore: ThreadStore?
     private var serverPort: Int?
     private var launchPhase: LaunchPhase = .idle
     private var isSubmitting = false
@@ -1170,6 +1208,7 @@ final class AppModel {
             isProjectPickerOpen = false
         } else {
             modelPicker = nil
+            dismissSlashCommandMenu()
             refreshLocalProjectAvailability()
             isProjectPickerOpen = true
         }
@@ -1352,6 +1391,7 @@ final class AppModel {
     func toggleModelPicker() {
         if modelPicker == nil {
             isProjectPickerOpen = false
+            dismissSlashCommandMenu()
             modelPicker = ModelPickerSession(catalog: pickerCatalog, currentInstanceId: selectedModel?.instanceId)
         } else {
             modelPicker = nil
@@ -1550,6 +1590,11 @@ final class AppModel {
         isProjectPickerOpen = false
         modelPicker = nil
 
+        if interceptBuiltInSlashSubmission(trimmedText: text) {
+            return
+        }
+        resetSlashCommandMenuState()
+
         if isMock {
             let attachments = composerAttachments.takeReady(keepPinned: true)
             if selectedThreadID == nil {
@@ -1558,6 +1603,7 @@ final class AppModel {
             }
             composerText = ""
             let id = selectedThreadID ?? MockData.threadDetail.summary.id
+            freshSessionThreadIDs.remove(id)
             var existing = detail(for: id) ?? MockData.threadDetail
             let itemID = UUID().uuidString
             existing.items.append(TranscriptItem(id: itemID, kind: .user(text, attachments: attachments)))
@@ -1590,6 +1636,7 @@ final class AppModel {
             let selection = selectedModel.map {
                 SwftAdapters.modelSelection(from: $0, reasoningChoiceId: selectedReasoningChoice?.id)
             }
+            let useFreshContext = freshSessionThreadIDs.remove(threadID) != nil
             let attachments = composerAttachments.takeReady(keepPinned: false)
             // The row appears on this frame (not after the server's echo), so the send flight and the scroll have
             // their real landing geometry from the start.
@@ -1606,11 +1653,13 @@ final class AppModel {
                         text: text,
                         messageId: messageID,
                         modelSelection: selection,
-                        attachments: attachments.map(SwftAdapters.chatAttachment)
+                        attachments: attachments.map(SwftAdapters.chatAttachment),
+                        freshContext: useFreshContext ? true : nil
                     )
                 } catch {
                     self.pendingUserMessages[threadID]?.removeAll { $0.messageID == messageID }
                     self.failedThreadSendID = sendEvent.id
+                    if useFreshContext { self.freshSessionThreadIDs.insert(threadID) }
                     if self.composerText.isEmpty { self.composerText = text }
                     self.composerAttachments.restore(attachments, connection: attachmentConnection)
                     self.actionError = error.localizedDescription
@@ -1641,6 +1690,7 @@ final class AppModel {
         )
         let provider = launchStore.provider(for: modelOption.instanceId)
         let runtimeMode = Self.resolveRuntimeMode(for: provider, preferred: settings.serverSettings?.defaultRuntimeMode)
+        let interactionMode = composerInteractionMode
         let attachments = composerAttachments.takeReady(keepPinned: false)
         let initialTitle = Self.initialThreadTitle(from: text.isEmpty ? (attachments.first?.name ?? "Attachment") : text)
 
@@ -1658,7 +1708,7 @@ final class AppModel {
                     generateTitle: true,
                     modelSelection: modelSelection,
                     runtimeMode: runtimeMode,
-                    interactionMode: .default,
+                    interactionMode: interactionMode,
                     workspaceStrategy: .root(),
                     initialMessage: LaunchThreadInitialMessage(text: text, attachments: attachments.map(SwftAdapters.chatAttachment))
                 )

@@ -237,6 +237,7 @@ extension AppModel {
         selectedEnvironmentID = environmentID
         modelPicker = nil
         isProjectPickerOpen = false
+        resetSlashCommandMenuState()
         actionError = nil
 
         let targetProjects = projects

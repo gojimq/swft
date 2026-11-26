@@ -109,53 +109,83 @@ struct ComposerView: View {
     var body: some View {
         @Bindable var model = model
         let composer = model.composer
-        PillComposer(
-            text: $model.composerText,
-            placeholder: placeholder,
-            isBusy: composer.isBusy,
-            attachments: ComposerAttachmentHandlers(
-                items: model.composerAttachments.items,
-                onAdd: model.pickAttachments,
-                onRemove: model.removeComposerAttachment,
-                onDrop: { providers in
-                    AttachmentPreparer.loadSources(from: providers) { model.attach($0) }
+        VStack(spacing: 8) {
+            if model.isFreshSessionArmedForActiveThread {
+                FreshSessionBanner {
+                    withAnimation(SwftMotion.resolve(SwftMotion.quick, reduceMotion: reduceMotion)) {
+                        model.disarmFreshSessionForActiveThread()
+                    }
                 }
-            ),
-            onSend: model.send,
-            onStop: model.stopActiveRun
-        ) {
-            if model.selectedThreadID == nil {
-                ComposerEnvironmentPicker()
+                .transition(.swftRise(reduceMotion: reduceMotion, distance: 6))
             }
-            ComposerProjectSlot(contextLabel: composer.contextLabel)
-                .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) { projectTriggerFrame = $0 }
-        } trailing: {
-            modelPickerTrigger(composer: composer)
-        }
-        .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) { composerFrame = $0 }
-        .overlay(alignment: pickerOpensBelow ? .bottomLeading : .topLeading) {
-            if model.selectedThreadID == nil, model.isProjectPickerOpen {
-                let leadingOffset = ProjectDeletionLogic.panelLeadingOffset(
-                    triggerFrame: projectTriggerFrame,
-                    composerFrame: composerFrame,
-                    panelWidth: ProjectPickerPanel.width
+
+            PillComposer(
+                text: $model.composerText,
+                placeholder: placeholder,
+                isBusy: composer.isBusy,
+                attachments: ComposerAttachmentHandlers(
+                    items: model.composerAttachments.items,
+                    onAdd: model.pickAttachments,
+                    onRemove: model.removeComposerAttachment,
+                    onDrop: { providers in
+                        AttachmentPreparer.loadSources(from: providers) { model.attach($0) }
+                    }
+                ),
+                onSend: model.send,
+                onStop: model.stopActiveRun
+            ) {
+                if model.selectedThreadID == nil {
+                    ComposerEnvironmentPicker()
+                }
+                ComposerProjectSlot(contextLabel: composer.contextLabel)
+                    .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) { projectTriggerFrame = $0 }
+            } trailing: {
+                modelPickerTrigger(composer: composer)
+            }
+            .background(
+                ComposerCursorObserver(
+                    text: model.composerText,
+                    pendingCursorUTF16: model.pendingComposerCursorUTF16,
+                    cursorRequestID: model.composerCursorRequestID,
+                    onCursorChange: { offset in model.updateComposerCursor(utf16Offset: offset) },
+                    onAppliedPendingCursor: { model.pendingComposerCursorUTF16 = nil }
                 )
-                ProjectPickerPanel(triggerFrame: projectTriggerFrame)
-                    .padding(.leading, leadingOffset)
-                    .padding(pickerOpensBelow ? .top : .bottom, 8)
-                    .frame(height: 0, alignment: pickerOpensBelow ? .top : .bottom)
-                    .transition(.swftPopover(reduceMotion: reduceMotion, opensBelow: pickerOpensBelow, horizontalEdge: .leading))
+            )
+            .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) { composerFrame = $0 }
+            .overlay(alignment: pickerOpensBelow ? .bottomLeading : .topLeading) {
+                if model.isSlashCommandMenuOpen {
+                    SlashCommandPanel(composerFrame: composerFrame, opensBelow: pickerOpensBelow)
+                        .padding(.leading, 8)
+                        .padding(pickerOpensBelow ? .top : .bottom, 8)
+                        .frame(height: 0, alignment: pickerOpensBelow ? .top : .bottom)
+                        .transition(.swftPopover(reduceMotion: reduceMotion, opensBelow: pickerOpensBelow, horizontalEdge: .leading))
+                }
+            }
+            .overlay(alignment: pickerOpensBelow ? .bottomLeading : .topLeading) {
+                if model.selectedThreadID == nil, model.isProjectPickerOpen {
+                    let leadingOffset = ProjectDeletionLogic.panelLeadingOffset(
+                        triggerFrame: projectTriggerFrame,
+                        composerFrame: composerFrame,
+                        panelWidth: ProjectPickerPanel.width
+                    )
+                    ProjectPickerPanel(triggerFrame: projectTriggerFrame)
+                        .padding(.leading, leadingOffset)
+                        .padding(pickerOpensBelow ? .top : .bottom, 8)
+                        .frame(height: 0, alignment: pickerOpensBelow ? .top : .bottom)
+                        .transition(.swftPopover(reduceMotion: reduceMotion, opensBelow: pickerOpensBelow, horizontalEdge: .leading))
+                }
+            }
+            .overlay(alignment: pickerOpensBelow ? .bottomTrailing : .topTrailing) {
+                if let session = model.modelPicker, let content = model.modelPickerContent {
+                    ModelPickerPanel(session: session, content: content, triggerFrame: triggerFrame)
+                        .padding(pickerOpensBelow ? .top : .bottom, 8)
+                        // A zero-height anchor on the composer's edge; the panel overflows away from the composer.
+                        .frame(height: 0, alignment: pickerOpensBelow ? .top : .bottom)
+                        .transition(.swftPopover(reduceMotion: reduceMotion, opensBelow: pickerOpensBelow))
+                }
             }
         }
-        .overlay(alignment: pickerOpensBelow ? .bottomTrailing : .topTrailing) {
-            if let session = model.modelPicker, let content = model.modelPickerContent {
-                ModelPickerPanel(session: session, content: content, triggerFrame: triggerFrame)
-                    .padding(pickerOpensBelow ? .top : .bottom, 8)
-                    // A zero-height anchor on the composer's edge; the panel overflows away from the composer.
-                    .frame(height: 0, alignment: pickerOpensBelow ? .top : .bottom)
-                    .transition(.swftPopover(reduceMotion: reduceMotion, opensBelow: pickerOpensBelow))
-            }
-        }
+        .animation(SwftMotion.resolve(SwftMotion.quick, reduceMotion: reduceMotion), value: model.isFreshSessionArmedForActiveThread)
         .onAppear {
             ComposerPasteRouter.activate(token: pasteToken, shouldHandle: { model.modelPicker == nil && !model.isProjectPickerOpen }) { model.attach($0) }
         }

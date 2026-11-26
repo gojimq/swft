@@ -586,6 +586,156 @@ public struct ServerProviderSubProvider: Codable, Sendable, Equatable {
     }
 }
 
+public struct ServerProviderSlashCommandInput: Codable, Sendable, Equatable, Hashable {
+    public let hint: String
+
+    public init(hint: String) {
+        self.hint = hint
+    }
+}
+
+public struct ServerProviderSlashCommand: Codable, Sendable, Equatable, Hashable {
+    public let name: String
+    public let description: String?
+    public let input: ServerProviderSlashCommandInput?
+
+    public init(
+        name: String,
+        description: String? = nil,
+        input: ServerProviderSlashCommandInput? = nil
+    ) {
+        self.name = name
+        self.description = description
+        self.input = input
+    }
+}
+
+public struct ServerProviderSkill: Codable, Sendable, Equatable, Hashable {
+    public let name: String
+    public let description: String?
+    public let path: String
+    public let scope: String?
+    public let enabled: Bool
+    public let displayName: String?
+    public let shortDescription: String?
+    public let userInvocationOnly: Bool?
+    public let userInvocable: Bool?
+
+    public var isUserInvocable: Bool {
+        enabled && userInvocable != false
+    }
+
+    public var resolvedDisplayName: String {
+        let trimmed = displayName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? name : trimmed
+    }
+
+    public init(
+        name: String,
+        description: String? = nil,
+        path: String,
+        scope: String? = nil,
+        enabled: Bool = true,
+        displayName: String? = nil,
+        shortDescription: String? = nil,
+        userInvocationOnly: Bool? = nil,
+        userInvocable: Bool? = nil
+    ) {
+        self.name = name
+        self.description = description
+        self.path = path
+        self.scope = scope
+        self.enabled = enabled
+        self.displayName = displayName
+        self.shortDescription = shortDescription
+        self.userInvocationOnly = userInvocationOnly
+        self.userInvocable = userInvocable
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case name
+        case description
+        case path
+        case scope
+        case enabled
+        case displayName
+        case shortDescription
+        case userInvocationOnly
+        case userInvocable
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.name = try c.decode(String.self, forKey: .name)
+        self.description = try c.decodeIfPresent(String.self, forKey: .description)
+        self.path = try c.decode(String.self, forKey: .path)
+        self.scope = try c.decodeIfPresent(String.self, forKey: .scope)
+        self.enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
+        self.displayName = try c.decodeIfPresent(String.self, forKey: .displayName)
+        self.shortDescription = try c.decodeIfPresent(String.self, forKey: .shortDescription)
+        self.userInvocationOnly = try c.decodeIfPresent(Bool.self, forKey: .userInvocationOnly)
+        self.userInvocable = try c.decodeIfPresent(Bool.self, forKey: .userInvocable)
+    }
+}
+
+public struct ServerProviderWorkspaceSnapshot: Codable, Sendable, Equatable {
+    public let cwd: String
+    public let checkedAt: Date
+    public let slashCommands: [ServerProviderSlashCommand]
+    public let slashCommandsPending: Bool?
+    public let skills: [ServerProviderSkill]
+    public let optionDescriptors: [ProviderOptionDescriptor]?
+    public let models: [ServerProviderModel]?
+    public let modelsPending: Bool?
+
+    public var isPending: Bool {
+        slashCommandsPending == true || modelsPending == true
+    }
+
+    public init(
+        cwd: String,
+        checkedAt: Date,
+        slashCommands: [ServerProviderSlashCommand] = [],
+        slashCommandsPending: Bool? = nil,
+        skills: [ServerProviderSkill] = [],
+        optionDescriptors: [ProviderOptionDescriptor]? = nil,
+        models: [ServerProviderModel]? = nil,
+        modelsPending: Bool? = nil
+    ) {
+        self.cwd = cwd
+        self.checkedAt = checkedAt
+        self.slashCommands = slashCommands
+        self.slashCommandsPending = slashCommandsPending
+        self.skills = skills
+        self.optionDescriptors = optionDescriptors
+        self.models = models
+        self.modelsPending = modelsPending
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case cwd
+        case checkedAt
+        case slashCommands
+        case slashCommandsPending
+        case skills
+        case optionDescriptors
+        case models
+        case modelsPending
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.cwd = try c.decode(String.self, forKey: .cwd)
+        self.checkedAt = try c.decode(Date.self, forKey: .checkedAt)
+        self.slashCommands = try c.decodeIfPresent([ServerProviderSlashCommand].self, forKey: .slashCommands) ?? []
+        self.slashCommandsPending = try c.decodeIfPresent(Bool.self, forKey: .slashCommandsPending)
+        self.skills = try c.decodeIfPresent([ServerProviderSkill].self, forKey: .skills) ?? []
+        self.optionDescriptors = try c.decodeIfPresent([ProviderOptionDescriptor].self, forKey: .optionDescriptors)
+        self.models = try c.decodeIfPresent([ServerProviderModel].self, forKey: .models)
+        self.modelsPending = try c.decodeIfPresent(Bool.self, forKey: .modelsPending)
+    }
+}
+
 public struct ServerProvider: Codable, Sendable, Equatable, Identifiable {
     public let instanceId: String
     public let driver: String
@@ -606,6 +756,10 @@ public struct ServerProvider: Codable, Sendable, Equatable, Identifiable {
     public let unavailableReason: String?
     public let models: [ServerProviderModel]
     public let subProviders: [ServerProviderSubProvider]?
+    public let slashCommands: [ServerProviderSlashCommand]
+    public let skills: [ServerProviderSkill]
+    public let workspaceSnapshots: [ServerProviderWorkspaceSnapshot]?
+    public let workspaceRescannedAt: Date?
     public let setup: ServerProviderSetup?
     public let versionAdvisory: ServerProviderVersionAdvisory?
     public let compatibilityAdvisory: ServerProviderCompatibilityAdvisory?
@@ -615,6 +769,19 @@ public struct ServerProvider: Codable, Sendable, Equatable, Identifiable {
     public var id: String { instanceId }
     public var label: String { displayName ?? driver }
     public var isAvailable: Bool { availability != "unavailable" }
+
+    public func workspaceSnapshot(for cwd: String?) -> ServerProviderWorkspaceSnapshot? {
+        guard let cwd, !cwd.isEmpty else { return nil }
+        return workspaceSnapshots?.first { $0.cwd == cwd }
+    }
+
+    public func resolvedSlashCommands(for cwd: String?) -> [ServerProviderSlashCommand] {
+        workspaceSnapshot(for: cwd)?.slashCommands ?? slashCommands
+    }
+
+    public func resolvedSkills(for cwd: String?) -> [ServerProviderSkill] {
+        workspaceSnapshot(for: cwd)?.skills ?? skills
+    }
 
     public init(
         instanceId: String,
@@ -636,6 +803,10 @@ public struct ServerProvider: Codable, Sendable, Equatable, Identifiable {
         unavailableReason: String? = nil,
         models: [ServerProviderModel],
         subProviders: [ServerProviderSubProvider]? = nil,
+        slashCommands: [ServerProviderSlashCommand] = [],
+        skills: [ServerProviderSkill] = [],
+        workspaceSnapshots: [ServerProviderWorkspaceSnapshot]? = nil,
+        workspaceRescannedAt: Date? = nil,
         usageLimits: ServerProviderUsageLimits? = nil
     ) {
         self.instanceId = instanceId
@@ -657,6 +828,10 @@ public struct ServerProvider: Codable, Sendable, Equatable, Identifiable {
         self.unavailableReason = unavailableReason
         self.models = models
         self.subProviders = subProviders
+        self.slashCommands = slashCommands
+        self.skills = skills
+        self.workspaceSnapshots = workspaceSnapshots
+        self.workspaceRescannedAt = workspaceRescannedAt
         self.setup = nil
         self.versionAdvisory = nil
         self.compatibilityAdvisory = nil
@@ -684,6 +859,10 @@ public struct ServerProvider: Codable, Sendable, Equatable, Identifiable {
         unavailableReason: String? = nil,
         models: [ServerProviderModel],
         subProviders: [ServerProviderSubProvider]? = nil,
+        slashCommands: [ServerProviderSlashCommand] = [],
+        skills: [ServerProviderSkill] = [],
+        workspaceSnapshots: [ServerProviderWorkspaceSnapshot]? = nil,
+        workspaceRescannedAt: Date? = nil,
         setup: ServerProviderSetup?,
         versionAdvisory: ServerProviderVersionAdvisory? = nil,
         compatibilityAdvisory: ServerProviderCompatibilityAdvisory? = nil,
@@ -709,6 +888,10 @@ public struct ServerProvider: Codable, Sendable, Equatable, Identifiable {
         self.unavailableReason = unavailableReason
         self.models = models
         self.subProviders = subProviders
+        self.slashCommands = slashCommands
+        self.skills = skills
+        self.workspaceSnapshots = workspaceSnapshots
+        self.workspaceRescannedAt = workspaceRescannedAt
         self.setup = setup
         self.versionAdvisory = versionAdvisory
         self.compatibilityAdvisory = compatibilityAdvisory
@@ -736,6 +919,10 @@ public struct ServerProvider: Codable, Sendable, Equatable, Identifiable {
         case unavailableReason
         case models
         case subProviders
+        case slashCommands
+        case skills
+        case workspaceSnapshots
+        case workspaceRescannedAt
         case setup
         case versionAdvisory
         case compatibilityAdvisory
@@ -764,6 +951,10 @@ public struct ServerProvider: Codable, Sendable, Equatable, Identifiable {
         self.unavailableReason = try c.decodeIfPresent(String.self, forKey: .unavailableReason)
         self.models = try c.decode([ServerProviderModel].self, forKey: .models)
         self.subProviders = try c.decodeIfPresent([ServerProviderSubProvider].self, forKey: .subProviders)
+        self.slashCommands = try c.decodeIfPresent([ServerProviderSlashCommand].self, forKey: .slashCommands) ?? []
+        self.skills = try c.decodeIfPresent([ServerProviderSkill].self, forKey: .skills) ?? []
+        self.workspaceSnapshots = try c.decodeIfPresent([ServerProviderWorkspaceSnapshot].self, forKey: .workspaceSnapshots)
+        self.workspaceRescannedAt = try c.decodeIfPresent(Date.self, forKey: .workspaceRescannedAt)
         self.setup = try c.decodeIfPresent(ServerProviderSetup.self, forKey: .setup)
         self.versionAdvisory = try c.decodeIfPresent(ServerProviderVersionAdvisory.self, forKey: .versionAdvisory)
         self.compatibilityAdvisory = try c.decodeIfPresent(ServerProviderCompatibilityAdvisory.self, forKey: .compatibilityAdvisory)
@@ -792,6 +983,14 @@ public struct ServerProvider: Codable, Sendable, Equatable, Identifiable {
         try c.encodeIfPresent(unavailableReason, forKey: .unavailableReason)
         try c.encode(models, forKey: .models)
         try c.encodeIfPresent(subProviders, forKey: .subProviders)
+        if !slashCommands.isEmpty {
+            try c.encode(slashCommands, forKey: .slashCommands)
+        }
+        if !skills.isEmpty {
+            try c.encode(skills, forKey: .skills)
+        }
+        try c.encodeIfPresent(workspaceSnapshots, forKey: .workspaceSnapshots)
+        try c.encodeIfPresent(workspaceRescannedAt, forKey: .workspaceRescannedAt)
         try c.encodeIfPresent(setup, forKey: .setup)
         try c.encodeIfPresent(versionAdvisory, forKey: .versionAdvisory)
         try c.encodeIfPresent(compatibilityAdvisory, forKey: .compatibilityAdvisory)
