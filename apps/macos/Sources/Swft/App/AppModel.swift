@@ -85,6 +85,8 @@ final class AppModel {
     var actionError: String?
     /// Work folds the reader has opened, by fold id (ids are unique per turn, so this spans threads).
     var expandedWorkFolds: Set<String> = []
+    /// Subagent group cards and inline native-subagent detail drawers opened by the reader.
+    var expandedSubagentRows: Set<String> = []
     /// Settings screen coordinator (preferences, server settings RPCs, provider setup streams).
     let settings = SettingsController()
     /// Hook invoked when the model picker's signed-out action deep-links to provider settings.
@@ -138,6 +140,13 @@ final class AppModel {
     private var launchPhase: LaunchPhase = .idle
     private var isSubmitting = false
     private var optimisticApprovals: [String: ApprovalItem.Status] = [:]
+    /// Navigation breadcrumbs & instant placeholders for opened subagent child threads.
+    private var subagentNavigationContexts: [ThreadSummary.ID: SubagentNavigationContext] = [:]
+
+    private struct SubagentNavigationContext: Equatable {
+        let parentLink: SubagentParentLink
+        let placeholderSummary: ThreadSummary
+    }
     /// Messages sent into the open thread, shown at once and kept under the same row id after the server echoes them.
     private var pendingUserMessages: [ThreadSummary.ID: [PendingUserMessage]] = [:]
     private var optimisticSettlements: [ThreadSummary.ID: OptimisticSettlement] = [:]
@@ -153,6 +162,8 @@ final class AppModel {
         let storeID: ObjectIdentifier
         let projectionVersion: UInt64
         let summary: ThreadSummary
+        let providers: [ServerProvider]
+        let parentLink: SubagentParentLink?
         let pending: [PendingUserMessage]
         let approvals: [String: ApprovalItem.Status]
         let detail: ThreadDetailState
@@ -274,6 +285,15 @@ final class AppModel {
     }
 
     static func mock(defaults: UserDefaults? = nil, updateServices: UpdateServices? = nil) -> AppModel {
+        var mockDetails: [ThreadSummary.ID: ThreadDetailState] = [
+            MockData.threadDetail.summary.id: MockData.threadDetail,
+            MockData.approvalDetail.summary.id: MockData.approvalDetail,
+            MockData.attachmentsDetail.summary.id: MockData.attachmentsDetail,
+            MockData.subagentsDetail.summary.id: MockData.subagentsDetail,
+        ]
+        for childDetail in MockData.subagentChildDetails {
+            mockDetails[childDetail.summary.id] = childDetail
+        }
         let backing = MockBacking(
             projects: MockData.projects,
             threads: MockData.threads,
@@ -282,11 +302,7 @@ final class AppModel {
             models: MockData.models,
             harnesses: MockData.harnesses,
             usageProviders: MockData.usageProviders,
-            details: [
-                MockData.threadDetail.summary.id: MockData.threadDetail,
-                MockData.approvalDetail.summary.id: MockData.approvalDetail,
-                MockData.attachmentsDetail.summary.id: MockData.attachmentsDetail,
-            ],
+            details: mockDetails,
             defaultContextLabel: "Swft · main"
         )
         MockData.seedImageCache()
@@ -887,9 +903,73 @@ final class AppModel {
             .map(\.label)
     }
 
+    var knownEnvironmentIDs: Set<String> {
+        if isMock {
+            return Set(remoteEnvironments.map(\.id))
+        }
+        return Set(environmentRegistry.entries.map(\.id))
+    }
+
+    func parentThreadLink(for id: ThreadSummary.ID) -> SubagentParentLink? {
+        if let recorded = subagentNavigationContexts[id]?.parentLink {
+            return recorded
+        }
+        if let mockDetail = mockBacking?.details[id], let parentLink = mockDetail.parentLink {
+            return parentLink
+        }
+        if !isMock {
+            if let activeThreadStore,
+               activeThreadStore.threadId == id,
+               let thread = activeThreadStore.thread,
+               thread.lineage.relationshipToParent == "subagent",
+               let parentID = thread.lineage.parentThreadId
+            {
+                let envID = activeThreadEnvironmentID ?? owningEnvironment(forThreadID: id)?.id
+                let title = resolveThreadTitle(for: parentID, preferredEnvironmentID: envID) ?? "Parent thread"
+                return SubagentParentLink(threadID: parentID, title: title, environmentID: envID)
+            }
+            let owner = owningEnvironment(forThreadID: id)
+            let store = owner?.threadsStore ?? threadsStore
+            if let shell = store?.threads.first(where: { $0.id == id }) ?? store?.archivedThreads.first(where: { $0.id == id }),
+               shell.lineage.relationshipToParent == "subagent",
+               let parentID = shell.lineage.parentThreadId
+            {
+                let envID = owner?.id ?? activeThreadEnvironmentID
+                let title = resolveThreadTitle(for: parentID, preferredEnvironmentID: envID) ?? "Parent thread"
+                return SubagentParentLink(threadID: parentID, title: title, environmentID: envID)
+            }
+        }
+        return nil
+    }
+
+    private func resolveThreadTitle(for id: ThreadSummary.ID, preferredEnvironmentID: String?) -> String? {
+        if let match = sidebar.threads.first(where: { $0.id == id }) {
+            return match.title
+        }
+        if let mockDetail = mockBacking?.details[id] {
+            return mockDetail.summary.title
+        }
+        if let preferredEnvironmentID,
+           let env = environmentRegistry.environment(id: preferredEnvironmentID),
+           let shell = env.threadsStore.threads.first(where: { $0.id == id }) ?? env.threadsStore.archivedThreads.first(where: { $0.id == id })
+        {
+            return shell.title
+        }
+        if let shell = threadsStore?.threads.first(where: { $0.id == id }) ?? threadsStore?.archivedThreads.first(where: { $0.id == id }) {
+            return shell.title
+        }
+        if let cached = recentProjections.projection(for: id) {
+            return cached.thread.title
+        }
+        return subagentNavigationContexts[id]?.placeholderSummary.title
+    }
+
     func threadSummary(for id: ThreadSummary.ID) -> ThreadSummary? {
         if let match = sidebar.threads.first(where: { $0.id == id }) {
             return match
+        }
+        if let mockDetail = mockBacking?.details[id] {
+            return mockDetail.summary
         }
         if !isMock,
            let activeThreadStore,
@@ -935,7 +1015,38 @@ final class AppModel {
                 settledAt: thread.settledAt
             )
         }
-        return nil
+        if !isMock {
+            let owner = owningEnvironment(forThreadID: id)
+            let store = owner?.threadsStore ?? threadsStore
+            if let store,
+               let shell = store.threads.first(where: { $0.id == id }) ?? store.archivedThreads.first(where: { $0.id == id })
+            {
+                if let owner {
+                    let showEnv = RemoteLogic.shouldShowEnvironmentDisambiguation(
+                        environmentCount: environmentRegistry.entries.count,
+                        isRemote: !owner.isLocal
+                    )
+                    return SwftAdapters.remoteThreadSummary(
+                        from: shell,
+                        environment: owner,
+                        showEnvironmentLabel: showEnv,
+                        activelyViewingThreadID: selectedThreadID
+                    )
+                }
+                let providersByID = Dictionary(uniqueKeysWithValues: store.providers.map { ($0.instanceId, $0) })
+                return SwftAdapters.threadSummary(
+                    from: shell,
+                    projectsByID: NoProjectLogic.nonScratchProjectsByID(
+                        projects: store.projects,
+                        scratchWorkspaceRoot: store.serverConfig?.scratchWorkspaceRoot
+                    ),
+                    providersByID: providersByID,
+                    hostName: store.environment?.label ?? store.hostname,
+                    activelyViewingThreadID: selectedThreadID
+                )
+            }
+        }
+        return subagentNavigationContexts[id]?.placeholderSummary
     }
 
     func detail(for id: ThreadSummary.ID) -> ThreadDetailState? {
@@ -943,19 +1054,27 @@ final class AppModel {
             let liveSummary = mockBacking.threads.first(where: { $0.id == id })
             if var detail = mockBacking.details[id] {
                 if let liveSummary { detail.summary = liveSummary }
+                if detail.parentLink == nil { detail.parentLink = parentThreadLink(for: id) }
                 return detail
             }
-            guard let summary = liveSummary else { return nil }
-            var sample = MockData.threadDetail
-            sample.summary = summary
-            return sample
+            if let summary = liveSummary ?? subagentNavigationContexts[id]?.placeholderSummary {
+                var sample = MockData.threadDetail
+                sample.summary = summary
+                sample.parentLink = parentThreadLink(for: id)
+                return sample
+            }
+            return nil
         }
 
         guard let summary = threadSummary(for: id) else { return nil }
+        let parentLink = parentThreadLink(for: id)
         if let activeThreadStore,
            activeThreadStore.threadId == id,
            let projection = activeThreadStore.projection
         {
+            let owner = owningEnvironment(forThreadID: id)
+            let ownerStore = owner?.threadsStore ?? threadsStore
+            let providers = ownerStore?.providers ?? []
             let pending = pendingUserMessages[id] ?? []
             let storeID = ObjectIdentifier(activeThreadStore)
             let version = activeThreadStore.projectionVersion
@@ -963,6 +1082,8 @@ final class AppModel {
                cached.storeID == storeID,
                cached.projectionVersion == version,
                cached.summary == summary,
+               cached.providers == providers,
+               cached.parentLink == parentLink,
                cached.pending == pending,
                cached.approvals == optimisticApprovals
             {
@@ -971,16 +1092,26 @@ final class AppModel {
             if !pending.isEmpty {
                 Self.aliasPromotedAttachmentPreviews(in: projection, matching: pending)
             }
+            let providersByID = Dictionary(uniqueKeysWithValues: providers.map { ($0.instanceId, $0) })
+            let threadsByID = Dictionary(
+                (ownerStore?.threads ?? []).map { ($0.id, $0) },
+                uniquingKeysWith: { _, latest in latest }
+            )
             let detail = SwftAdapters.threadDetail(
                 from: projection,
                 summary: summary,
+                providersByID: providersByID,
+                threadsByID: threadsByID,
                 optimisticApprovals: optimisticApprovals,
-                pendingUserMessages: pending
+                pendingUserMessages: pending,
+                parentLink: parentLink
             )
             cachedLiveDetail = CachedLiveThreadDetail(
                 storeID: storeID,
                 projectionVersion: version,
                 summary: summary,
+                providers: providers,
+                parentLink: parentLink,
                 pending: pending,
                 approvals: optimisticApprovals,
                 detail: detail
@@ -988,7 +1119,7 @@ final class AppModel {
             return detail
         }
         let pending = (pendingUserMessages[id] ?? []).map { TranscriptItem(id: $0.messageID, kind: .user($0.text, attachments: $0.attachments)) }
-        return ThreadDetailState(summary: summary, items: pending, diffStat: nil)
+        return ThreadDetailState(summary: summary, items: pending, diffStat: nil, parentLink: parentLink)
     }
 
     func threadCount(forProjectID projectID: String) -> Int {
@@ -1022,15 +1153,32 @@ final class AppModel {
         newThread.cancel()
         destination = .home
         activeThreadEnvironmentID = nil
+        subagentNavigationContexts.removeAll()
         detachActiveThread()
     }
 
     func open(_ id: ThreadSummary.ID) {
+        open(id, inEnvironmentID: nil, preserveSubagentTrail: false)
+    }
+
+    func open(
+        _ id: ThreadSummary.ID,
+        inEnvironmentID explicitEnvironmentID: String?,
+        preserveSubagentTrail: Bool = false
+    ) {
         newThread.cancel()
+        if !preserveSubagentTrail && subagentNavigationContexts[id] == nil {
+            subagentNavigationContexts.removeAll()
+        }
         destination = .thread(id)
         actionError = nil
 
         if isMock {
+            if let explicitEnvironmentID {
+                activeThreadEnvironmentID = explicitEnvironmentID
+            } else {
+                activeThreadEnvironmentID = threadSummary(for: id)?.environmentID
+            }
             if let index = mockThreadsOverride?.firstIndex(where: { $0.id == id }),
                mockThreadsOverride?[index].activity == .unread
             {
@@ -1044,8 +1192,12 @@ final class AppModel {
             return
         }
 
-        let owner = owningEnvironment(forThreadID: id)
-        activeThreadEnvironmentID = owner?.id
+        let owner: ManagedEnvironment? = if let explicitEnvironmentID {
+            environmentRegistry.environment(id: explicitEnvironmentID) ?? owningEnvironment(forThreadID: id)
+        } else {
+            owningEnvironment(forThreadID: id)
+        }
+        activeThreadEnvironmentID = explicitEnvironmentID ?? owner?.id
         let ownerStore = owner?.threadsStore ?? threadsStore
         if let shell = ownerStore?.threads.first(where: { $0.id == id }) {
             syncComposerModel(to: shell.modelSelection, in: ownerStore)
@@ -1057,8 +1209,55 @@ final class AppModel {
         evaluateActiveThreadVisit()
     }
 
+    /// Opens a delegated subagent child thread in its owning environment and records a back-to-parent breadcrumb.
+    func openSubagentThread(_ target: SubagentNavigationTarget, fromThreadID parentThreadID: ThreadSummary.ID) {
+        let parentSummary = threadSummary(for: parentThreadID)
+        let parentEnvironmentID = activeThreadEnvironmentID
+            ?? parentSummary?.environmentID
+            ?? owningEnvironment(forThreadID: parentThreadID)?.id
+        let targetEnvironmentID = target.environmentID ?? parentEnvironmentID
+        let parentLink = SubagentParentLink(
+            threadID: parentThreadID,
+            title: parentSummary?.title ?? "Parent thread",
+            environmentID: parentEnvironmentID
+        )
+        let placeholderSummary = ThreadSummary(
+            id: target.threadID,
+            title: target.title,
+            project: parentSummary?.project,
+            location: parentSummary?.location,
+            provider: target.provider,
+            providerDisplayName: target.providerDisplayName,
+            activity: .idle,
+            updatedAt: now,
+            providerDriver: target.providerDriver,
+            providerIconUrl: target.providerIconURL,
+            environmentID: targetEnvironmentID,
+            environmentLabel: parentSummary?.environmentLabel,
+            isRemoteEnvironment: parentSummary?.isRemoteEnvironment ?? false,
+            environmentMachineSymbol: parentSummary?.environmentMachineSymbol
+        )
+        subagentNavigationContexts[target.threadID] = SubagentNavigationContext(
+            parentLink: parentLink,
+            placeholderSummary: placeholderSummary
+        )
+        open(target.threadID, inEnvironmentID: targetEnvironmentID, preserveSubagentTrail: true)
+    }
+
+    /// Navigates back from a child subagent thread to its parent thread in the parent's owning environment.
+    func openParentThread(_ link: SubagentParentLink) {
+        if let currentID = selectedThreadID {
+            subagentNavigationContexts.removeValue(forKey: currentID)
+        }
+        open(link.threadID, inEnvironmentID: link.environmentID, preserveSubagentTrail: true)
+    }
+
     func toggleWorkFold(_ id: String) {
         if expandedWorkFolds.remove(id) == nil { expandedWorkFolds.insert(id) }
+    }
+
+    func toggleSubagentRow(_ id: String) {
+        if expandedSubagentRows.remove(id) == nil { expandedSubagentRows.insert(id) }
     }
 
     func toggleSidebar() {

@@ -457,8 +457,11 @@ enum SwftAdapters {
     static func threadDetail(
         from projection: ThreadProjection,
         summary: ThreadSummary,
+        providersByID: [String: ServerProvider] = [:],
+        threadsByID: [String: ThreadShell] = [:],
         optimisticApprovals: [String: ApprovalItem.Status] = [:],
-        pendingUserMessages: [PendingUserMessage] = []
+        pendingUserMessages: [PendingUserMessage] = [],
+        parentLink: SubagentParentLink? = nil
     ) -> ThreadDetailState {
         var resolvedSummary = summary
         resolvedSummary.title = projection.thread.title
@@ -468,6 +471,10 @@ enum SwftAdapters {
 
         let requestsByID = Dictionary(
             uniqueKeysWithValues: projection.runtimeRequests.map { ($0.id, $0) }
+        )
+        let subagentsByID = Dictionary(
+            projection.subagents.map { ($0.id, $0) },
+            uniquingKeysWith: { _, latest in latest }
         )
 
         var items: [TranscriptItem] = []
@@ -497,6 +504,9 @@ enum SwftAdapters {
             if var mapped = transcriptItem(
                 from: item,
                 requestsByID: requestsByID,
+                subagentsByID: subagentsByID,
+                providersByID: providersByID,
+                threadsByID: threadsByID,
                 optimisticApprovals: optimisticApprovals
             ) {
                 mapped.startedAt = item.startedAt ?? item.updatedAt
@@ -548,7 +558,8 @@ enum SwftAdapters {
             summary: resolvedSummary,
             items: items,
             diffStat: diffStat,
-            isRunning: projection.runs.contains { $0.status.isActive }
+            isRunning: projection.runs.contains { $0.status.isActive },
+            parentLink: parentLink
         )
     }
 
@@ -580,6 +591,9 @@ enum SwftAdapters {
     static func transcriptItem(
         from item: TurnItem,
         requestsByID: [String: RuntimeRequest],
+        subagentsByID: [String: SubagentSummary] = [:],
+        providersByID: [String: ServerProvider] = [:],
+        threadsByID: [String: ThreadShell] = [:],
         optimisticApprovals: [String: ApprovalItem.Status]
     ) -> TranscriptItem? {
         let status = toolStatus(from: item.status)
@@ -824,20 +838,77 @@ enum SwftAdapters {
                 kind: .notice(title: item.title?.nilIfEmpty ?? "Question", message: summary, isError: false)
             )
 
-        case .subagent(_, _, _, let providerInstanceId, _, let prompt, let progress, let result):
-            let output = result?.nilIfEmpty ?? progress?.nilIfEmpty
+        case .subagent(
+            let subagentId,
+            let origin,
+            let driver,
+            let providerInstanceId,
+            let childThreadId,
+            let remoteChild,
+            let prompt,
+            let progress,
+            let result,
+            _,
+            _
+        ):
+            let live = subagentsByID[subagentId]
+            let resolvedInstanceID = live?.providerInstanceId.nilIfEmpty ?? providerInstanceId
+            let provider = providersByID[resolvedInstanceID]
+            let resolvedDriver = providerDriverIdentifier(
+                driver: provider?.driver ?? live?.driver.nilIfEmpty ?? driver.nilIfEmpty,
+                instanceId: resolvedInstanceID
+            )
+            let resolvedChildThreadID = live?.childThreadId?.nilIfEmpty ?? childThreadId?.nilIfEmpty
+            let childShell = resolvedChildThreadID.flatMap { threadsByID[$0] }
+            let resolvedRemote = remoteChild ?? live?.remoteChild
+            let resolvedPrompt = live?.prompt.nilIfEmpty ?? prompt
+            let resolvedTitle = SubagentDisplayLogic.formatDisplayTitle(
+                live?.title ?? item.title ?? resolvedRemote?.title ?? childShell?.title,
+                fallbackPrompt: resolvedPrompt
+            )
+            let resolvedStatus = SubagentStatus(rawValue: live?.status ?? item.status)
+            let resolvedModel = SubagentDisplayLogic.resolveModelLabel(
+                reportedModel: live?.model,
+                executedModel: live?.executedModel,
+                modelSelection: live?.modelSelection,
+                childModelSelection: origin == "app_owned" ? childShell?.modelSelection : nil,
+                provider: provider
+            )
+            let resolvedStartedAt = live?.startedAt ?? item.startedAt
+            let resolvedCompletedAt = live?.completedAt ?? item.completedAt
+
             return TranscriptItem(
                 id: item.id,
-                kind: .toolCall(
-                    ToolCallItem(
-                        kind: .search,
-                        title: item.title?.nilIfEmpty ?? "Subagent (\(providerInstanceId))",
-                        detail: singleLinePreview(prompt, fallback: "Subagent task"),
-                        status: status,
-                        duration: duration,
-                        output: output
+                kind: .subagent(
+                    SubagentItem(
+                        id: item.id,
+                        subagentID: subagentId,
+                        runID: item.runId ?? live?.runId,
+                        providerTurnID: item.providerTurnId,
+                        origin: live?.origin.nilIfEmpty ?? origin,
+                        title: resolvedTitle,
+                        provider: providerKind(driver: resolvedDriver, instanceId: resolvedInstanceID),
+                        providerDriver: resolvedDriver,
+                        providerInstanceID: resolvedInstanceID,
+                        providerDisplayName: provider?.label,
+                        providerIconURL: provider?.iconUrl,
+                        modelName: resolvedModel,
+                        status: resolvedStatus,
+                        prompt: resolvedPrompt,
+                        progress: live?.progress?.nilIfEmpty ?? progress?.nilIfEmpty,
+                        result: live?.result?.nilIfEmpty ?? result?.nilIfEmpty,
+                        childThreadID: resolvedChildThreadID,
+                        remoteEnvironmentID: resolvedRemote?.environmentId,
+                        remoteEnvironmentLabel: resolvedRemote?.label.nilIfEmpty,
+                        remoteThreadID: resolvedRemote?.threadId,
+                        worktreeBranch: childShell?.branch?.nilIfEmpty,
+                        worktreePath: childShell?.worktreePath?.nilIfEmpty,
+                        startedAt: resolvedStartedAt,
+                        completedAt: resolvedCompletedAt
                     )
-                )
+                ),
+                startedAt: resolvedStartedAt ?? item.updatedAt,
+                completedAt: resolvedCompletedAt
             )
 
         case .error(let failure):

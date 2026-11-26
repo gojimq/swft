@@ -69,11 +69,24 @@ struct TopBar: View {
                 .transition(.swftPop(reduceMotion: reduceMotion, scale: 0.7))
             }
             if case .thread(let id) = model.destination, let summary = model.threadSummary(for: id) {
-                VStack(alignment: .leading, spacing: 0) {
-                    Text(summary.title).font(SwftType.labelStrong).foregroundStyle(SwftColor.textPrimary).lineLimit(1)
-                        .contentTransition(.interpolate)
-                        .swftTitleSwap(summary.title, identity: id)
-                    Text(summary.project?.name ?? "No project").font(SwftType.caption).foregroundStyle(SwftColor.textTertiary)
+                let parentLink = model.parentThreadLink(for: id)
+                HStack(spacing: 8) {
+                    if let parentLink {
+                        SubagentBackBreadcrumb(parentTitle: parentLink.title) {
+                            model.openParentThread(parentLink)
+                        }
+                    }
+                    VStack(alignment: .leading, spacing: 0) {
+                        HStack(spacing: 6) {
+                            Text(summary.title).font(SwftType.labelStrong).foregroundStyle(SwftColor.textPrimary).lineLimit(1)
+                                .contentTransition(.interpolate)
+                                .swftTitleSwap(summary.title, identity: id)
+                            if parentLink != nil {
+                                SubagentHeaderBadge()
+                            }
+                        }
+                        Text(summary.project?.name ?? "No project").font(SwftType.caption).foregroundStyle(SwftColor.textTertiary)
+                    }
                 }
                 .padding(.leading, model.sidebarVisible ? 12 : 4)
                 .transition(.swftRise(reduceMotion: reduceMotion, distance: -6))

@@ -580,7 +580,11 @@ enum SendFlightLogic {
                 return false
             case .approval(_, let approval) where approval.status == .pending:
                 return false
-            case .approval, .note:
+            case .subagent(let subagent) where subagent.status.isActive:
+                return false
+            case .subagentGroup(let group) where group.hasActive:
+                return false
+            case .approval, .note, .subagent, .subagentGroup:
                 continue
             }
         }

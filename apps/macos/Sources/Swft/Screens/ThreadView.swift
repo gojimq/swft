@@ -74,7 +74,10 @@ struct ThreadView: View {
         // the flight and display-synced scroll carry that motion cleanly without fighting layout.
         let animatesRows = populated && !isSendPending && !sendFlight.isFlightAnimating
         let expandedWorkFolds = model.expandedWorkFolds
+        let expandedSubagentRows = model.expandedSubagentRows
+        let knownEnvironmentIDs = model.knownEnvironmentIDs
         let threadID = detail.summary.id
+        let parentEnvironmentID = detail.summary.environmentID ?? model.activeThreadEnvironmentID
 
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 32) {
@@ -91,12 +94,24 @@ struct ThreadView: View {
                         fadeBubbleID: isLatest ? fadeBubbleID : nil,
                         fadeStyle: isLatest ? fadeStyle : .none,
                         expandedFoldIDs: Self.expandedFoldIDs(for: turn, in: expandedWorkFolds),
+                        expandedSubagentIDs: Self.expandedSubagentIDs(for: turn, in: expandedSubagentRows),
+                        parentEnvironmentID: parentEnvironmentID,
+                        knownEnvironmentIDs: knownEnvironmentIDs,
                         reduceMotion: effectiveReduceMotion,
                         onToggleWorkFold: { foldID in
                             sendFlight.handleWorkFoldToggle()
                             withAnimation(SwftMotion.resolve(SwftMotion.disclosure, reduceMotion: effectiveReduceMotion)) {
                                 model.toggleWorkFold(foldID)
                             }
+                        },
+                        onToggleSubagentExpansion: { subagentRowID in
+                            sendFlight.handleWorkFoldToggle()
+                            withAnimation(SwftMotion.resolve(SwftMotion.disclosure, reduceMotion: effectiveReduceMotion)) {
+                                model.toggleSubagentRow(subagentRowID)
+                            }
+                        },
+                        onOpenSubagentThread: { target in
+                            model.openSubagentThread(target, fromThreadID: threadID)
                         },
                         onResolveApproval: { itemID, approved in
                             model.resolveApproval(itemID: itemID, in: threadID, approved: approved)
@@ -174,6 +189,17 @@ struct ThreadView: View {
         for row in turn.rows {
             if let foldID = row.workFoldID, expanded.contains(foldID) {
                 matched.insert(foldID)
+            }
+        }
+        return matched
+    }
+
+    private static func expandedSubagentIDs(for turn: TranscriptTurn, in expanded: Set<String>) -> Set<String> {
+        guard !expanded.isEmpty else { return [] }
+        var matched: Set<String> = []
+        for row in turn.rows {
+            for id in row.subagentDisclosureIDs where expanded.contains(id) {
+                matched.insert(id)
             }
         }
         return matched
