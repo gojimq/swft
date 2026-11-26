@@ -431,6 +431,10 @@ public struct ThreadShell: Codable, Sendable, Equatable, Identifiable {
     public let interactionMode: ProviderInteractionMode
     public let branch: String?
     public let worktreePath: String?
+    public let linkedPullRequest: ThreadLinkedPullRequest?
+    public let branchPullRequest: ThreadLinkedPullRequest?
+    public let pullRequests: [ThreadPullRequestLink]
+    public let issues: [ThreadIssueLink]
     public let lineage: ThreadLineage
     public let activeProviderThreadId: String?
     public let latestRunId: String?
@@ -514,6 +518,10 @@ public struct ThreadShell: Codable, Sendable, Equatable, Identifiable {
         self.interactionMode = try c.decode(ProviderInteractionMode.self, forKey: .interactionMode)
         self.branch = try c.decodeIfPresent(String.self, forKey: .branch)
         self.worktreePath = try c.decodeIfPresent(String.self, forKey: .worktreePath)
+        self.linkedPullRequest = try c.decodeIfPresent(ThreadLinkedPullRequest.self, forKey: .linkedPullRequest)
+        self.branchPullRequest = try c.decodeIfPresent(ThreadLinkedPullRequest.self, forKey: .branchPullRequest)
+        self.pullRequests = try c.decodeIfPresent([ThreadPullRequestLink].self, forKey: .pullRequests) ?? []
+        self.issues = try c.decodeIfPresent([ThreadIssueLink].self, forKey: .issues) ?? []
         self.lineage = try c.decode(ThreadLineage.self, forKey: .lineage)
         self.activeProviderThreadId = try c.decodeIfPresent(String.self, forKey: .activeProviderThreadId)
         self.latestRunId = try c.decodeIfPresent(String.self, forKey: .latestRunId)
@@ -560,6 +568,10 @@ public struct ThreadShell: Codable, Sendable, Equatable, Identifiable {
         interactionMode: ProviderInteractionMode = .default,
         branch: String? = nil,
         worktreePath: String? = nil,
+        linkedPullRequest: ThreadLinkedPullRequest? = nil,
+        branchPullRequest: ThreadLinkedPullRequest? = nil,
+        pullRequests: [ThreadPullRequestLink] = [],
+        issues: [ThreadIssueLink] = [],
         lineage: ThreadLineage? = nil,
         activeProviderThreadId: String? = nil,
         latestRunId: String? = nil,
@@ -604,6 +616,10 @@ public struct ThreadShell: Codable, Sendable, Equatable, Identifiable {
         self.interactionMode = interactionMode
         self.branch = branch
         self.worktreePath = worktreePath
+        self.linkedPullRequest = linkedPullRequest
+        self.branchPullRequest = branchPullRequest
+        self.pullRequests = pullRequests
+        self.issues = issues
         self.lineage = lineage ?? ThreadLineage(rootThreadId: id)
         self.activeProviderThreadId = activeProviderThreadId
         self.latestRunId = latestRunId
@@ -763,6 +779,10 @@ public struct AppThread: Codable, Sendable, Equatable, Identifiable {
     public let interactionMode: ProviderInteractionMode
     public let branch: String?
     public let worktreePath: String?
+    public let linkedPullRequest: ThreadLinkedPullRequest?
+    public let branchPullRequest: ThreadLinkedPullRequest?
+    public let pullRequests: [ThreadPullRequestLink]
+    public let issues: [ThreadIssueLink]
     public var activeProviderThreadId: String?
     public let lineage: ThreadLineage
     public let createdAt: Date
@@ -775,6 +795,34 @@ public struct AppThread: Codable, Sendable, Equatable, Identifiable {
     public var lastVisitedAt: Date?
     public let deletedAt: Date?
 
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try c.decode(String.self, forKey: .id)
+        self.projectId = try c.decode(String.self, forKey: .projectId)
+        self.title = try c.decode(String.self, forKey: .title)
+        self.providerInstanceId = try c.decode(String.self, forKey: .providerInstanceId)
+        self.modelSelection = try c.decode(ModelSelection.self, forKey: .modelSelection)
+        self.runtimeMode = try c.decode(RuntimeMode.self, forKey: .runtimeMode)
+        self.interactionMode = try c.decode(ProviderInteractionMode.self, forKey: .interactionMode)
+        self.branch = try c.decodeIfPresent(String.self, forKey: .branch)
+        self.worktreePath = try c.decodeIfPresent(String.self, forKey: .worktreePath)
+        self.linkedPullRequest = try c.decodeIfPresent(ThreadLinkedPullRequest.self, forKey: .linkedPullRequest)
+        self.branchPullRequest = try c.decodeIfPresent(ThreadLinkedPullRequest.self, forKey: .branchPullRequest)
+        self.pullRequests = try c.decodeIfPresent([ThreadPullRequestLink].self, forKey: .pullRequests) ?? []
+        self.issues = try c.decodeIfPresent([ThreadIssueLink].self, forKey: .issues) ?? []
+        self.activeProviderThreadId = try c.decodeIfPresent(String.self, forKey: .activeProviderThreadId)
+        self.lineage = try c.decode(ThreadLineage.self, forKey: .lineage)
+        self.createdAt = try c.decode(Date.self, forKey: .createdAt)
+        self.updatedAt = try c.decode(Date.self, forKey: .updatedAt)
+        self.archivedAt = try c.decodeIfPresent(Date.self, forKey: .archivedAt)
+        self.settledOverride = try c.decodeIfPresent(String.self, forKey: .settledOverride)
+        self.settledAt = try c.decodeIfPresent(Date.self, forKey: .settledAt)
+        self.snoozedUntil = try c.decodeIfPresent(Date.self, forKey: .snoozedUntil)
+        self.pinnedAt = try c.decodeIfPresent(Date.self, forKey: .pinnedAt)
+        self.lastVisitedAt = try c.decodeIfPresent(Date.self, forKey: .lastVisitedAt)
+        self.deletedAt = try c.decodeIfPresent(Date.self, forKey: .deletedAt)
+    }
+
     public init(
         id: String,
         projectId: String,
@@ -785,6 +833,10 @@ public struct AppThread: Codable, Sendable, Equatable, Identifiable {
         interactionMode: ProviderInteractionMode = .default,
         branch: String? = nil,
         worktreePath: String? = nil,
+        linkedPullRequest: ThreadLinkedPullRequest? = nil,
+        branchPullRequest: ThreadLinkedPullRequest? = nil,
+        pullRequests: [ThreadPullRequestLink] = [],
+        issues: [ThreadIssueLink] = [],
         activeProviderThreadId: String? = nil,
         lineage: ThreadLineage? = nil,
         createdAt: Date,
@@ -806,6 +858,10 @@ public struct AppThread: Codable, Sendable, Equatable, Identifiable {
         self.interactionMode = interactionMode
         self.branch = branch
         self.worktreePath = worktreePath
+        self.linkedPullRequest = linkedPullRequest
+        self.branchPullRequest = branchPullRequest
+        self.pullRequests = pullRequests
+        self.issues = issues
         self.activeProviderThreadId = activeProviderThreadId
         self.lineage = lineage ?? ThreadLineage(rootThreadId: id)
         self.createdAt = createdAt
@@ -2091,6 +2147,38 @@ public enum OrchestrationCommand: Encodable, Sendable {
         title: String? = nil,
         regenerateTitle: Bool? = nil
     )
+    case forkThread(
+        commandId: String = UUID().uuidString,
+        sourceThreadId: String,
+        targetThreadId: String = UUID().uuidString,
+        sourcePoint: ThreadForkSourcePoint = .latestStable,
+        title: String? = nil,
+        sideChat: Bool? = nil
+    )
+    case linkPullRequest(
+        commandId: String = UUID().uuidString,
+        threadId: String,
+        host: String,
+        repository: String,
+        number: Int,
+        url: String,
+        source: String = "manual"
+    )
+    case unlinkPullRequest(
+        commandId: String = UUID().uuidString,
+        threadId: String,
+        host: String,
+        repository: String,
+        number: Int
+    )
+    case unlinkIssue(
+        commandId: String = UUID().uuidString,
+        threadId: String,
+        tracker: String,
+        host: String,
+        scope: String,
+        key: String
+    )
 
     private enum CodingKeys: String, CodingKey {
         case type, commandId, createdBy, creationSource
@@ -2100,6 +2188,8 @@ public enum OrchestrationCommand: Encodable, Sendable {
         case runId, reason, holdQueue
         case requestId, decision, feedback, answers
         case visitedAt, opened, onlyIfUnused
+        case sourceThreadId, targetThreadId, sourcePoint, sideChat
+        case host, repository, number, url, source, tracker, scope, key
     }
 
     public func encode(to encoder: any Encoder) throws {
@@ -2259,6 +2349,44 @@ public enum OrchestrationCommand: Encodable, Sendable {
             try c.encode(threadId, forKey: .threadId)
             try c.encodeIfPresent(title, forKey: .title)
             try c.encodeIfPresent(regenerateTitle, forKey: .regenerateTitle)
+
+        case .forkThread(let commandId, let sourceThreadId, let targetThreadId, let sourcePoint, let title, let sideChat):
+            try c.encode("thread.fork", forKey: .type)
+            try c.encode(commandId, forKey: .commandId)
+            try c.encode("user", forKey: .createdBy)
+            try c.encode("web", forKey: .creationSource)
+            try c.encode(sourceThreadId, forKey: .sourceThreadId)
+            try c.encode(targetThreadId, forKey: .targetThreadId)
+            try c.encode(sourcePoint, forKey: .sourcePoint)
+            try c.encodeIfPresent(title, forKey: .title)
+            try c.encodeIfPresent(sideChat, forKey: .sideChat)
+
+        case .linkPullRequest(let commandId, let threadId, let host, let repository, let number, let url, let source):
+            try c.encode("thread.pull-request.link", forKey: .type)
+            try c.encode(commandId, forKey: .commandId)
+            try c.encode(threadId, forKey: .threadId)
+            try c.encode(host, forKey: .host)
+            try c.encode(repository, forKey: .repository)
+            try c.encode(number, forKey: .number)
+            try c.encode(url, forKey: .url)
+            try c.encode(source, forKey: .source)
+
+        case .unlinkPullRequest(let commandId, let threadId, let host, let repository, let number):
+            try c.encode("thread.pull-request.unlink", forKey: .type)
+            try c.encode(commandId, forKey: .commandId)
+            try c.encode(threadId, forKey: .threadId)
+            try c.encode(host, forKey: .host)
+            try c.encode(repository, forKey: .repository)
+            try c.encode(number, forKey: .number)
+
+        case .unlinkIssue(let commandId, let threadId, let tracker, let host, let scope, let key):
+            try c.encode("thread.issue.unlink", forKey: .type)
+            try c.encode(commandId, forKey: .commandId)
+            try c.encode(threadId, forKey: .threadId)
+            try c.encode(tracker, forKey: .tracker)
+            try c.encode(host, forKey: .host)
+            try c.encode(scope, forKey: .scope)
+            try c.encode(key, forKey: .key)
         }
     }
 }
@@ -2388,6 +2516,7 @@ public enum RPCMethod {
     public static let orchestrationLaunchThread = "orchestration.launchThread"
     public static let orchestrationForceStopThread = "orchestration.forceStopThread"
     public static let orchestrationGetThreadProjection = "orchestration.getThreadProjection"
+    public static let orchestrationGetThreadFamily = "orchestration.getThreadFamily"
     public static let orchestrationSubscribeShell = "orchestration.subscribeShell"
     public static let orchestrationSubscribeThread = "orchestration.subscribeThread"
 }

@@ -92,7 +92,22 @@ public struct AuthClient: Sendable {
         baseURL: URL,
         accessToken: String
     ) async throws -> AuthWebSocketTicketResult {
-        let primaryURL = endpointURL(baseURL: baseURL, path: "/api/auth/websocket-ticket/rpc")
+        try await mintTicket(baseURL: baseURL, accessToken: accessToken, use: "rpc")
+    }
+
+    public func mintMediaTicket(
+        baseURL: URL,
+        accessToken: String
+    ) async throws -> AuthWebSocketTicketResult {
+        try await mintTicket(baseURL: baseURL, accessToken: accessToken, use: "media")
+    }
+
+    private func mintTicket(
+        baseURL: URL,
+        accessToken: String,
+        use: String
+    ) async throws -> AuthWebSocketTicketResult {
+        let primaryURL = endpointURL(baseURL: baseURL, path: "/api/auth/websocket-ticket/\(use)")
         let (data, response) = try await postWebSocketTicket(url: primaryURL, accessToken: accessToken)
 
         if let http = response as? HTTPURLResponse, http.statusCode == 404 {

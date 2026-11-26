@@ -40,6 +40,8 @@ struct SwftApp: App {
             CommandGroup(after: .sidebar) {
                 Button("Toggle Sidebar") { model.toggleSidebar() }
                     .keyboardShortcut("s", modifiers: [.command, .control])
+                Button("Toggle Right Panel") { model.toggleRightPanel() }
+                    .keyboardShortcut("b", modifiers: [.command, .option])
             }
         }
     }

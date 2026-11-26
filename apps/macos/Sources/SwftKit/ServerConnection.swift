@@ -144,6 +144,30 @@ public actor ServerConnection {
         return token
     }
 
+    /// Mints a short-lived ticket for media routes such as `/api/device-hub/...`.
+    public func mintMediaTicket() async throws -> AuthWebSocketTicketResult {
+        if let existingToken = cachedAccessToken {
+            do {
+                return try await authClient.mintMediaTicket(
+                    baseURL: httpBaseURL,
+                    accessToken: existingToken
+                )
+            } catch RPCError.authenticationFailed {
+                if case .bearerToken = credential {
+                    throw RPCError.authenticationFailed("Bearer access token rejected")
+                }
+                cachedAccessToken = nil
+            }
+        }
+        let token = try await authClient.resolveAccessToken(
+            baseURL: httpBaseURL,
+            credential: credential,
+            clientLabel: clientLabel
+        )
+        cachedAccessToken = token
+        return try await authClient.mintMediaTicket(baseURL: httpBaseURL, accessToken: token)
+    }
+
     /// Stream of connection state updates; yields the current state immediately on subscribe.
     public func stateUpdates() -> AsyncStream<ConnectionState> {
         let id = UUID()

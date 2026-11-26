@@ -6,25 +6,53 @@ struct RootView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        HStack(spacing: 0) {
-            if model.sidebarVisible {
-                SidebarView()
-                    .frame(width: SwftLayout.sidebarWidth)
-                    .transition(reduceMotion ? .opacity : .move(edge: .leading).combined(with: .opacity))
+        GeometryReader { geo in
+            HStack(spacing: 0) {
+                if model.sidebarVisible {
+                    SidebarView()
+                        .frame(width: SwftLayout.sidebarWidth)
+                        .transition(reduceMotion ? .opacity : .move(edge: .leading).combined(with: .opacity))
+                }
+
+                let activeRightThreadID: String? = {
+                    if case .thread(let id) = model.destination, model.rightPanel.isOpen(for: id) {
+                        return id
+                    }
+                    return nil
+                }()
+                let isRightPanelMaximized = activeRightThreadID.map { model.rightPanel.isMaximized(for: $0) } ?? false
+
+                if !isRightPanelMaximized {
+                    ZStack(alignment: .top) {
+                        screen
+                            .id(model.destination)
+                            .swftEntrance(reduceMotion: reduceMotion)
+                            .environment(\.swftScreenHandoff, model.newThread.isHandoff(to: model.destination))
+                        // Animate the bar only when the kind of screen changes; between threads its text swaps with the screen.
+                        TopBar()
+                            .animation(SwftMotion.resolve(SwftMotion.screenSwitch, reduceMotion: reduceMotion), value: model.selectedThreadID == nil)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(SwftColor.canvas)
+                }
+
+                if let rightThreadID = activeRightThreadID {
+                    RightPanelContainerView(
+                        threadID: rightThreadID,
+                        availableWindowWidth: geo.size.width
+                    )
+                    .frame(
+                        width: isRightPanelMaximized
+                            ? nil
+                            : RightPanelLogic.clampedWidth(model.rightPanel.panelWidth, availableWindowWidth: geo.size.width)
+                    )
+                    .frame(maxWidth: isRightPanelMaximized ? .infinity : nil, maxHeight: .infinity)
+                    .transition(reduceMotion ? .opacity : .move(edge: .trailing).combined(with: .opacity))
+                }
             }
-            ZStack(alignment: .top) {
-                screen
-                    .id(model.destination)
-                    .swftEntrance(reduceMotion: reduceMotion)
-                    .environment(\.swftScreenHandoff, model.newThread.isHandoff(to: model.destination))
-                // Animate the bar only when the kind of screen changes; between threads its text swaps with the screen.
-                TopBar()
-                    .animation(SwftMotion.resolve(SwftMotion.screenSwitch, reduceMotion: reduceMotion), value: model.selectedThreadID == nil)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(SwftColor.canvas)
+            .animation(SwftMotion.resolve(SwftMotion.screen, reduceMotion: reduceMotion), value: model.sidebarVisible)
+            .animation(SwftMotion.resolve(SwftMotion.screen, reduceMotion: reduceMotion), value: model.isRightPanelOpenForActiveThread)
         }
-        .animation(SwftMotion.resolve(SwftMotion.screen, reduceMotion: reduceMotion), value: model.sidebarVisible)
         .background(SwftColor.sidebar)
         .background(WindowChrome())
         .ignoresSafeArea()
@@ -105,11 +133,12 @@ struct TopBar: View {
                 }
             }
             ToolbarPill {
-                IconButton("terminal", help: "Terminal")
-                IconButton("sidebar.right", help: "Changes")
-            }
-            ToolbarPill {
-                PillTextButton("Open", systemName: "chevron.left.forwardslash.chevron.right")
+                IconButton(
+                    "sidebar.right",
+                    help: model.rightPanel.isOpen(for: id) ? "Hide right panel (⌘⌥B)" : "Show right panel (⌘⌥B)",
+                    tint: model.rightPanel.isOpen(for: id) ? SwftColor.accent : SwftColor.textSecondary,
+                    action: model.toggleRightPanel
+                )
             }
         } else {
             ToolbarPill {
