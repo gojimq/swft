@@ -488,6 +488,14 @@ struct WorkStep: Identifiable, Hashable {
     var kind: Kind
 }
 
+/// Latest live reasoning thought summary displayed above the active tool row (matching T3 Code's `work-live`).
+struct WorkThoughtPreview: Hashable, Sendable {
+    /// Thought step identity; blur-fade transitions key on `id` so token streaming updates smoothly in place
+    /// while a new thought step blur-fades cleanly over the old one.
+    let id: String
+    let text: String
+}
+
 /// A turn's intermediate work folded into one quiet row.
 struct WorkFold: Identifiable, Hashable {
     let id: String
@@ -496,6 +504,8 @@ struct WorkFold: Identifiable, Hashable {
     var isLive: Bool
     var title: String
     var subtitle: String?
+    /// Latest live reasoning thought surfaced above the active tool row while collapsed.
+    var liveThought: WorkThoughtPreview? = nil
     var failedCount: Int
 }
 

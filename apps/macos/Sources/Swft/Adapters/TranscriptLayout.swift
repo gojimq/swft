@@ -43,12 +43,10 @@ enum TranscriptLayout {
 
     private static func fold(_ turn: [TranscriptItem], live: Bool) -> [TranscriptRow] {
         guard let first = turn.first else { return [] }
-        let answerIndex = answerIndex(in: turn, live: live)
+        let settledAnswerIndex = live ? nil : turn.indices.last {
+            if case .assistant = turn[$0].kind { true } else { false }
+        }
         let hasSubagents = turn.contains { if case .subagent = $0.kind { true } else { false } }
-        let answerStreaming: Bool = {
-            guard let answerIndex, case .assistant(_, let streaming) = turn[answerIndex].kind else { return false }
-            return streaming
-        }()
 
         var rows: [TranscriptRow] = []
         var steps: [WorkStep] = []
@@ -80,7 +78,10 @@ enum TranscriptLayout {
                 let hasBlockingApproval = rows[position...].contains {
                     if case .approval = $0 { true } else { false }
                 }
-                segmentLive = live && !answerStreaming && !hasBlockingApproval
+                let hasTrailingAnswer = rows[position...].contains {
+                    if case .assistant = $0 { true } else { false }
+                }
+                segmentLive = live && !hasBlockingApproval && !hasTrailingAnswer
             } else {
                 segmentLive = false
             }
@@ -104,9 +105,9 @@ enum TranscriptLayout {
             let fold = makeFold(
                 id: foldID,
                 steps: steps,
-                timingItems: hasSubagents ? segmentItems : turn,
+                timingItems: (hasSubagents || live) ? segmentItems : turn,
                 turn: turn,
-                answerIndex: isTail ? answerIndex : nil,
+                answerIndex: isTail ? settledAnswerIndex : nil,
                 live: segmentLive
             )
             rows.insert(.work(fold), at: position)
@@ -117,7 +118,12 @@ enum TranscriptLayout {
             case .user(let text, let attachments):
                 rows.append(.user(id: item.id, text: text, attachments: attachments))
             case .assistant(let blocks, let streaming):
-                if index == answerIndex {
+                // Match T3 Code: while a turn is live, assistant messages stay visible inline in chronological
+                // order between work groups; once settled, interim messages fold into one "Worked for …" row.
+                if live {
+                    flushWorkSegment(isTail: false)
+                    rows.append(.assistant(id: item.id, blocks: blocks, streaming: streaming))
+                } else if index == settledAnswerIndex {
                     rows.append(.assistant(id: item.id, blocks: blocks, streaming: streaming))
                 } else {
                     addStep(WorkStep(id: item.id, kind: .commentary(blocks)), item: item)
@@ -165,15 +171,6 @@ enum TranscriptLayout {
         return rows
     }
 
-    /// The assistant message that stays visible: a settled turn's last one, or a live turn's trailing one.
-    private static func answerIndex(in turn: [TranscriptItem], live: Bool) -> Int? {
-        if live {
-            guard let last = turn.indices.last, case .assistant = turn[last].kind else { return nil }
-            return last
-        }
-        return turn.indices.last { if case .assistant = turn[$0].kind { true } else { false } }
-    }
-
     // MARK: - Labels
 
     private static func makeFold(
@@ -194,6 +191,7 @@ enum TranscriptLayout {
                 isLive: true,
                 title: currentStep(steps),
                 subtitle: summaryLabel(isCurrent(steps.last) ? Array(steps.dropLast()) : steps),
+                liveThought: latestThoughtPreview(in: steps),
                 failedCount: failed
             )
         }
@@ -210,7 +208,59 @@ enum TranscriptLayout {
         } else {
             title = summary ?? "Worked"
         }
-        return WorkFold(id: id, steps: steps, isLive: false, title: title, subtitle: nil, failedCount: failed)
+        return WorkFold(
+            id: id,
+            steps: steps,
+            isLive: false,
+            title: title,
+            subtitle: nil,
+            liveThought: nil,
+            failedCount: failed
+        )
+    }
+
+    /// Returns the latest non-empty reasoning thought in `steps` for T3 Code's `work-live` thought preview.
+    static func latestThoughtPreview(in steps: [WorkStep]) -> WorkThoughtPreview? {
+        for step in steps.reversed() {
+            guard case .thought(let raw) = step.kind,
+                  let line = liveThoughtLine(from: raw)
+            else { continue }
+            return WorkThoughtPreview(id: step.id, text: line)
+        }
+        return nil
+    }
+
+    /// Extracts one clean summary line from reasoning markdown, mirroring T3 Code's `liveThoughtLine`:
+    /// uses a leading `**Bold heading**` when present; otherwise strips markdown and takes the first sentence.
+    static func liveThoughtLine(from markdown: String) -> String? {
+        let heading = leadingBoldHeading(in: markdown)
+        var text = heading ?? markdown
+        // Strip markdown links/images down to their label.
+        text = text.replacingOccurrences(of: #"!?\[([^\]]*)\]\([^)]*\)"#, with: "$1", options: .regularExpression)
+        // Strip line-leading heading / list / blockquote markers.
+        text = text.replacingOccurrences(of: #"(?m)^[ \t]*(?:#{1,6}|[-*+]|\d+\.|>)[ \t]+"#, with: "", options: .regularExpression)
+        // Strip inline code, bold, strikethrough, and emphasis markers.
+        text = text.replacingOccurrences(of: #"`+|\*\*|~~"#, with: "", options: .regularExpression)
+        text = text.replacingOccurrences(of: #"(^|[^\w*])[*_]([^*_\n]+)[*_](?![\w*])"#, with: "$1$2", options: .regularExpression)
+        text = text.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard !text.isEmpty, text != "…", text != "..." else { return nil }
+        if heading != nil { return text }
+
+        if let range = text.range(of: #"[.?!]["'”’)]?(?=\s)|[。！？]["'”’）」』]?"#, options: .regularExpression) {
+            return String(text[..<range.upperBound])
+        }
+        return text
+    }
+
+    private static func leadingBoldHeading(in markdown: String) -> String? {
+        guard let regex = try? NSRegularExpression(pattern: #"^\s*\*\*([^*\r\n]+)\*\*[ \t]*\r?(?:\n|$)"#),
+              let match = regex.firstMatch(in: markdown, range: NSRange(markdown.startIndex..., in: markdown)),
+              match.numberOfRanges > 1,
+              let range = Range(match.range(at: 1), in: markdown)
+        else { return nil }
+        return String(markdown[range])
     }
 
     /// The step the live row is narrating, which the running summary leaves out.

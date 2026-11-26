@@ -9,14 +9,31 @@ struct WorkFoldView: View {
     let onToggle: () -> Void
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var hovering = false
+    /// Kept mounted while `SwftDisclosure` collapses so the thought preview rolls closed cleanly on expand/settle.
+    @State private var retainedThought: WorkThoughtPreview?
+
+    private var showsLiveThought: Bool {
+        fold.isLive && fold.liveThought != nil && !isExpanded
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Button(action: onToggle) { header }
-                .buttonStyle(.plain)
-                .onHover { hovering = $0 }
-                .accessibilityLabel(fold.title)
-                .accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
+            Button(action: onToggle) {
+                VStack(alignment: .leading, spacing: 0) {
+                    SwftDisclosure(isExpanded: showsLiveThought) {
+                        if let thought = fold.liveThought ?? retainedThought {
+                            LiveThoughtLine(preview: thought)
+                                .padding(.bottom, 4)
+                        }
+                    }
+                    header
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .onHover { hovering = $0 }
+            .accessibilityLabel(fold.title)
+            .accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
 
             // Rolls height open and closed; the steps stay laid out at full size while the clip edge moves.
             SwftDisclosure(isExpanded: isExpanded) {
@@ -33,6 +50,16 @@ struct WorkFoldView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .onAppear {
+            if let thought = fold.liveThought {
+                retainedThought = thought
+            }
+        }
+        .onChange(of: fold.liveThought) { _, next in
+            if let next {
+                retainedThought = next
+            }
+        }
         .animation(SwftMotion.resolve(SwftMotion.quick, reduceMotion: reduceMotion), value: hovering)
     }
 
@@ -47,7 +74,7 @@ struct WorkFoldView: View {
                             .foregroundStyle(SwftColor.textSecondary)
                             .lineLimit(1)
                             .truncationMode(.middle)
-                            .contentTransition(.interpolate)
+                            .swftBlurSwap(fold.title, alignment: .leading, blurRadius: 2.5)
                         chevron
                     }
                     if let subtitle = fold.subtitle {
@@ -56,7 +83,6 @@ struct WorkFoldView: View {
                 }
             }
             .padding(.vertical, 2)
-            .contentShape(Rectangle())
         } else {
             HStack(spacing: 5) {
                 Text(fold.title)
@@ -69,7 +95,6 @@ struct WorkFoldView: View {
                 chevron
             }
             .frame(height: 24)
-            .contentShape(Rectangle())
         }
     }
 
@@ -92,6 +117,31 @@ struct WorkFoldView: View {
             .rotationEffect(.degrees(isExpanded ? 90 : 0))
             .animation(SwftMotion.resolve(SwftMotion.disclosure, reduceMotion: reduceMotion), value: isExpanded)
             .opacity(fold.isLive && !hovering && !isExpanded ? 0 : 1)
+    }
+}
+
+/// Latest live reasoning thought above the active tool row, matching T3 Code's `work-live` layout.
+/// Keys its blur-fade swap on `preview.id` so each new thought blur-fades cleanly over the previous one.
+private struct LiveThoughtLine: View {
+    let preview: WorkThoughtPreview
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Image(systemName: "brain")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(SwftColor.textTertiary)
+                .frame(width: 12, height: 12)
+                .alignmentGuide(.firstTextBaseline) { $0[.bottom] - 1 }
+            Text(preview.text)
+                .font(SwftType.label)
+                .foregroundStyle(SwftColor.textTertiary)
+                .lineSpacing(2)
+                .lineLimit(2)
+                .truncationMode(.tail)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .fixedSize(horizontal: false, vertical: true)
+                .swftBlurSwap(preview.id, alignment: .topLeading)
+        }
     }
 }
 
@@ -151,7 +201,7 @@ private struct WorkStepRow: View {
                 }
             }
         case .thought(let text):
-            Text(text)
+            Text(MarkdownProse.inline(text, style: .body))
                 .font(SwftType.label)
                 .foregroundStyle(SwftColor.textTertiary)
                 .lineSpacing(2)

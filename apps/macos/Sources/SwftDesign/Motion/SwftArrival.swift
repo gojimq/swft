@@ -11,8 +11,26 @@ extension SwftMotion {
     public static let dock = Animation.spring(response: 0.5, dampingFraction: 0.88)
     /// Text replacing text in place (a generated thread title arriving).
     public static let titleSwap = Animation.easeInOut(duration: 0.34)
+    /// Simple blur-fade swap for live thinking and activity updates replacing earlier text in place.
+    public static let blurSwapIn = Animation.easeInOut(duration: 0.26)
+    public static let blurSwapOut = Animation.easeOut(duration: 0.14)
+    public static let blurSwapDelay: Double = 0.05
+    public static let blurSwapRadius: CGFloat = 3.5
     /// A soft background glow blooming in.
     public static let bloom = Animation.easeOut(duration: 0.8)
+}
+
+/// Pure motion helpers for `swftBlurSwap`, kept separate for unit testing.
+public enum SwftBlurSwapLogic {
+    /// Blur radius applied during swap transitions (always 0 under Reduce Motion).
+    public static func activeBlurRadius(_ radius: CGFloat, reduceMotion: Bool) -> CGFloat {
+        reduceMotion ? 0 : max(0, radius)
+    }
+
+    /// Delay before incoming text starts fading in over the outgoing text (always 0 under Reduce Motion).
+    public static func insertionDelay(reduceMotion: Bool) -> Double {
+        reduceMotion ? 0 : SwftMotion.blurSwapDelay
+    }
 }
 
 /// Where a staged element goes when it departs.
@@ -66,6 +84,16 @@ extension View {
     /// Crossfades text in place when `value` changes.
     public func swftTitleSwap<Value: Hashable>(_ value: Value) -> some View {
         modifier(SwftTitleSwap(value: value))
+    }
+
+    /// Blur-fades new content cleanly over previous content whenever `value` changes.
+    /// Under Reduce Motion it falls back to a crisp opacity crossfade with zero blur.
+    public func swftBlurSwap<Value: Hashable>(
+        _ value: Value,
+        alignment: Alignment = .topLeading,
+        blurRadius: CGFloat = SwftMotion.blurSwapRadius
+    ) -> some View {
+        modifier(SwftBlurSwap(value: value, alignment: alignment, blurRadius: blurRadius))
     }
 
     /// One-shot bloom for a soft background glow: it swells in from slightly smaller on appear, and fades away while
@@ -132,6 +160,33 @@ private struct SwftTitleSwap<Value: Hashable>: ViewModifier {
 private struct SoftBlur: ViewModifier {
     let radius: CGFloat
     func body(content: Content) -> some View { content.blur(radius: radius) }
+}
+
+private struct SwftBlurSwap<Value: Hashable>: ViewModifier {
+    let value: Value
+    let alignment: Alignment
+    let blurRadius: CGFloat
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func body(content: Content) -> some View {
+        let radius = SwftBlurSwapLogic.activeBlurRadius(blurRadius, reduceMotion: reduceMotion)
+        let transition: AnyTransition = radius > 0
+            ? .opacity.combined(with: .modifier(active: SoftBlur(radius: radius), identity: SoftBlur(radius: 0)))
+            : .opacity
+        let inAnimation = SwftMotion.resolve(SwftMotion.blurSwapIn, reduceMotion: reduceMotion)
+            .delay(SwftBlurSwapLogic.insertionDelay(reduceMotion: reduceMotion))
+        let outAnimation = SwftMotion.resolve(SwftMotion.blurSwapOut, reduceMotion: reduceMotion)
+
+        ZStack(alignment: alignment) {
+            content
+                .id(value)
+                .transition(.asymmetric(
+                    insertion: transition.animation(inAnimation),
+                    removal: transition.animation(outAnimation)
+                ))
+        }
+        .animation(SwftMotion.resolve(SwftMotion.blurSwapIn, reduceMotion: reduceMotion), value: value)
+    }
 }
 
 private struct SwftBloom: ViewModifier {
