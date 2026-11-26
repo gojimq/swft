@@ -1714,15 +1714,31 @@ final class AppModel {
 
     /// One loader per thread and environment, reused across renders so the environment value stays stable.
     func imageLoader(forThreadID id: String) -> SwftImageLoader {
+        imageLoader(forThreadID: id, environmentID: nil)
+    }
+
+    func imageLoader(forThreadID id: String, environmentID: String?) -> SwftImageLoader {
         if isMock {
             return ThreadImageLoading.loader(threadID: id, environmentID: "mock", connection: nil)
         }
-        let owner = owningEnvironment(forThreadID: id)
+        let owner = environmentID.flatMap { environmentRegistry.environment(id: $0) }
+            ?? owningEnvironment(forThreadID: id)
         let key = "\(owner?.id ?? "local"):\(id)"
         if let cached = imageLoaders[key] { return cached }
         let loader = ThreadImageLoading.loader(threadID: id, environmentID: owner?.id, connection: owner?.connection ?? connection)
         imageLoaders[key] = loader
         return loader
+    }
+
+    func cachedProjection(for threadID: String) -> ThreadProjection? {
+        if activeThreadStore?.threadId == threadID, let projection = activeThreadStore?.projection {
+            return projection
+        }
+        return recentProjections.projection(for: threadID)
+    }
+
+    func rememberProjection(_ projection: ThreadProjection?) {
+        recentProjections.remember(projection)
     }
 
     func attach(_ sources: [AttachmentSource]) {

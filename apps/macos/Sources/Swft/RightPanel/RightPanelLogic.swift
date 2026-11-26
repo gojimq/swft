@@ -112,6 +112,46 @@ struct SideChatTabState: Equatable, Hashable, Sendable {
     }
 }
 
+struct SubagentTabState: Equatable, Hashable, Sendable {
+    var subagentThreadId: String
+    var environmentId: String?
+    var title: String
+    var status: SubagentStatus
+    var modelLabel: String?
+    var providerDisplayName: String?
+    var providerDriver: String?
+    var providerInstanceId: String?
+    var providerIconUrl: String?
+    var prompt: String?
+    var workspaceLabel: String?
+
+    init(
+        subagentThreadId: String,
+        environmentId: String? = nil,
+        title: String = "",
+        status: SubagentStatus = .idle,
+        modelLabel: String? = nil,
+        providerDisplayName: String? = nil,
+        providerDriver: String? = nil,
+        providerInstanceId: String? = nil,
+        providerIconUrl: String? = nil,
+        prompt: String? = nil,
+        workspaceLabel: String? = nil
+    ) {
+        self.subagentThreadId = subagentThreadId
+        self.environmentId = environmentId
+        self.title = title
+        self.status = status
+        self.modelLabel = modelLabel
+        self.providerDisplayName = providerDisplayName
+        self.providerDriver = providerDriver
+        self.providerInstanceId = providerInstanceId
+        self.providerIconUrl = providerIconUrl
+        self.prompt = prompt
+        self.workspaceLabel = workspaceLabel
+    }
+}
+
 enum RightPanelTabPayload: Equatable, Hashable, Sendable {
     case launcher
     case browser(BrowserTabState)
@@ -119,6 +159,7 @@ enum RightPanelTabPayload: Equatable, Hashable, Sendable {
     case linkedItems
     case device(DeviceTabState)
     case sideChat(SideChatTabState)
+    case subagent(SubagentTabState)
 
     var surfaceKind: RightPanelSurfaceKind? {
         switch self {
@@ -128,6 +169,7 @@ enum RightPanelTabPayload: Equatable, Hashable, Sendable {
         case .linkedItems: .linkedItems
         case .device: .device
         case .sideChat: .sideChat
+        case .subagent: nil
         }
     }
 }
@@ -161,6 +203,9 @@ struct RightPanelTab: Identifiable, Equatable, Hashable, Sendable {
                 return title
             }
             return "Side chat"
+        case .subagent(let state):
+            let trimmed = state.title.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? "Subagent" : trimmed
         }
     }
 
@@ -178,6 +223,8 @@ struct RightPanelTab: Identifiable, Equatable, Hashable, Sendable {
             return state.platform?.symbolName ?? "iphone"
         case .sideChat:
             return "bubble.left.and.bubble.right"
+        case .subagent:
+            return "cpu"
         }
     }
 }
@@ -536,5 +583,54 @@ enum RightPanelLogic {
             return ParsedPullRequestURL(host: host, repository: repo, number: number, url: url.absoluteString)
         }
         return nil
+    }
+
+    // MARK: Subagent Tab Presentation
+
+    /// Resolves the live tab status dot tone for a `.subagent` tab from its live `ThreadStore` state and status.
+    static func subagentStatusDotTone(
+        status: SubagentStatus,
+        hasPendingApprovals: Bool = false,
+        isLiveRunning: Bool = false
+    ) -> RightPanelStatusBadge.Tone? {
+        if hasPendingApprovals { return .warning }
+        if isLiveRunning { return .accent }
+        switch status {
+        case .pending, .running:
+            return .accent
+        case .waiting:
+            return .warning
+        case .completed:
+            return .success
+        case .failed:
+            return .danger
+        case .idle, .cancelled, .interrupted, .unknown:
+            return nil
+        }
+    }
+
+    static func statusDotColor(for tone: RightPanelStatusBadge.Tone) -> Color {
+        switch tone {
+        case .accent: SwftColor.accent
+        case .warning: SwftColor.warning
+        case .success: SwftColor.success
+        case .danger: SwftColor.danger
+        case .merged: RightPanelColor.merged
+        case .neutral: SwftColor.textTertiary
+        }
+    }
+
+    static func subagentStatus(from runStatus: RunStatus) -> SubagentStatus {
+        switch runStatus {
+        case .preparing, .queued, .starting: .pending
+        case .running: .running
+        case .waiting: .waiting
+        case .completed: .completed
+        case .failed: .failed
+        case .cancelled: .cancelled
+        case .interrupted: .interrupted
+        case .rolledBack: .idle
+        case .unknown(let raw): SubagentStatus(rawValue: raw)
+        }
     }
 }

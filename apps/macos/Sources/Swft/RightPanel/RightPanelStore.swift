@@ -12,8 +12,14 @@ final class RightPanelStore {
 
     /// Live `ThreadStore` instances for active side-chat tabs (keyed by side thread ID).
     private(set) var sideChatStores: [String: ThreadStore] = [:]
+    /// Live `ThreadStore` instances for active subagent tabs (keyed by subagent thread ID).
+    private(set) var subagentStores: [String: ThreadStore] = [:]
     /// Optimistic user messages sent in a side chat before server echo.
     var pendingSideChatMessages: [String: [PendingUserMessage]] = [:]
+    /// Optimistic user messages sent to a subagent tab before server echo.
+    var pendingSubagentMessages: [String: [PendingUserMessage]] = [:]
+    /// Optimistic approval resolutions inside a subagent tab before server echo.
+    var optimisticSubagentApprovals: [String: [String: ApprovalItem.Status]] = [:]
     /// Pending draft prompt seeded into a side-chat tab (e.g. from `/side <prompt>`).
     var pendingSideChatDrafts: [String: String] = [:]
 
@@ -22,9 +28,16 @@ final class RightPanelStore {
     }
     /// Mock-mode transcripts keyed by side-chat tab/thread ID.
     var mockSideChatItems: [String: [TranscriptItem]] = [:]
+    /// Mock-mode detail overrides keyed by subagent thread ID (for interactive follow-ups and approvals).
+    var mockSubagentDetails: [String: ThreadDetailState] = [:]
     /// Mock-mode linked PR/issue overrides keyed by thread ID so unlinking/linking updates immediately in mock mode.
     var mockLinkedPRsByThreadID: [String: [ThreadPullRequestLink]] = [:]
     var mockLinkedIssuesByThreadID: [String: [ThreadIssueLink]] = [:]
+
+    /// Mounted `SubagentSurfaceView` tab IDs holding an active subscription per subagent thread ID.
+    @ObservationIgnored private var activeSubagentHolders: [String: Set<String>] = [:]
+    /// Recently detached/closed subagent projections so switching tabs back renders immediately.
+    @ObservationIgnored private var recentSubagentProjections = RecentProjections()
 
     // MARK: - Queries
 
@@ -332,6 +345,61 @@ final class RightPanelStore {
         return tab
     }
 
+    @discardableResult
+    func openSubagentTab(
+        _ state: SubagentTabState,
+        for parentThreadID: String
+    ) -> RightPanelTab {
+        var current = self.state(for: parentThreadID)
+        current.isOpen = true
+
+        if let existingIndex = current.tabs.firstIndex(where: { tab in
+            if case .subagent(let existing) = tab.payload {
+                return existing.subagentThreadId == state.subagentThreadId
+                    && existing.environmentId == state.environmentId
+            }
+            return false
+        }) {
+            if case .subagent(let existing) = current.tabs[existingIndex].payload {
+                let merged = Self.mergedSubagentState(existing: existing, incoming: state)
+                current.tabs[existingIndex].payload = .subagent(merged)
+            }
+            current.activeTabID = current.tabs[existingIndex].id
+            byThreadID[parentThreadID] = current
+            return current.tabs[existingIndex]
+        }
+
+        let envKey = state.environmentId ?? "local"
+        let tab = RightPanelTab(
+            id: "subagent:\(envKey):\(state.subagentThreadId)",
+            payload: .subagent(state)
+        )
+        if current.tabs.count == 1 && current.tabs[0].payload == .launcher {
+            current.tabs[0] = tab
+        } else {
+            current.tabs.append(tab)
+        }
+        current.activeTabID = tab.id
+        byThreadID[parentThreadID] = current
+        return tab
+    }
+
+    func subagentTabState(
+        subagentThreadId: String,
+        environmentId: String?,
+        for parentThreadID: String
+    ) -> SubagentTabState? {
+        for tab in tabs(for: parentThreadID) {
+            if case .subagent(let state) = tab.payload,
+               state.subagentThreadId == subagentThreadId,
+               state.environmentId == environmentId
+            {
+                return state
+            }
+        }
+        return nil
+    }
+
     func activateTab(_ tabID: String, for threadID: String) {
         var current = state(for: threadID)
         guard current.tabs.contains(where: { $0.id == tabID }) else { return }
@@ -461,7 +529,120 @@ final class RightPanelStore {
         }
     }
 
-    // MARK: - Side Chat ThreadStore Lifecycle
+    func updateSubagentTab(
+        tabID: String,
+        title: String? = nil,
+        status: SubagentStatus? = nil,
+        modelLabel: String? = nil,
+        workspaceLabel: String? = nil,
+        for parentThreadID: String
+    ) {
+        guard var current = byThreadID[parentThreadID],
+              let index = current.tabs.firstIndex(where: { $0.id == tabID }),
+              case .subagent(var subagent) = current.tabs[index].payload
+        else { return }
+
+        let previous = subagent
+        if let title = title?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty {
+            subagent.title = title
+        }
+        if let status {
+            subagent.status = status
+        }
+        if let modelLabel = modelLabel?.trimmingCharacters(in: .whitespacesAndNewlines), !modelLabel.isEmpty {
+            subagent.modelLabel = modelLabel
+        }
+        if let workspaceLabel = workspaceLabel?.trimmingCharacters(in: .whitespacesAndNewlines), !workspaceLabel.isEmpty {
+            subagent.workspaceLabel = workspaceLabel
+        }
+
+        guard subagent != previous else { return }
+        current.tabs[index].payload = .subagent(subagent)
+        byThreadID[parentThreadID] = current
+    }
+
+    /// Refreshes open `.subagent` tabs on `parentThreadID` whenever the parent thread's inline subagents update.
+    func syncSubagentTabs(
+        from subagents: [SubagentItem],
+        parentEnvironmentID: String?,
+        for parentThreadID: String
+    ) {
+        guard var current = byThreadID[parentThreadID], !subagents.isEmpty else { return }
+        let hasSubagentTab = current.tabs.contains {
+            if case .subagent = $0.payload { return true }
+            return false
+        }
+        guard hasSubagentTab else { return }
+
+        struct Key: Hashable {
+            let threadID: String
+            let environmentID: String?
+        }
+
+        var itemsByKey: [Key: SubagentItem] = [:]
+        var itemsByThreadID: [String: SubagentItem] = [:]
+        for item in subagents {
+            if let childID = item.childThreadID?.trimmingCharacters(in: .whitespacesAndNewlines), !childID.isEmpty {
+                itemsByKey[Key(threadID: childID, environmentID: parentEnvironmentID)] = item
+                itemsByThreadID[childID] = item
+            }
+            if let remoteID = item.remoteThreadID?.trimmingCharacters(in: .whitespacesAndNewlines), !remoteID.isEmpty {
+                let remoteEnv = item.remoteEnvironmentID?.trimmingCharacters(in: .whitespacesAndNewlines)
+                itemsByKey[Key(threadID: remoteID, environmentID: remoteEnv)] = item
+                itemsByThreadID[remoteID] = itemsByThreadID[remoteID] ?? item
+            }
+        }
+
+        var changed = false
+        for index in current.tabs.indices {
+            guard case .subagent(var tabState) = current.tabs[index].payload else { continue }
+            let matched = itemsByKey[Key(threadID: tabState.subagentThreadId, environmentID: tabState.environmentId)]
+                ?? itemsByThreadID[tabState.subagentThreadId]
+            guard let item = matched else { continue }
+
+            let previous = tabState
+            let trimmedTitle = item.title.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmedTitle.isEmpty {
+                tabState.title = trimmedTitle
+            }
+            if subagentStores[tabState.subagentThreadId]?.isRunning != true {
+                tabState.status = item.status
+            }
+            if let modelName = item.modelName, !modelName.isEmpty {
+                tabState.modelLabel = modelName
+            }
+            if let providerName = item.providerDisplayName, !providerName.isEmpty {
+                tabState.providerDisplayName = providerName
+            }
+            if !item.providerDriver.isEmpty {
+                tabState.providerDriver = item.providerDriver
+            }
+            if !item.providerInstanceID.isEmpty {
+                tabState.providerInstanceId = item.providerInstanceID
+            }
+            if let iconURL = item.providerIconURL, !iconURL.isEmpty {
+                tabState.providerIconUrl = iconURL
+            }
+            let trimmedPrompt = item.prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmedPrompt.isEmpty {
+                tabState.prompt = trimmedPrompt
+            }
+            if let workspace = item.workspaceLabel, !workspace.isEmpty {
+                tabState.workspaceLabel = workspace
+            }
+
+            if tabState != previous {
+                current.tabs[index].payload = .subagent(tabState)
+                changed = true
+            }
+        }
+
+        if changed {
+            byThreadID[parentThreadID] = current
+        }
+    }
+
+    // MARK: - Side Chat & Subagent ThreadStore Lifecycle
 
     func ensureSideChatStore(
         sideThreadId: String,
@@ -482,15 +663,100 @@ final class RightPanelStore {
         pendingSideChatMessages.removeValue(forKey: sideThreadId)
     }
 
+    func cachedSubagentProjection(for subagentThreadId: String) -> ThreadProjection? {
+        subagentStores[subagentThreadId]?.projection
+            ?? recentSubagentProjections.projection(for: subagentThreadId)
+    }
+
+    @discardableResult
+    func ensureSubagentStore(
+        subagentThreadId: String,
+        connection: ServerConnection,
+        initialProjection: ThreadProjection? = nil,
+        holderTabID: String? = nil
+    ) -> ThreadStore {
+        if let holderTabID {
+            activeSubagentHolders[subagentThreadId, default: []].insert(holderTabID)
+        }
+        if let existing = subagentStores[subagentThreadId], existing.connection === connection {
+            return existing
+        }
+        if let previous = subagentStores[subagentThreadId] {
+            recentSubagentProjections.remember(previous.projection)
+            previous.stop()
+        }
+        let seed = initialProjection ?? recentSubagentProjections.projection(for: subagentThreadId)
+        let store = ThreadStore(
+            connection: connection,
+            threadId: subagentThreadId,
+            initialProjection: seed
+        )
+        subagentStores[subagentThreadId] = store
+        store.start()
+        return store
+    }
+
+    /// Detaches a mounted `SubagentSurfaceView` holder when switching tabs or hiding the panel,
+    /// stopping the underlying `ThreadStore` subscription once no active view holds it while caching its projection.
+    func releaseSubagentStore(subagentThreadId: String, holderTabID: String) {
+        activeSubagentHolders[subagentThreadId]?.remove(holderTabID)
+        if activeSubagentHolders[subagentThreadId]?.isEmpty != false {
+            activeSubagentHolders.removeValue(forKey: subagentThreadId)
+            if let store = subagentStores.removeValue(forKey: subagentThreadId) {
+                recentSubagentProjections.remember(store.projection)
+                store.stop()
+            }
+        }
+    }
+
+    func stopSubagentStore(subagentThreadId: String) {
+        activeSubagentHolders.removeValue(forKey: subagentThreadId)
+        if let store = subagentStores.removeValue(forKey: subagentThreadId) {
+            recentSubagentProjections.remember(store.projection)
+            store.stop()
+        }
+        pendingSubagentMessages.removeValue(forKey: subagentThreadId)
+        optimisticSubagentApprovals.removeValue(forKey: subagentThreadId)
+    }
+
     func shutdown() {
         for store in sideChatStores.values {
             store.stop()
         }
         sideChatStores.removeAll()
         pendingSideChatMessages.removeAll()
+
+        for store in subagentStores.values {
+            store.stop()
+        }
+        subagentStores.removeAll()
+        activeSubagentHolders.removeAll()
+        pendingSubagentMessages.removeAll()
+        optimisticSubagentApprovals.removeAll()
+        recentSubagentProjections = RecentProjections()
     }
 
     // MARK: - Private Helpers
+
+    private static func mergedSubagentState(
+        existing: SubagentTabState,
+        incoming: SubagentTabState
+    ) -> SubagentTabState {
+        let trimmedTitle = incoming.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        return SubagentTabState(
+            subagentThreadId: existing.subagentThreadId,
+            environmentId: existing.environmentId,
+            title: trimmedTitle.isEmpty ? existing.title : trimmedTitle,
+            status: incoming.status,
+            modelLabel: incoming.modelLabel ?? existing.modelLabel,
+            providerDisplayName: incoming.providerDisplayName ?? existing.providerDisplayName,
+            providerDriver: incoming.providerDriver ?? existing.providerDriver,
+            providerInstanceId: incoming.providerInstanceId ?? existing.providerInstanceId,
+            providerIconUrl: incoming.providerIconUrl ?? existing.providerIconUrl,
+            prompt: incoming.prompt ?? existing.prompt,
+            workspaceLabel: incoming.workspaceLabel ?? existing.workspaceLabel
+        )
+    }
 
     private func insertOrReplaceLauncher(
         _ current: inout ThreadRightPanelState,
@@ -527,12 +793,25 @@ final class RightPanelStore {
             if case .sideChat(let state) = tab.payload { return state.sideThreadId }
             return nil
         })
+        let remainingSubagentIDs: Set<String> = Set(remainingTabs.compactMap { tab in
+            if case .subagent(let state) = tab.payload { return state.subagentThreadId }
+            return nil
+        })
         for tab in removed {
-            if case .sideChat(let state) = tab.payload,
-               let sideThreadId = state.sideThreadId,
-               !remainingSideChatIDs.contains(sideThreadId)
-            {
-                stopSideChatStore(sideThreadId: sideThreadId)
+            switch tab.payload {
+            case .sideChat(let state):
+                if let sideThreadId = state.sideThreadId,
+                   !remainingSideChatIDs.contains(sideThreadId)
+                {
+                    stopSideChatStore(sideThreadId: sideThreadId)
+                }
+            case .subagent(let state):
+                activeSubagentHolders[state.subagentThreadId]?.remove(tab.id)
+                if !remainingSubagentIDs.contains(state.subagentThreadId) {
+                    stopSubagentStore(subagentThreadId: state.subagentThreadId)
+                }
+            default:
+                break
             }
         }
     }

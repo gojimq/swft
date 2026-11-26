@@ -280,7 +280,9 @@ struct SideChatSurfaceView: View {
                     }
                 },
                 onOpenThread: { target in
-                    model.openSubagentThread(target, fromThreadID: sideThreadId ?? threadID)
+                    withAnimation(SwftMotion.resolve(SwftMotion.screen, reduceMotion: reduceMotion)) {
+                        _ = model.openSubagentInRightPanel(target, item: subagent, for: threadID)
+                    }
                 }
             )
             .equatable()

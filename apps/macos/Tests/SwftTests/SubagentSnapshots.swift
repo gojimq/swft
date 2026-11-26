@@ -35,6 +35,41 @@ struct SubagentSnapshots {
     }
 
     @Test(arguments: ["light", "dark"])
+    func subagentInRightSidebarTabs(appearance: String) throws {
+        let model = AppModel.mock()
+        let parentID = MockData.subagentsDetail.summary.id
+        model.destination = .thread(parentID)
+        model.expandedSubagentRows = ["subagent-group:sa-group-1"]
+        _ = model.openSubagentInRightPanel(
+            SubagentNavigationTarget(
+                threadID: "t4-sub-ui",
+                environmentID: nil,
+                title: "Reconnect Fixer",
+                provider: .codex,
+                providerDriver: "codex",
+                providerDisplayName: "Codex",
+                providerIconURL: nil,
+                isRemoteLinked: false
+            ),
+            for: parentID
+        )
+        _ = model.openSubagentInRightPanel(
+            SubagentNavigationTarget(
+                threadID: "t4-sub-research",
+                environmentID: nil,
+                title: "Codebase Researcher",
+                provider: .claude,
+                providerDriver: "claudeAgent",
+                providerDisplayName: "Claude",
+                providerIconURL: nil,
+                isRemoteLinked: false
+            ),
+            for: parentID
+        )
+        try Self.capture(model, appearance: appearance, name: "subagents-right-sidebar-\(appearance)")
+    }
+
+    @Test(arguments: ["light", "dark"])
     func subagentTranscriptCards(appearance: String) throws {
         let turns = SendFlightLogic.turns(from: MockData.subagentsDetail.rows)
         let pinnedClock = MockData.ago(30).addingTimeInterval(95)

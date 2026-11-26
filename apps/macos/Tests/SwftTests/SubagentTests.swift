@@ -456,6 +456,155 @@ struct SubagentTests {
         #expect(model.destination == .thread(parentID))
     }
 
+    @Test @MainActor func openingSubagentInRightPanelKeepsParentDestinationAndReusesTabs() {
+        let model = AppModel.mock()
+        let parentID = MockData.subagentsDetail.summary.id
+        model.open(parentID)
+        #expect(!model.rightPanel.isOpen(for: parentID))
+
+        let firstTarget = SubagentNavigationTarget(
+            threadID: "t4-sub-research",
+            environmentID: nil,
+            title: "Codebase Researcher",
+            provider: .claude,
+            providerDriver: "claudeAgent",
+            providerDisplayName: "Claude",
+            providerIconURL: nil,
+            isRemoteLinked: false
+        )
+        let firstTab = model.openSubagentInRightPanel(firstTarget, for: parentID)
+        #expect(firstTab != nil)
+        // Main chat view stays on the parent thread while the right panel opens.
+        #expect(model.destination == .thread(parentID))
+        #expect(model.rightPanel.isOpen(for: parentID))
+        #expect(model.rightPanel.tabs(for: parentID).count == 1)
+        #expect(model.rightPanel.activeTab(for: parentID)?.id == firstTab?.id)
+        if case .subagent(let state) = model.rightPanel.activeTab(for: parentID)?.payload {
+            #expect(state.subagentThreadId == "t4-sub-research")
+            #expect(state.title == "Codebase Researcher")
+            #expect(state.status == .completed)
+            #expect(state.modelLabel == "Opus 5.5")
+            #expect(state.workspaceLabel == "swft/reconnect-audit")
+        } else {
+            Issue.record("Expected .subagent payload enriched from parent detail")
+        }
+
+        // Opening a second subagent adds a second tab alongside the first.
+        let secondTarget = SubagentNavigationTarget(
+            threadID: "t4-sub-ui",
+            environmentID: nil,
+            title: "Reconnect Fixer",
+            provider: .codex,
+            providerDriver: "codex",
+            providerDisplayName: "Codex",
+            providerIconURL: nil,
+            isRemoteLinked: false
+        )
+        let secondTab = model.openSubagentInRightPanel(secondTarget, for: parentID)
+        #expect(model.destination == .thread(parentID))
+        #expect(model.rightPanel.tabs(for: parentID).count == 2)
+        #expect(model.rightPanel.activeTab(for: parentID)?.id == secondTab?.id)
+
+        // Re-clicking the first subagent activates its existing tab instead of creating a duplicate.
+        let reactivated = model.openSubagentInRightPanel(firstTarget, for: parentID)
+        #expect(reactivated?.id == firstTab?.id)
+        #expect(model.rightPanel.tabs(for: parentID).count == 2)
+        #expect(model.rightPanel.activeTab(for: parentID)?.id == firstTab?.id)
+
+        // Closing one tab preserves the other.
+        model.rightPanel.closeTab(firstTab!.id, for: parentID)
+        #expect(model.rightPanel.tabs(for: parentID).map(\.id) == [secondTab!.id])
+        #expect(model.rightPanel.activeTab(for: parentID)?.id == secondTab?.id)
+
+        // Inline row help text reflects opening in the right sidebar.
+        let rowItem = SubagentItem(
+            id: "sa-help",
+            title: "Codebase Researcher",
+            provider: .claude,
+            status: .completed,
+            childThreadID: "t4-sub-research"
+        )
+        let rowModel = SubagentSingleRowView.makeRowModel(for: rowItem, target: firstTarget)
+        #expect(rowModel.helpText.contains("Click to open subagent in right sidebar"))
+    }
+
+    @Test @MainActor func openingRemoteSubagentInRightPanelPreservesRemoteEnvironmentRouting() {
+        let localConn = ServerConnection(httpBaseURL: URL(string: "http://127.0.0.1:3773")!, credential: .bootstrapToken("local"))
+        let remoteConn = ServerConnection(httpBaseURL: URL(string: "https://studio.example.ts.net")!, credential: .bearerToken("remote"))
+        let localStore = ThreadsStore(connection: localConn)
+        let remoteStore = ThreadsStore(connection: remoteConn)
+
+        let remoteProject = ProjectShell(id: "proj-remote", title: "ML Runner", workspaceRoot: "/code/ml", createdAt: t0, updatedAt: t0)
+        let parentShell = ThreadShell(
+            id: "thr-remote-parent",
+            projectId: "proj-remote",
+            title: "Optimize kernels",
+            providerInstanceId: "claudeAgent",
+            modelSelection: ModelSelection(instanceId: "claudeAgent", model: "opus"),
+            createdAt: t0,
+            updatedAt: t0
+        )
+        remoteStore.apply(.snapshot(
+            ShellSnapshot(snapshotSequence: 1, projects: [remoteProject], threads: [parentShell]),
+            resolvedRepositoryIdentityRoots: nil
+        ))
+
+        let model = AppModel.testingLive(localStore: localStore)
+        let localEnv = ManagedEnvironment(
+            id: "env-local",
+            isLocal: true,
+            httpBaseURL: URL(string: "http://127.0.0.1:3773")!,
+            connection: localConn,
+            threadsStore: localStore,
+            lastKnownLabel: "This Mac"
+        )
+        let remoteEnv = ManagedEnvironment(
+            id: "env-studio",
+            isLocal: false,
+            httpBaseURL: URL(string: "https://studio.example.ts.net")!,
+            connection: remoteConn,
+            threadsStore: remoteStore,
+            lastKnownLabel: "Mac Studio"
+        )
+        model.environmentRegistry.insertEnvironmentForTesting(localEnv)
+        model.environmentRegistry.insertEnvironmentForTesting(remoteEnv)
+
+        model.open("thr-remote-parent")
+        #expect(model.destination == .thread("thr-remote-parent"))
+
+        let subagent = SubagentItem(
+            id: "item-sub-remote",
+            title: "Kernel Profiler",
+            provider: .codex,
+            providerDriver: "codex",
+            providerDisplayName: "Codex",
+            modelName: "GPT-6.1",
+            status: .running,
+            childThreadID: "thr-remote-child-99",
+            worktreeBranch: "perf/kernels"
+        )
+        let target = SubagentDisplayLogic.navigationTarget(
+            for: subagent,
+            parentEnvironmentID: model.activeThreadEnvironmentID,
+            knownEnvironmentIDs: model.knownEnvironmentIDs
+        )!
+
+        let openedTab = model.openSubagentInRightPanel(target, item: subagent, for: "thr-remote-parent")
+        #expect(openedTab != nil)
+        #expect(model.destination == .thread("thr-remote-parent"))
+        #expect(model.rightPanel.isOpen(for: "thr-remote-parent"))
+        if case .subagent(let tabState) = openedTab?.payload {
+            #expect(tabState.subagentThreadId == "thr-remote-child-99")
+            #expect(tabState.environmentId == "env-studio")
+            #expect(tabState.status == .running)
+            #expect(tabState.workspaceLabel == "perf/kernels")
+            #expect(model.connection(forEnvironmentID: tabState.environmentId, fallbackThreadID: "thr-remote-parent") === remoteConn)
+            #expect(model.threadsStore(forEnvironmentID: tabState.environmentId, fallbackThreadID: "thr-remote-parent") === remoteStore)
+        } else {
+            Issue.record("Expected remote .subagent tab payload")
+        }
+    }
+
     // MARK: - SendFlightTurnSection Equatable Stability
 
     @Test @MainActor func sendFlightTurnSectionEquatablePreservesStabilityWithSubagents() {
