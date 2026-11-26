@@ -125,6 +125,7 @@ Most code changes do not need an internal documentation change. Agents can read 
 ## Swft macOS dev build workflow
 
 - Keep `/Applications/Swft.app` (the official standalone release using `~/Library/Application Support/Swft`) separate from the dev build at `/Users/jim/Projects/Swft-integration/apps/macos/build/Swft.app`. Never confuse the two.
+- **macOS ↔ iOS feature parity:** Keep [SWFT_FEATURE_PARITY.md](docs/SWFT_FEATURE_PARITY.md) updated whenever adding, changing, or merging a user-facing feature in `apps/macos` or `apps/ios` (update its status cell and keep the parity-gap backlog accurate).
 - At the end of every turn (primary agent only; delegated subagents do not launch GUI apps), check whether `/Users/jim/Projects/Swft-integration/apps/macos/build/Swft.app/Contents/MacOS/Swft` is running. If it is not open, launch it isolated from the main app:
   ```bash
   open -n \
