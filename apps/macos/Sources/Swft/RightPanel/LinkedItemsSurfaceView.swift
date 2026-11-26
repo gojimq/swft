@@ -67,35 +67,42 @@ struct LinkedItemsSurfaceView: View {
                 }
             } else {
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 18) {
+                    VStack(alignment: .leading, spacing: 22) {
                         if !pullRequests.isEmpty {
-                            sectionHeader("Pull requests", count: pullRequests.count)
-                            VStack(spacing: 6) {
-                                ForEach(pullRequests) { link in
-                                    pullRequestRow(link)
+                            VStack(alignment: .leading, spacing: 8) {
+                                sectionHeader("Pull requests", count: pullRequests.count)
+                                VStack(spacing: 6) {
+                                    ForEach(pullRequests) { link in
+                                        pullRequestRow(link)
+                                    }
                                 }
                             }
                         }
 
                         if !issues.isEmpty {
-                            sectionHeader("Issues", count: issues.count)
-                            VStack(spacing: 6) {
-                                ForEach(issues) { issue in
-                                    issueRow(issue)
+                            VStack(alignment: .leading, spacing: 8) {
+                                sectionHeader("Issues", count: issues.count)
+                                VStack(spacing: 6) {
+                                    ForEach(issues) { issue in
+                                        issueRow(issue)
+                                    }
                                 }
                             }
                         }
 
                         if !relatedThreads.isEmpty {
-                            sectionHeader("Related threads", count: relatedThreads.count)
-                            VStack(spacing: 6) {
-                                ForEach(relatedThreads) { related in
-                                    relatedThreadRow(related)
+                            VStack(alignment: .leading, spacing: 8) {
+                                sectionHeader("Related threads", count: relatedThreads.count)
+                                VStack(spacing: 6) {
+                                    ForEach(relatedThreads) { related in
+                                        relatedThreadRow(related)
+                                    }
                                 }
                             }
                         }
                     }
-                    .padding(14)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 16)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
@@ -120,21 +127,9 @@ struct LinkedItemsSurfaceView: View {
                 ProgressView().controlSize(.mini)
             }
 
-            Button {
+            RightPanelPillButton("Link PR", systemName: "plus") {
                 showingLinkPRPopover = true
-            } label: {
-                HStack(spacing: 4) {
-                    Image(systemName: "plus")
-                        .font(.system(size: 10, weight: .semibold))
-                    Text("Link PR")
-                        .font(SwftType.caption)
-                }
-                .foregroundStyle(SwftColor.textSecondary)
-                .padding(.horizontal, 8)
-                .frame(height: 24)
-                .background(RoundedRectangle(cornerRadius: 6).fill(SwftColor.surfaceMuted))
             }
-            .buttonStyle(.plain)
             .popover(isPresented: $showingLinkPRPopover, arrowEdge: .bottom) {
                 linkPRPopover
             }
@@ -143,9 +138,7 @@ struct LinkedItemsSurfaceView: View {
                 Task { await loadThreadFamily() }
             }
         }
-        .padding(.horizontal, 10)
-        .frame(height: RightPanelMetrics.subHeaderHeight)
-        .background(SwftColor.surface)
+        .rightPanelSubHeader()
     }
 
     private var linkPRPopover: some View {
@@ -181,18 +174,7 @@ struct LinkedItemsSurfaceView: View {
     }
 
     private func sectionHeader(_ title: String, count: Int) -> some View {
-        HStack(spacing: 6) {
-            Text(title.uppercased())
-                .font(SwftType.micro)
-                .foregroundStyle(SwftColor.textTertiary)
-            Text("\(count)")
-                .font(SwftType.micro)
-                .monospacedDigit()
-                .foregroundStyle(SwftColor.textTertiary)
-                .padding(.horizontal, 5)
-                .padding(.vertical, 1)
-                .background(Capsule().fill(SwftColor.surfaceMuted))
-        }
+        RightPanelSectionHeader(title, count: count)
     }
 
     // MARK: - Pull Request Row
@@ -205,7 +187,7 @@ struct LinkedItemsSurfaceView: View {
             HStack(alignment: .top, spacing: 8) {
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 6) {
-                        Text("#\(link.number)")
+                        Text("#" + String(link.number))
                             .font(SwftType.monoSmall)
                             .foregroundStyle(SwftColor.textTertiary)
                         RightPanelStatusBadge(badge.label, icon: badge.icon, tone: badge.tone)
@@ -226,11 +208,11 @@ struct LinkedItemsSurfaceView: View {
                         .font(SwftType.captionStrong)
                         .foregroundStyle(SwftColor.textPrimary)
                         .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
 
-                Spacer(minLength: 4)
-
-                Menu {
+                RightPanelOverflowMenu {
                     Button {
                         model.rightPanel.openBrowser(
                             urlString: link.url,
@@ -259,14 +241,7 @@ struct LinkedItemsSurfaceView: View {
                     } label: {
                         Label("Unlink from thread", systemImage: "link.badge.minus")
                     }
-                } label: {
-                    Image(systemName: "ellipsis")
-                        .font(.system(size: 12))
-                        .foregroundStyle(SwftColor.textTertiary)
-                        .frame(width: 22, height: 22)
                 }
-                .menuStyle(.borderlessButton)
-                .fixedSize()
             }
 
             HStack(spacing: 8) {
@@ -297,16 +272,9 @@ struct LinkedItemsSurfaceView: View {
                 }
             }
         }
-        .padding(10)
-        .background(
-            RoundedRectangle(cornerRadius: SwftRadius.s, style: .continuous)
-                .fill(SwftColor.surface)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: SwftRadius.s, style: .continuous)
-                .strokeBorder(SwftColor.borderSubtle, lineWidth: 1)
-        )
-        .contentShape(RoundedRectangle(cornerRadius: SwftRadius.s, style: .continuous))
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .rightPanelCard()
         .onTapGesture {
             model.rightPanel.openBrowser(
                 urlString: link.url,
@@ -330,21 +298,21 @@ struct LinkedItemsSurfaceView: View {
                     Text(issue.displayKey)
                         .font(SwftType.monoSmall)
                         .foregroundStyle(SwftColor.textSecondary)
-                    RightPanelStatusBadge(issue.tracker.capitalized, tone: .neutral)
+                    RightPanelStatusBadge(RightPanelLogic.trackerDisplayName(issue.tracker), tone: .neutral)
                 }
                 Text(issue.title)
                     .font(SwftType.captionStrong)
                     .foregroundStyle(SwftColor.textPrimary)
                     .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
                 Text(issue.scope)
                     .font(.system(size: 10.5, design: .monospaced))
                     .foregroundStyle(SwftColor.textTertiary)
                     .lineLimit(1)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
 
-            Spacer(minLength: 4)
-
-            Menu {
+            RightPanelOverflowMenu {
                 Button {
                     model.rightPanel.openBrowser(
                         urlString: issue.url,
@@ -373,25 +341,11 @@ struct LinkedItemsSurfaceView: View {
                 } label: {
                     Label("Unlink from thread", systemImage: "link.badge.minus")
                 }
-            } label: {
-                Image(systemName: "ellipsis")
-                    .font(.system(size: 12))
-                    .foregroundStyle(SwftColor.textTertiary)
-                    .frame(width: 22, height: 22)
             }
-            .menuStyle(.borderlessButton)
-            .fixedSize()
         }
-        .padding(10)
-        .background(
-            RoundedRectangle(cornerRadius: SwftRadius.s, style: .continuous)
-                .fill(SwftColor.surface)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: SwftRadius.s, style: .continuous)
-                .strokeBorder(SwftColor.borderSubtle, lineWidth: 1)
-        )
-        .contentShape(RoundedRectangle(cornerRadius: SwftRadius.s, style: .continuous))
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .rightPanelCard()
         .onTapGesture {
             model.rightPanel.openBrowser(
                 urlString: issue.url,
@@ -452,16 +406,9 @@ struct LinkedItemsSurfaceView: View {
                 }
             }
         }
-        .padding(10)
-        .background(
-            RoundedRectangle(cornerRadius: SwftRadius.s, style: .continuous)
-                .fill(SwftColor.surface)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: SwftRadius.s, style: .continuous)
-                .strokeBorder(SwftColor.borderSubtle, lineWidth: 1)
-        )
-        .contentShape(RoundedRectangle(cornerRadius: SwftRadius.s, style: .continuous))
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .rightPanelCard()
         .onTapGesture {
             if item.relation == .sideChat || item.relation == .subagent {
                 model.rightPanel.openSideChat(

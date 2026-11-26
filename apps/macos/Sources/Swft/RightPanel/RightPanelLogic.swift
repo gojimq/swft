@@ -26,11 +26,11 @@ enum RightPanelSurfaceKind: String, CaseIterable, Hashable, Sendable, Identifiab
 
     var subtitle: String {
         switch self {
-        case .browser: "Browse local dev servers or web pages"
-        case .files: "Browse workspace folders and inspect files"
+        case .browser: "Preview dev servers and web pages"
+        case .files: "Browse and read workspace files"
         case .linkedItems: "Pull requests, issues, and related threads"
-        case .device: "Watch an iOS Simulator or Android Emulator"
-        case .sideChat: "Ask a side question while this thread keeps working"
+        case .device: "Stream an iOS Simulator or Android Emulator"
+        case .sideChat: "Ask aside without interrupting this thread"
         }
     }
 
@@ -360,6 +360,17 @@ enum RightPanelLogic {
     }
 
     // MARK: Files Tree & Classification
+
+    /// Brand-cased issue tracker names ("github" → "GitHub"); unknown trackers fall back to capitalized.
+    static func trackerDisplayName(_ tracker: String) -> String {
+        switch tracker.lowercased() {
+        case "github": "GitHub"
+        case "gitlab": "GitLab"
+        case "linear": "Linear"
+        case "jira": "Jira"
+        default: tracker.capitalized
+        }
+    }
 
     static func fileName(from path: String) -> String {
         let cleaned = path.hasSuffix("/") ? String(path.dropLast()) : path

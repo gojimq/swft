@@ -136,17 +136,24 @@ struct DeviceSurfaceView: View {
                     screenshotImage = nil
                     deviceDetail = nil
                 } label: {
-                    HStack(spacing: 4) {
+                    HStack(spacing: 3) {
                         Image(systemName: "chevron.left")
                             .font(.system(size: 10, weight: .semibold))
                         Text("Devices")
                             .font(SwftType.caption)
                     }
                     .foregroundStyle(SwftColor.textSecondary)
+                    .padding(.horizontal, 8)
+                    .frame(height: 26)
+                    .contentShape(Capsule())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(HoverFillStyle(shape: Capsule()))
+                .help("Back to device list")
 
-                Divider().frame(height: 14)
+                Rectangle()
+                    .fill(SwftColor.border)
+                    .frame(width: 1, height: 14)
+                    .padding(.horizontal, 2)
 
                 Image(systemName: device.platform.symbolName)
                     .font(.system(size: 11.5))
@@ -192,9 +199,7 @@ struct DeviceSurfaceView: View {
                 }
             }
         }
-        .padding(.horizontal, 10)
-        .frame(height: RightPanelMetrics.subHeaderHeight)
-        .background(SwftColor.surface)
+        .rightPanelSubHeader()
     }
 
     // MARK: - Setup State
@@ -232,7 +237,7 @@ struct DeviceSurfaceView: View {
                 }
             } else {
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 14) {
+                    VStack(alignment: .leading, spacing: 22) {
                         let booting = state.bootingDevices.filter { $0.threadId == threadID }
                         if !booting.isEmpty {
                             HStack(spacing: 8) {
@@ -259,10 +264,8 @@ struct DeviceSurfaceView: View {
                                 if lhs.booted != rhs.booted { return lhs.booted }
                                 return lhs.name.localizedStandardCompare(rhs.name) == .orderedAscending
                             }
-                            VStack(alignment: .leading, spacing: 6) {
-                                Text((hostLookup[hostId] ?? hostId).uppercased())
-                                    .font(SwftType.micro)
-                                    .foregroundStyle(SwftColor.textTertiary)
+                            VStack(alignment: .leading, spacing: 8) {
+                                RightPanelSectionHeader(hostLookup[hostId] ?? hostId, count: devices.count)
                                 ForEach(devices, id: \.compositeKey) { device in
                                     deviceRow(device)
                                 }
@@ -306,22 +309,15 @@ struct DeviceSurfaceView: View {
                 }
             }
 
-            Button(device.booted ? "Open" : "Boot") {
+            RightPanelPillButton(device.booted ? "Open" : "Boot", prominent: device.booted) {
                 Task { await openDevice(device) }
             }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
             .disabled(isBusyAction)
         }
-        .padding(10)
-        .background(
-            RoundedRectangle(cornerRadius: SwftRadius.s, style: .continuous)
-                .fill(SwftColor.surface)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: SwftRadius.s, style: .continuous)
-                .strokeBorder(SwftColor.borderSubtle, lineWidth: 1)
-        )
+        .padding(.leading, 10)
+        .padding(.trailing, 8)
+        .padding(.vertical, 9)
+        .rightPanelCard(interactive: false)
     }
 
     // MARK: - Live Device Viewport
@@ -343,8 +339,8 @@ struct DeviceSurfaceView: View {
                     }
                 }
                 .padding(.horizontal, 12)
-                .padding(.vertical, 5)
-                .background(SwftColor.surface.opacity(0.6))
+                .frame(height: 30)
+                .background(SwftColor.canvas)
                 Divider().overlay(SwftColor.borderSubtle)
             }
 
@@ -367,21 +363,19 @@ struct DeviceSurfaceView: View {
                         let aspect = screenshotImage.size.height > 0
                             ? screenshotImage.size.width / screenshotImage.size.height
                             : 9.0 / 19.5
-                        let maxW = max(160, geo.size.width - 32)
-                        let maxH = max(200, geo.size.height - 28)
+                        let bezel: CGFloat = 7
+                        let maxW = max(160, geo.size.width - 40 - bezel * 2)
+                        let maxH = max(200, geo.size.height - 40 - bezel * 2)
                         let fittedWidth = min(maxW, maxH * aspect)
                         let fittedHeight = fittedWidth / aspect
+                        // Phones get rounder display corners than tablets.
+                        let screenRadius = min(fittedWidth, fittedHeight) * (aspect < 0.7 ? 0.11 : 0.05)
 
                         Image(nsImage: screenshotImage)
                             .resizable()
                             .aspectRatio(contentMode: .fit)
                             .frame(width: fittedWidth, height: fittedHeight)
-                            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                    .strokeBorder(SwftColor.border, lineWidth: 1.5)
-                            )
-                            .shadow(color: SwftColor.shadow, radius: 12, y: 4)
+                            .clipShape(RoundedRectangle(cornerRadius: screenRadius, style: .continuous))
                             .contentShape(Rectangle())
                             .onTapGesture { location in
                                 let nx = Double(location.x / max(1, fittedWidth))
@@ -391,6 +385,16 @@ struct DeviceSurfaceView: View {
                                 }
                             }
                             .help("Click anywhere on screen to tap")
+                            .padding(bezel)
+                            .background(
+                                RoundedRectangle(cornerRadius: screenRadius + bezel, style: .continuous)
+                                    .fill(RightPanelColor.deviceBezel)
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: screenRadius + bezel, style: .continuous)
+                                    .strokeBorder(Color.white.opacity(0.09), lineWidth: 1)
+                            )
+                            .shadow(color: SwftColor.shadow, radius: 18, y: 6)
                     } else {
                         VStack(spacing: 8) {
                             ProgressView().controlSize(.small)
@@ -410,7 +414,7 @@ struct DeviceSurfaceView: View {
     }
 
     private func actionToolbar(device: DeviceSummary, hubBasePath: String) -> some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 2) {
             IconButton("camera", help: "Capture screenshot now", size: 28) {
                 Task { await captureScreenshot(for: device, hubBasePath: hubBasePath) }
             }
@@ -466,8 +470,8 @@ struct DeviceSurfaceView: View {
             .disabled(isBusyAction)
         }
         .padding(.horizontal, 10)
-        .frame(height: 38)
-        .background(SwftColor.surface)
+        .frame(height: 42)
+        .background(SwftColor.canvas)
     }
 
     private func deviceInputPopover(device: DeviceSummary, hubBasePath: String) -> some View {

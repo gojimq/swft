@@ -97,7 +97,7 @@ struct FilesSurfaceView: View {
                 "sidebar.left",
                 help: showTreeSidebar ? "Hide file tree" : "Show file tree",
                 size: 26,
-                tint: showTreeSidebar ? SwftColor.accent : SwftColor.textSecondary
+                tint: showTreeSidebar ? SwftColor.textPrimary : SwftColor.textTertiary
             ) {
                 showTreeSidebar.toggle()
             }
@@ -149,9 +149,7 @@ struct FilesSurfaceView: View {
                 }
             }
         }
-        .padding(.horizontal, 8)
-        .frame(height: RightPanelMetrics.subHeaderHeight)
-        .background(SwftColor.surface)
+        .rightPanelSubHeader()
     }
 
     // MARK: - Tree Column
@@ -178,10 +176,10 @@ struct FilesSurfaceView: View {
                     .buttonStyle(.plain)
                 }
             }
-            .padding(.horizontal, 8)
+            .padding(.horizontal, 9)
             .frame(height: 28)
-            .background(SwftColor.surfaceMuted.opacity(0.7))
-            .clipShape(RoundedRectangle(cornerRadius: SwftRadius.xs, style: .continuous))
+            .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(SwftColor.surface))
+            .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(SwftColor.borderSubtle, lineWidth: 1))
             .padding(8)
 
             Divider().overlay(SwftColor.borderSubtle)
@@ -220,7 +218,7 @@ struct FilesSurfaceView: View {
                 }
             }
         }
-        .background(SwftColor.sidebar.opacity(0.45))
+        .background(SwftColor.sidebar.opacity(0.4))
     }
 
     private func fileTreeRowButton(_ row: FileTreeRow, cwd: String) -> some View {
@@ -260,9 +258,9 @@ struct FilesSurfaceView: View {
                     ProgressView().controlSize(.mini)
                 }
             }
-            .padding(.leading, CGFloat(row.depth) * 12 + 6)
+            .padding(.leading, CGFloat(row.depth) * 14 + 4)
             .padding(.trailing, 6)
-            .frame(height: 24)
+            .frame(height: 26)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
@@ -420,22 +418,23 @@ struct FilesSurfaceView: View {
                         }
                         .buttonStyle(.plain)
                     }
-                    .padding(.horizontal, 8)
+                    .padding(.leading, 9)
+                    .padding(.trailing, 4)
                     .frame(height: 24)
                     .background(
-                        RoundedRectangle(cornerRadius: 6, style: .continuous)
-                            .fill(isActive ? SwftColor.surfaceRaised : SwftColor.surfaceMuted.opacity(0.6))
+                        RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            .fill(isActive ? SwftColor.surface : .clear)
                     )
                     .overlay(
-                        RoundedRectangle(cornerRadius: 6, style: .continuous)
-                            .strokeBorder(isActive ? SwftColor.borderSubtle : .clear, lineWidth: 1)
+                        RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            .strokeBorder(isActive ? SwftColor.border : .clear, lineWidth: 1)
                     )
                 }
             }
             .padding(.horizontal, 8)
-            .padding(.vertical, 5)
+            .padding(.vertical, 6)
         }
-        .background(SwftColor.surface)
+        .background(SwftColor.canvas)
     }
 
     private func textFileViewer(_ result: ProjectReadFileResult) -> some View {
@@ -469,7 +468,11 @@ struct FilesSurfaceView: View {
                     .frame(width: 130)
                 }
 
-                Button {
+                RightPanelPillButton(
+                    copiedFeedback ? "Copied" : "Copy",
+                    systemName: copiedFeedback ? "checkmark" : "doc.on.doc",
+                    tint: copiedFeedback ? SwftColor.success : nil
+                ) {
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(result.contents, forType: .string)
                     copiedFeedback = true
@@ -477,23 +480,11 @@ struct FilesSurfaceView: View {
                         try? await Task.sleep(for: .seconds(1.4))
                         copiedFeedback = false
                     }
-                } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: copiedFeedback ? "checkmark" : "doc.on.doc")
-                            .font(.system(size: 10.5))
-                        Text(copiedFeedback ? "Copied" : "Copy")
-                            .font(SwftType.caption)
-                    }
-                    .foregroundStyle(copiedFeedback ? SwftColor.success : SwftColor.textSecondary)
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 3)
-                    .background(RoundedRectangle(cornerRadius: 6).fill(SwftColor.surfaceMuted))
                 }
-                .buttonStyle(.plain)
             }
             .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .background(SwftColor.surface.opacity(0.75))
+            .frame(height: 36)
+            .background(SwftColor.canvas)
 
             Divider().overlay(SwftColor.borderSubtle)
 
@@ -528,7 +519,7 @@ struct FilesSurfaceView: View {
             LazyVStack(alignment: .leading, spacing: 0) {
                 ForEach(Array(lines.enumerated()), id: \.offset) { index, line in
                     HStack(alignment: .top, spacing: 10) {
-                        Text("\(index + 1)")
+                        Text(String(index + 1))
                             .font(SwftType.monoSmall)
                             .monospacedDigit()
                             .foregroundStyle(SwftColor.textTertiary.opacity(0.7))
@@ -538,15 +529,16 @@ struct FilesSurfaceView: View {
                         Text(line.isEmpty ? " " : line)
                             .font(SwftType.monoSmall)
                             .foregroundStyle(SwftColor.textPrimary)
+                            .fixedSize(horizontal: true, vertical: false)
                             .textSelection(.enabled)
                     }
-                    .padding(.vertical, 1)
+                    .frame(height: 19)
                 }
             }
             .padding(.vertical, 10)
-            .padding(.trailing, 16)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.trailing, 20)
         }
+        .defaultScrollAnchor(.topLeading)
         .background(SwftColor.codeBackground)
     }
 
@@ -560,8 +552,8 @@ struct FilesSurfaceView: View {
                 Spacer()
             }
             .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .background(SwftColor.surface.opacity(0.75))
+            .frame(height: 36)
+            .background(SwftColor.canvas)
 
             Divider().overlay(SwftColor.borderSubtle)
 

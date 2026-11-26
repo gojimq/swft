@@ -12,6 +12,8 @@ struct SideChatSurfaceView: View {
     @State private var isCreating = false
     @State private var isSending = false
     @State private var errorMessage: String?
+    @FocusState private var composerFocused: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var sideThreadId: String? { sideChatState.sideThreadId }
 
@@ -127,7 +129,6 @@ struct SideChatSurfaceView: View {
                 }
             } else {
                 transcriptScrollArea
-                Divider().overlay(SwftColor.borderSubtle)
                 compactComposer
             }
         }
@@ -154,7 +155,7 @@ struct SideChatSurfaceView: View {
                 if let badge = modelBadgeText {
                     HStack(spacing: 5) {
                         Text(badge)
-                            .font(.system(size: 10.5))
+                            .font(.system(size: 11))
                             .foregroundStyle(SwftColor.textTertiary)
                             .lineLimit(1)
                         if isRunning {
@@ -182,9 +183,7 @@ struct SideChatSurfaceView: View {
                 }
             }
         }
-        .padding(.horizontal, 10)
-        .frame(height: RightPanelMetrics.subHeaderHeight + 4)
-        .background(SwftColor.surface)
+        .rightPanelSubHeader()
     }
 
     // MARK: - Transcript
@@ -217,7 +216,8 @@ struct SideChatSurfaceView: View {
                             .id("side-chat-running")
                         }
                     }
-                    .padding(14)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 16)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
@@ -263,7 +263,7 @@ struct SideChatSurfaceView: View {
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 5)
-            .background(RoundedRectangle(cornerRadius: 6).fill(SwftColor.surfaceMuted.opacity(0.65)))
+            .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(SwftColor.surfaceMuted))
         case .approval(let approval):
             ApprovalCard(
                 title: approval.title,
@@ -298,56 +298,58 @@ struct SideChatSurfaceView: View {
     // MARK: - Compact Composer
 
     private var compactComposer: some View {
-        HStack(alignment: .bottom, spacing: 8) {
+        let canSend = !draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isSending
+        let sendState: SendButton.State = isRunning ? .stop : (canSend ? .ready : .idle)
+        let shape = RoundedRectangle(cornerRadius: 20, style: .continuous)
+
+        return HStack(alignment: .bottom, spacing: 8) {
             TextField("Ask a side question…", text: $draftText, axis: .vertical)
                 .textFieldStyle(.plain)
                 .font(SwftType.label)
                 .foregroundStyle(SwftColor.textPrimary)
-                .lineLimit(1...5)
+                .lineLimit(1...6)
+                .focused($composerFocused)
                 .onSubmit {
                     Task { await sendSideChatMessage() }
                 }
-                .padding(.horizontal, 10)
                 .padding(.vertical, 7)
-                .background(
-                    RoundedRectangle(cornerRadius: SwftRadius.m, style: .continuous)
-                        .fill(SwftColor.surfaceMuted)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: SwftRadius.m, style: .continuous)
-                        .strokeBorder(SwftColor.borderSubtle, lineWidth: 1)
-                )
+                .padding(.leading, 6)
 
-            if isRunning {
-                Button {
-                    Task { await stopSideChatRun() }
-                } label: {
-                    Image(systemName: "stop.fill")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(SwftColor.onSend)
-                        .frame(width: 30, height: 30)
-                        .background(Circle().fill(SwftColor.danger))
+            // Mirrors the main composer's `SendButton` look without its ⌘↩ shortcut, which belongs to the main thread.
+            Button {
+                Task {
+                    if isRunning {
+                        await stopSideChatRun()
+                    } else {
+                        await sendSideChatMessage()
+                    }
                 }
-                .buttonStyle(.plain)
-                .help("Stop side chat")
-            } else {
-                let canSend = !draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isSending
-                Button {
-                    Task { await sendSideChatMessage() }
-                } label: {
-                    Image(systemName: "arrow.up")
-                        .font(.system(size: 12.5, weight: .semibold))
-                        .foregroundStyle(canSend ? SwftColor.onSend : SwftColor.textTertiary)
-                        .frame(width: 30, height: 30)
-                        .background(Circle().fill(canSend ? SwftColor.sendFill : SwftColor.sendFillIdle))
-                }
-                .buttonStyle(.plain)
-                .disabled(!canSend)
-                .help("Send message")
+            } label: {
+                Image(systemName: isRunning ? "stop.fill" : "arrow.up")
+                    .font(.system(size: isRunning ? 9.5 : 12, weight: .semibold))
+                    .contentTransition(.symbolEffect(.replace))
+                    .foregroundStyle(ComposerPolish.sendIconColor(for: sendState))
+                    .frame(width: 28, height: 28)
+                    .background(Circle().fill(ComposerPolish.sendFill(for: sendState)))
+                    .contentShape(Circle())
             }
+            .buttonStyle(HoverFillStyle(shape: Circle(), pressScale: 0.9))
+            .disabled(sendState == .idle)
+            .animation(SwftMotion.resolve(SwftMotion.pop, reduceMotion: reduceMotion), value: sendState)
+            .help(isRunning ? "Stop side chat" : "Send message")
         }
-        .padding(10)
-        .background(SwftColor.surface)
+        .padding(.leading, 10)
+        .padding(.trailing, 6)
+        .padding(.vertical, 6)
+        .background(shape.fill(SwftColor.surface).shadow(color: SwftColor.shadow, radius: 10, y: 3))
+        .overlay(shape.strokeBorder(composerFocused ? SwftColor.border : SwftColor.borderSubtle, lineWidth: 1))
+        .contentShape(shape)
+        .onTapGesture { composerFocused = true }
+        .animation(SwftMotion.resolve(SwftMotion.quick, reduceMotion: reduceMotion), value: composerFocused)
+        .padding(.horizontal, 12)
+        .padding(.top, 6)
+        .padding(.bottom, 12)
+        .background(SwftColor.canvas)
     }
 
     // MARK: - Actions & RPCs

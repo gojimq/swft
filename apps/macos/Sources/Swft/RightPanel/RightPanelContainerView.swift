@@ -5,6 +5,7 @@ import SwiftUI
 
 struct RightPanelContainerView: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let threadID: String
     let availableWindowWidth: CGFloat
 
@@ -16,35 +17,109 @@ struct RightPanelContainerView: View {
         panelState.activeTab
     }
 
-    var body: some View {
-        HStack(spacing: 0) {
-            if !panelState.isMaximized {
-                RightPanelResizeHandle { delta in
-                    model.rightPanel.adjustWidth(by: delta, availableWindowWidth: availableWindowWidth)
-                }
-            }
+    @State private var dragStartWidth: CGFloat?
 
-            VStack(spacing: 0) {
-                tabBar
-                Divider().overlay(SwftColor.borderSubtle)
-                surfaceBody
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
-            .background(SwftColor.canvas)
+    var body: some View {
+        VStack(spacing: 0) {
+            tabBar
+                .zIndex(1)
+            Rectangle().fill(SwftColor.borderSubtle).frame(height: 1)
+                .zIndex(1)
+            // Surfaces paint `.background(canvas)`, which extends into the toolbar's top safe area; clip it so
+            // it can never wash over the tab bar sitting in that titlebar band.
+            surfaceBody
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .clipped()
         }
+        .background(SwftColor.canvas)
         .frame(maxHeight: .infinity)
+        .overlay(alignment: .leading) {
+            if !panelState.isMaximized {
+                Rectangle().fill(SwftColor.borderSubtle).frame(width: 1)
+                    .allowsHitTesting(false)
+                // Straddles the split edge without taking layout width, so no gutter shows between columns.
+                RightPanelResizeHandle { travel in
+                    let start = dragStartWidth
+                        ?? RightPanelLogic.clampedWidth(model.rightPanel.panelWidth, availableWindowWidth: availableWindowWidth)
+                    dragStartWidth = start
+                    model.rightPanel.setWidth(start + travel, availableWindowWidth: availableWindowWidth)
+                } onDragEnded: {
+                    dragStartWidth = nil
+                }
+                .offset(x: -RightPanelMetrics.resizeHandleHitWidth / 2)
+            }
+        }
     }
 
     // MARK: - Top Tab Bar
 
     private var tabBar: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: 6) {
             if panelState.isMaximized && !model.sidebarVisible {
-                Color.clear.frame(width: 76, height: 1)
-                IconButton("sidebar.left", help: "Show sidebar", size: 26, action: model.toggleSidebar)
+                // Leave room for the traffic lights, mirroring `TopBar`.
+                Color.clear.frame(width: 68, height: 1)
+                IconButton("sidebar.left", help: "Show sidebar", size: 28, action: model.toggleSidebar)
             }
+
+            tabStrip
+
+            HStack(spacing: 0) {
+                IconButton("plus", help: "Open a surface", size: 28) {
+                    _ = model.rightPanel.openLauncherTab(for: threadID)
+                }
+
+                Menu {
+                    ForEach(RightPanelSurfaceKind.allCases) { kind in
+                        Button {
+                            model.rightPanel.openSurface(kind, for: threadID)
+                        } label: {
+                            Label(kind.title, systemImage: kind.iconName)
+                        }
+                        .disabled(!surfaceAvailability(kind).available)
+                    }
+                } label: {
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(SwftColor.textTertiary)
+                        .frame(width: 16, height: 28)
+                        .contentShape(Rectangle())
+                }
+                .menuStyle(.button)
+                .buttonStyle(.plain)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .help("Open a surface in a new tab")
+            }
+
+            Rectangle()
+                .fill(SwftColor.border)
+                .frame(width: 1, height: 16)
+                .padding(.horizontal, 2)
+
+            HStack(spacing: 0) {
+                IconButton(
+                    panelState.isMaximized ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right",
+                    help: panelState.isMaximized ? "Restore split view" : "Expand right panel",
+                    size: 28
+                ) {
+                    model.rightPanel.toggleMaximized(for: threadID)
+                }
+
+                IconButton("xmark", help: "Close right panel (⌘⌥B)", size: 28) {
+                    model.rightPanel.closePanel(for: threadID)
+                }
+            }
+        }
+        .padding(.leading, 8)
+        .padding(.trailing, 10)
+        .frame(height: RightPanelMetrics.tabBarHeight)
+        .background(SwftColor.canvas)
+    }
+
+    private var tabStrip: some View {
+        ScrollViewReader { proxy in
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 3) {
+                HStack(spacing: 2) {
                     ForEach(panelState.tabs) { tab in
                         RightPanelTabButton(
                             icon: tab.iconName,
@@ -58,18 +133,19 @@ struct RightPanelContainerView: View {
                                 closeTab(tab)
                             }
                         )
+                        .id(tab.id)
                         .contextMenu {
-                            Button("Close") {
+                            Button("Close Tab") {
                                 closeTab(tab)
                             }
-                            Button("Close Others") {
+                            Button("Close Other Tabs") {
                                 let removed = panelState.tabs.filter { $0.id != tab.id }
                                 removed.forEach(releaseBrowserControllerIfNeeded)
                                 model.rightPanel.closeOtherTabs(keeping: tab.id, for: threadID)
                             }
                             .disabled(panelState.tabs.count <= 1)
                             Divider()
-                            Button("Close All", role: .destructive) {
+                            Button("Close All Tabs", role: .destructive) {
                                 panelState.tabs.forEach(releaseBrowserControllerIfNeeded)
                                 model.rightPanel.closeAllTabs(for: threadID)
                             }
@@ -77,54 +153,26 @@ struct RightPanelContainerView: View {
                     }
                 }
                 .padding(.vertical, 6)
+                .padding(.horizontal, 2)
             }
-
-            HStack(spacing: 2) {
-                IconButton("plus", help: "Open a surface", size: 26) {
-                    model.rightPanel.openLauncherTab(for: threadID)
+            // Soft edges so a clipped tab fades out instead of being cut against the buttons.
+            .mask {
+                HStack(spacing: 0) {
+                    LinearGradient(colors: [.clear, .black], startPoint: .leading, endPoint: .trailing).frame(width: 10)
+                    Color.black
+                    LinearGradient(colors: [.black, .clear], startPoint: .leading, endPoint: .trailing).frame(width: 14)
                 }
-
-                Menu {
-                    ForEach(RightPanelSurfaceKind.allCases) { kind in
-                        let availability = surfaceAvailability(kind)
-                        Button {
-                            model.rightPanel.openSurface(kind, for: threadID)
-                        } label: {
-                            Label("\(kind.title)  (\(kind.shortcutKey))", systemImage: kind.iconName)
-                        }
-                        .disabled(!availability.available)
-                    }
-                } label: {
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: 9.5, weight: .semibold))
-                        .foregroundStyle(SwftColor.textTertiary)
-                        .frame(width: 18, height: 26)
-                }
-                .menuStyle(.borderlessButton)
-                .menuIndicator(.hidden)
-                .fixedSize()
-                .help("Quick open a surface")
             }
-
-            Spacer(minLength: 4)
-
-            HStack(spacing: 2) {
-                IconButton(
-                    panelState.isMaximized ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right",
-                    help: panelState.isMaximized ? "Restore split width" : "Expand right panel",
-                    size: 26
-                ) {
-                    model.rightPanel.toggleMaximized(for: threadID)
-                }
-
-                IconButton("xmark", help: "Close right panel (⌘⌥B)", size: 26) {
-                    model.rightPanel.closePanel(for: threadID)
+            .onAppear {
+                if let id = activeTab?.id { proxy.scrollTo(id) }
+            }
+            .onChange(of: activeTab?.id) { _, id in
+                guard let id else { return }
+                withAnimation(SwftMotion.resolve(SwftMotion.standard, reduceMotion: reduceMotion)) {
+                    proxy.scrollTo(id)
                 }
             }
         }
-        .padding(.horizontal, 8)
-        .frame(height: RightPanelMetrics.tabBarHeight)
-        .background(SwftColor.sidebar.opacity(0.65))
     }
 
     // MARK: - Surface Content Router
@@ -166,13 +214,20 @@ struct RightPanelContainerView: View {
 
     private func surfaceAvailability(_ kind: RightPanelSurfaceKind) -> (available: Bool, disabledReason: String?) {
         switch kind {
-        case .browser, .linkedItems, .device, .sideChat:
+        case .browser, .linkedItems, .device:
             return (true, nil)
         case .files:
             if model.workspaceRoot(forThreadID: threadID) != nil {
                 return (true, nil)
             }
-            return (false, "Available when a project is attached to this thread.")
+            return (false, "Attach a project to browse its files")
+        case .sideChat:
+            // Side chats fork from the thread's latest stable point, so they need a first message to fork from.
+            let hasMessage = model.detail(for: threadID)?.items.contains {
+                if case .user = $0.kind { return true }
+                return false
+            } ?? false
+            return hasMessage ? (true, nil) : (false, "Send a first message to fork a side chat")
         }
     }
 
@@ -210,36 +265,46 @@ struct RightPanelLauncherView: View {
     @State private var monitorToken = UUID()
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: 12) {
-                Text("Open a surface")
-                    .font(SwftType.labelStrong)
-                    .foregroundStyle(SwftColor.textPrimary)
-                    .padding(.bottom, 2)
+        GeometryReader { geo in
+            ScrollView {
+                VStack(spacing: 18) {
+                    VStack(spacing: 4) {
+                        Text("Open a surface")
+                            .font(SwftType.headline)
+                            .foregroundStyle(SwftColor.textPrimary)
+                        Text("Pick one below or press its key")
+                            .font(SwftType.caption)
+                            .foregroundStyle(SwftColor.textTertiary)
+                    }
 
-                VStack(spacing: 3) {
-                    ForEach(RightPanelSurfaceKind.allCases) { kind in
-                        let status = availability(kind)
-                        RightPanelSurfaceLauncherRow(
-                            icon: kind.iconName,
-                            title: kind.title,
-                            subtitle: kind.subtitle,
-                            shortcut: kind.shortcutKey,
-                            isAvailable: status.available,
-                            disabledReason: status.disabledReason
-                        ) {
-                            model.rightPanel.openSurface(
-                                kind,
-                                for: threadID,
-                                replacingLauncherTabID: replacingLauncherTabID
-                            )
+                    VStack(spacing: 2) {
+                        ForEach(RightPanelSurfaceKind.allCases) { kind in
+                            let status = availability(kind)
+                            RightPanelSurfaceLauncherRow(
+                                icon: kind.iconName,
+                                title: kind.title,
+                                subtitle: kind.subtitle,
+                                shortcut: kind.shortcutKey,
+                                isAvailable: status.available,
+                                disabledReason: status.disabledReason
+                            ) {
+                                model.rightPanel.openSurface(
+                                    kind,
+                                    for: threadID,
+                                    replacingLauncherTabID: replacingLauncherTabID
+                                )
+                            }
                         }
                     }
                 }
+                .frame(maxWidth: RightPanelMetrics.launcherWidth)
+                .padding(.horizontal, 20)
+                .padding(.vertical, 28)
+                .frame(maxWidth: .infinity)
+                // Sit slightly above center: optical center reads calmer than geometric center.
+                .frame(minHeight: geo.size.height * 0.86)
             }
-            .frame(maxWidth: 310)
-            .padding(24)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .scrollBounceBehavior(.basedOnSize)
         }
         .onAppear {
             RightPanelShortcutRouter.activate(token: monitorToken) { key, hasModifiers in

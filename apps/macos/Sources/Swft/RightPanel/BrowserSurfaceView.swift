@@ -178,6 +178,7 @@ struct BrowserSurfaceView: View {
     @State private var statusBanner: String?
     @State private var didSeedInitialURL = false
     @FocusState private var addressFocused: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var controller: BrowserTabController {
         BrowserControllerPool.shared.controller(for: tabID) { urlString, title in
@@ -203,14 +204,21 @@ struct BrowserSurfaceView: View {
     var body: some View {
         VStack(spacing: 0) {
             chromeBar
-            if controller.isLoading {
-                ProgressView(value: max(0.05, controller.estimatedProgress), total: 1.0)
-                    .progressViewStyle(.linear)
-                    .tint(SwftColor.accent)
-                    .frame(height: 2)
-            } else {
-                Divider().overlay(SwftColor.borderSubtle)
-            }
+            Rectangle()
+                .fill(SwftColor.borderSubtle)
+                .frame(height: 1)
+                .overlay(alignment: .leading) {
+                    if controller.isLoading {
+                        GeometryReader { geo in
+                            Capsule()
+                                .fill(SwftColor.accent)
+                                .frame(width: geo.size.width * max(0.06, controller.estimatedProgress), height: 2)
+                                .animation(SwftMotion.resolve(SwftMotion.standard, reduceMotion: reduceMotion), value: controller.estimatedProgress)
+                        }
+                        .frame(height: 2)
+                        .transition(.opacity)
+                    }
+                }
 
             if let statusBanner {
                 HStack(spacing: 8) {
@@ -266,7 +274,7 @@ struct BrowserSurfaceView: View {
     // MARK: - Chrome Bar
 
     private var chromeBar: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 2) {
             IconButton("chevron.left", help: "Back", size: 26) {
                 controller.goBack()
             }
@@ -292,11 +300,13 @@ struct BrowserSurfaceView: View {
             }
             .disabled(activeURL == nil)
             .opacity(activeURL == nil ? 0.4 : 1)
+            .padding(.trailing, 4)
 
             HStack(spacing: 6) {
                 Image(systemName: activeURL?.scheme == "https" ? "lock.fill" : "globe")
-                    .font(.system(size: 10.5))
+                    .font(.system(size: 10.5, weight: .medium))
                     .foregroundStyle(SwftColor.textTertiary)
+                    .frame(width: 12)
 
                 TextField("Enter URL or localhost:3000…", text: $addressText)
                     .textFieldStyle(.plain)
@@ -318,16 +328,16 @@ struct BrowserSurfaceView: View {
                     .buttonStyle(.plain)
                 }
             }
-            .padding(.horizontal, 8)
-            .frame(height: 26)
-            .background(
-                RoundedRectangle(cornerRadius: SwftRadius.s, style: .continuous)
-                    .fill(SwftColor.surfaceMuted)
-            )
+            .padding(.horizontal, 10)
+            .frame(height: 28)
+            .background(Capsule().fill(addressFocused ? SwftColor.surface : SwftColor.surfaceMuted))
             .overlay(
-                RoundedRectangle(cornerRadius: SwftRadius.s, style: .continuous)
-                    .strokeBorder(addressFocused ? SwftColor.accent.opacity(0.6) : SwftColor.borderSubtle, lineWidth: 1)
+                Capsule().strokeBorder(addressFocused ? SwftColor.accent.opacity(0.55) : SwftColor.borderSubtle, lineWidth: addressFocused ? 1.5 : 1)
             )
+            .contentShape(Capsule())
+            .onTapGesture { addressFocused = true }
+            .animation(SwftMotion.resolve(SwftMotion.quick, reduceMotion: reduceMotion), value: addressFocused)
+            .padding(.trailing, 4)
 
             if !serverSessions.isEmpty {
                 Menu {
@@ -350,22 +360,30 @@ struct BrowserSurfaceView: View {
                         }
                     }
                 } label: {
-                    HStack(spacing: 3) {
+                    HStack(spacing: 5) {
                         Circle()
                             .fill(SwftColor.success)
                             .frame(width: 6, height: 6)
-                        Text("\(serverSessions.count)")
-                            .font(SwftType.micro)
+                        Text(String(serverSessions.count))
+                            .font(SwftType.captionStrong)
                             .monospacedDigit()
                             .foregroundStyle(SwftColor.textSecondary)
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 7.5, weight: .bold))
+                            .foregroundStyle(SwftColor.textTertiary)
                     }
-                    .padding(.horizontal, 6)
+                    .padding(.horizontal, 8)
                     .frame(height: 24)
                     .background(Capsule().fill(SwftColor.surfaceMuted))
+                    .overlay(Capsule().strokeBorder(SwftColor.borderSubtle, lineWidth: 1))
+                    .contentShape(Capsule())
                 }
-                .menuStyle(.borderlessButton)
+                .menuStyle(.button)
+                .buttonStyle(.plain)
+                .menuIndicator(.hidden)
                 .fixedSize()
-                .help("Agent-opened preview sessions")
+                .help("Agent preview sessions")
+                .padding(.trailing, 2)
             }
 
             IconButton("arrow.up.right.square", help: "Open in external browser", size: 26) {
@@ -376,30 +394,34 @@ struct BrowserSurfaceView: View {
             .disabled(activeURL == nil)
             .opacity(activeURL == nil ? 0.4 : 1)
         }
-        .padding(.horizontal, 8)
-        .frame(height: RightPanelMetrics.subHeaderHeight)
-        .background(SwftColor.surface)
+        .rightPanelSubHeader()
     }
 
     // MARK: - Start Page & Error Overlay
 
     private var browserStartPage: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Browser")
-                        .font(SwftType.headline)
-                        .foregroundStyle(SwftColor.textPrimary)
-                    Text("Enter any URL above, or open a running dev server or agent preview session.")
-                        .font(SwftType.caption)
-                        .foregroundStyle(SwftColor.textTertiary)
+            VStack(alignment: .leading, spacing: 22) {
+                HStack(spacing: 12) {
+                    Image(systemName: "globe")
+                        .font(.system(size: 16, weight: .regular))
+                        .foregroundStyle(SwftColor.accent)
+                        .frame(width: 38, height: 38)
+                        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(SwftColor.accentSoft.opacity(0.55)))
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Start browsing")
+                            .font(SwftType.headline)
+                            .foregroundStyle(SwftColor.textPrimary)
+                        Text("Type a URL above, or open a dev server or agent preview.")
+                            .font(SwftType.caption)
+                            .foregroundStyle(SwftColor.textTertiary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
 
                 if !serverSessions.isEmpty {
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("ACTIVE PREVIEW SESSIONS")
-                            .font(SwftType.micro)
-                            .foregroundStyle(SwftColor.textTertiary)
+                        RightPanelSectionHeader("Agent previews", count: serverSessions.count)
                         ForEach(serverSessions) { session in
                             serverSessionRow(session)
                         }
@@ -408,41 +430,34 @@ struct BrowserSurfaceView: View {
 
                 if !discoveredServers.isEmpty {
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("RUNNING LOCAL SERVERS")
-                            .font(SwftType.micro)
-                            .foregroundStyle(SwftColor.textTertiary)
+                        RightPanelSectionHeader("Running local servers", count: discoveredServers.count)
                         ForEach(discoveredServers) { server in
                             Button {
                                 navigate(to: server.url)
                             } label: {
-                                HStack(spacing: 8) {
+                                HStack(spacing: 10) {
                                     Circle()
                                         .fill(SwftColor.success)
                                         .frame(width: 7, height: 7)
-                                    VStack(alignment: .leading, spacing: 1) {
+                                        .frame(width: 22)
+                                    VStack(alignment: .leading, spacing: 2) {
                                         Text(server.url)
                                             .font(SwftType.captionStrong)
                                             .foregroundStyle(SwftColor.textPrimary)
-                                        if let proc = server.processName {
-                                            Text("\(proc) · port \(server.port)")
-                                                .font(SwftType.caption)
-                                                .foregroundStyle(SwftColor.textTertiary)
-                                        }
+                                            .lineLimit(1)
+                                        Text([server.processName, "port \(String(server.port))"].compactMap { $0 }.joined(separator: " · "))
+                                            .font(SwftType.caption)
+                                            .foregroundStyle(SwftColor.textTertiary)
+                                            .lineLimit(1)
                                     }
-                                    Spacer()
+                                    Spacer(minLength: 8)
                                     Image(systemName: "arrow.right")
-                                        .font(.system(size: 11))
+                                        .font(.system(size: 11, weight: .medium))
                                         .foregroundStyle(SwftColor.textTertiary)
                                 }
-                                .padding(10)
-                                .background(
-                                    RoundedRectangle(cornerRadius: SwftRadius.s, style: .continuous)
-                                        .fill(SwftColor.surface)
-                                )
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: SwftRadius.s, style: .continuous)
-                                        .strokeBorder(SwftColor.borderSubtle, lineWidth: 1)
-                                )
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 9)
+                                .rightPanelCard()
                             }
                             .buttonStyle(.plain)
                         }
@@ -450,17 +465,16 @@ struct BrowserSurfaceView: View {
                 }
 
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("QUICK LAUNCH")
-                        .font(SwftType.micro)
-                        .foregroundStyle(SwftColor.textTertiary)
-                    HStack(spacing: 8) {
+                    RightPanelSectionHeader("Quick launch")
+                    HStack(spacing: 6) {
                         quickURLChip("localhost:3000")
                         quickURLChip("localhost:5173")
                         quickURLChip("localhost:8080")
                     }
                 }
             }
-            .padding(20)
+            .padding(.horizontal, 18)
+            .padding(.vertical, 20)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
@@ -469,8 +483,8 @@ struct BrowserSurfaceView: View {
         let urlString = session.navStatus.url ?? ""
         let title = session.navStatus.title ?? (urlString.isEmpty ? "Blank preview" : urlString)
         return HStack(spacing: 10) {
-            Image(systemName: "globe")
-                .font(.system(size: 13))
+            Image(systemName: "sparkles.rectangle.stack")
+                .font(.system(size: 12.5))
                 .foregroundStyle(SwftColor.accent)
                 .frame(width: 22)
 
@@ -481,35 +495,29 @@ struct BrowserSurfaceView: View {
                     .lineLimit(1)
                 if !urlString.isEmpty {
                     Text(urlString)
-                        .font(SwftType.monoSmall)
+                        .font(.system(size: 11, design: .monospaced))
                         .foregroundStyle(SwftColor.textTertiary)
                         .lineLimit(1)
+                        .truncationMode(.middle)
                 }
             }
 
             Spacer(minLength: 8)
 
             if !urlString.isEmpty {
-                Button("Open") {
+                RightPanelPillButton("Open") {
                     navigate(to: urlString, serverPreviewTabId: session.tabId)
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
             }
 
-            IconButton("xmark", help: "Close preview session", size: 22) {
+            IconButton("xmark", help: "Close preview session", size: 24, tint: SwftColor.textTertiary) {
                 Task { await closeServerSession(tabId: session.tabId) }
             }
         }
-        .padding(10)
-        .background(
-            RoundedRectangle(cornerRadius: SwftRadius.s, style: .continuous)
-                .fill(SwftColor.surface)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: SwftRadius.s, style: .continuous)
-                .strokeBorder(SwftColor.borderSubtle, lineWidth: 1)
-        )
+        .padding(.leading, 10)
+        .padding(.trailing, 6)
+        .padding(.vertical, 8)
+        .rightPanelCard(interactive: false)
     }
 
     private func quickURLChip(_ hostPort: String) -> some View {
@@ -517,16 +525,15 @@ struct BrowserSurfaceView: View {
             navigate(to: hostPort)
         } label: {
             Text(hostPort)
-                .font(SwftType.monoSmall)
+                .font(.system(size: 11.5, design: .monospaced))
                 .foregroundStyle(SwftColor.textSecondary)
-                .padding(.horizontal, 9)
-                .padding(.vertical, 5)
-                .background(
-                    RoundedRectangle(cornerRadius: SwftRadius.s, style: .continuous)
-                        .fill(SwftColor.surfaceMuted)
-                )
+                .padding(.horizontal, 10)
+                .frame(height: 26)
+                .background(Capsule().fill(SwftColor.surfaceMuted))
+                .overlay(Capsule().strokeBorder(SwftColor.borderSubtle, lineWidth: 1))
+                .contentShape(Capsule())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(HoverFillStyle(shape: Capsule()))
     }
 
     private func loadErrorOverlay(_ message: String) -> some View {
