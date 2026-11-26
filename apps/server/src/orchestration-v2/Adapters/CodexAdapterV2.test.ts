@@ -4077,6 +4077,152 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       ),
   );
 
+  it.effect(
+    "deduplicates identical MCP startup failure notices across turns and re-emits after recovery or error change",
+    () =>
+      Effect.gen(function* () {
+        const nativeThreadId = "mcp-startup-dedup-thread";
+        const prompt = "use example_mcp";
+        const mcpStatus = (
+          name: string,
+          status: "starting" | "ready" | "failed",
+          error: string | null = null,
+        ): CodexReplay.CodexAppServerReplayEntry => ({
+          type: "emit_inbound",
+          label: `mcp-${name}-${status}`,
+          frame: {
+            method: "mcpServer/startupStatus/updated",
+            params: {
+              threadId: nativeThreadId,
+              name,
+              status,
+              error,
+              failureReason: null,
+            },
+          },
+        });
+        const completed = (nativeTurnId: string): CodexReplay.CodexAppServerReplayEntry => ({
+          type: "emit_inbound",
+          label: `${nativeTurnId}-completed`,
+          frame: {
+            method: "turn/completed",
+            params: {
+              threadId: nativeThreadId,
+              turn: makeCodexReplayTurn({ id: nativeTurnId, status: "completed" }),
+            },
+          },
+        });
+        const first = codexReplayPreamble({
+          nativeThreadId,
+          nativeTurnId: "mcp-dedup-turn-1",
+          prompt,
+        });
+        const second = codexReplayPreamble({
+          nativeThreadId,
+          nativeTurnId: "mcp-dedup-turn-2",
+          prompt,
+        });
+        const third = codexReplayPreamble({
+          nativeThreadId,
+          nativeTurnId: "mcp-dedup-turn-3",
+          prompt,
+        });
+        const fourth = codexReplayPreamble({
+          nativeThreadId,
+          nativeTurnId: "mcp-dedup-turn-4",
+          prompt,
+        });
+        const transcript = makeCodexReplayTranscript({
+          scenario: "codex-mcp-startup-dedup",
+          entries: [
+            ...first,
+            mcpStatus("example_mcp", "starting"),
+            mcpStatus("example_mcp", "failed", "timed out after 120s"),
+            completed("mcp-dedup-turn-1"),
+            // Turn 2: same server fails with the same error -> suppressed.
+            ...second.slice(5, 7).map((entry) => withReplayRequestId(entry, 4)),
+            mcpStatus("example_mcp", "starting"),
+            mcpStatus("example_mcp", "failed", "timed out after 120s"),
+            completed("mcp-dedup-turn-2"),
+            // Turn 3: server recovers to ready, then later fails again -> re-emitted.
+            ...third.slice(5, 7).map((entry) => withReplayRequestId(entry, 5)),
+            mcpStatus("example_mcp", "ready"),
+            mcpStatus("example_mcp", "failed", "timed out after 120s"),
+            completed("mcp-dedup-turn-3"),
+            // Turn 4: server fails with a different error message -> re-emitted.
+            ...fourth.slice(5, 7).map((entry) => withReplayRequestId(entry, 6)),
+            mcpStatus("example_mcp", "failed", "spawn ENOENT"),
+            completed("mcp-dedup-turn-4"),
+          ],
+        });
+        const harness = yield* makeCodexReplayHarness(transcript);
+        const noticeMessages = () =>
+          harness.events.flatMap((event) =>
+            event.type === "turn_item.updated" && event.turnItem.type === "system_notice"
+              ? [event.turnItem.message]
+              : [],
+          );
+        const baseTurn = makeCodexTestTurnInput({
+          threadId: harness.threadId,
+          providerThread: harness.providerThread,
+          now: yield* DateTime.now,
+          attemptId: RunAttemptId.make("mcp-dedup-attempt-1"),
+          text: prompt,
+        });
+
+        yield* harness.runtime.startTurn(baseTurn);
+        yield* harness.awaitTerminal(1);
+        assert.deepEqual(noticeMessages(), ["timed out after 120s"]);
+
+        yield* harness.runtime.startTurn({
+          ...baseTurn,
+          runId: RunId.make("mcp-dedup-run-2"),
+          attemptId: RunAttemptId.make("mcp-dedup-attempt-2"),
+          rootNodeId: NodeId.make("mcp-dedup-root-2"),
+          runOrdinal: 2,
+          providerTurnOrdinal: 2,
+        });
+        yield* harness.awaitTerminal(2);
+        assert.deepEqual(noticeMessages(), ["timed out after 120s"]);
+
+        yield* harness.runtime.startTurn({
+          ...baseTurn,
+          runId: RunId.make("mcp-dedup-run-3"),
+          attemptId: RunAttemptId.make("mcp-dedup-attempt-3"),
+          rootNodeId: NodeId.make("mcp-dedup-root-3"),
+          runOrdinal: 3,
+          providerTurnOrdinal: 3,
+        });
+        yield* harness.awaitTerminal(3);
+        assert.deepEqual(noticeMessages(), ["timed out after 120s", "timed out after 120s"]);
+
+        yield* harness.runtime.startTurn({
+          ...baseTurn,
+          runId: RunId.make("mcp-dedup-run-4"),
+          attemptId: RunAttemptId.make("mcp-dedup-attempt-4"),
+          rootNodeId: NodeId.make("mcp-dedup-root-4"),
+          runOrdinal: 4,
+          providerTurnOrdinal: 4,
+        });
+        yield* harness.awaitTerminal(4);
+        assert.deepEqual(noticeMessages(), [
+          "timed out after 120s",
+          "timed out after 120s",
+          "spawn ENOENT",
+        ]);
+      }).pipe(
+        Effect.scoped,
+        Effect.provide(
+          Layer.mergeAll(
+            IdAllocator.layer,
+            McpProviderSessions.layer,
+            NodeServices.layer,
+            NodeCrypto.layer,
+          ),
+        ),
+      ),
+  );
+
   it.effect("reports MCP servers starting only until the thread's turn opens", () =>
     Effect.gen(function* () {
       const nativeThreadId = "mcp-startup-phase-thread";

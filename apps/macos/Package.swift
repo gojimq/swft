@@ -3,7 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "Swft",
-    platforms: [.macOS(.v15)],
+    platforms: [.macOS(.v15), .iOS("26.0")],
     products: [
         .executable(name: "Swft", targets: ["Swft"]),
         .library(name: "SwftKit", targets: ["SwftKit"]),

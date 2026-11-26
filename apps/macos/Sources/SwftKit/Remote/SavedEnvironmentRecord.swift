@@ -94,7 +94,7 @@ public final class FileEnvironmentRecordStore: EnvironmentRecordStore {
 
     public let fileURL: URL
 
-    public init(baseDirectory: URL = ServerLaunchConfiguration.defaultBaseDirectory) {
+    public init(baseDirectory: URL = SwftStoragePaths.defaultBaseDirectory) {
         self.fileURL = baseDirectory.appendingPathComponent(Self.filename, isDirectory: false)
     }
 

@@ -57,7 +57,8 @@ public struct AuthClient: Sendable {
     public func exchangeBootstrapToken(
         baseURL: URL,
         bootstrapToken: String,
-        clientLabel: String = "Swft"
+        clientLabel: String = "Swft",
+        clientIdentity: ClientIdentity = .current
     ) async throws -> AuthAccessTokenResult {
         let url = endpointURL(baseURL: baseURL, path: "/oauth/token")
         var request = URLRequest(url: url)
@@ -71,8 +72,8 @@ public struct AuthClient: Sendable {
             ("subject_token_type", Self.bootstrapTokenType),
             ("requested_token_type", Self.accessTokenType),
             ("client_label", clientLabel),
-            ("client_device_type", "desktop"),
-            ("client_os", "macOS"),
+            ("client_device_type", clientIdentity.deviceType),
+            ("client_os", clientIdentity.os),
         ]
         request.httpBody = Data(formURLEncoded(formItems).utf8)
 
@@ -125,7 +126,8 @@ public struct AuthClient: Sendable {
     public func resolveAccessToken(
         baseURL: URL,
         credential: AuthCredential,
-        clientLabel: String = "Swft"
+        clientLabel: String = "Swft",
+        clientIdentity: ClientIdentity = .current
     ) async throws -> String {
         switch credential {
         case .bearerToken(let token):
@@ -134,7 +136,8 @@ public struct AuthClient: Sendable {
             let result = try await exchangeBootstrapToken(
                 baseURL: baseURL,
                 bootstrapToken: token,
-                clientLabel: clientLabel
+                clientLabel: clientLabel,
+                clientIdentity: clientIdentity
             )
             return result.accessToken
         case .rotatingBootstrapSecret(let secret):
@@ -142,13 +145,18 @@ public struct AuthClient: Sendable {
             let result = try await exchangeBootstrapToken(
                 baseURL: baseURL,
                 bootstrapToken: derived,
-                clientLabel: clientLabel
+                clientLabel: clientLabel,
+                clientIdentity: clientIdentity
             )
             return result.accessToken
         }
     }
 
-    public func webSocketURL(httpBaseURL: URL, ticket: String) throws -> URL {
+    public func webSocketURL(
+        httpBaseURL: URL,
+        ticket: String,
+        clientIdentity: ClientIdentity = .current
+    ) throws -> URL {
         guard var components = URLComponents(url: httpBaseURL, resolvingAgainstBaseURL: false) else {
             throw RPCError.protocolError("Invalid base URL: \(httpBaseURL.absoluteString)")
         }
@@ -169,9 +177,9 @@ public struct AuthClient: Sendable {
             URLQueryItem(name: "orchestrationProtocol", value: "\(Self.supportedOrchestrationProtocolVersion)"),
             URLQueryItem(name: "wsTicket", value: ticket),
             URLQueryItem(name: "frameParts", value: "1"),
-            URLQueryItem(name: "clientSurface", value: "desktop"),
-            URLQueryItem(name: "clientDeviceType", value: "desktop"),
-            URLQueryItem(name: "clientOs", value: "macOS"),
+            URLQueryItem(name: "clientSurface", value: clientIdentity.surface),
+            URLQueryItem(name: "clientDeviceType", value: clientIdentity.deviceType),
+            URLQueryItem(name: "clientOs", value: clientIdentity.os),
             URLQueryItem(name: "connectionMethod", value: "direct"),
         ]
         guard let url = components.url else {

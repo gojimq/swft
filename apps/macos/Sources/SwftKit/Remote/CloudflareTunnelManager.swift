@@ -1,3 +1,4 @@
+#if os(macOS)
 import Darwin
 import Foundation
 import Observation
@@ -703,3 +704,4 @@ public final class CloudflareTunnelController {
         }
     }
 }
+#endif

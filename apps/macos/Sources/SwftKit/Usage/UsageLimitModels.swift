@@ -161,11 +161,22 @@ public struct ServerProviderUsageUnavailable: Codable, Sendable, Equatable, Hash
     }
 }
 
+public struct ServerProviderExternalUsage: Codable, Sendable, Equatable, Hashable {
+    public let label: String
+    public let url: String
+
+    public init(label: String, url: String) {
+        self.label = label
+        self.url = url
+    }
+}
+
 public struct ServerProviderUsageLimits: Sendable, Equatable, Hashable {
     public let checkedAt: Date
     public let windows: [ServerProviderUsageWindow]
     public let zeroSpendCap: Bool?
     public let credentialFingerprint: String?
+    public let externalUsage: ServerProviderExternalUsage?
     public let unavailable: ServerProviderUsageUnavailable?
 
     public init(
@@ -173,12 +184,14 @@ public struct ServerProviderUsageLimits: Sendable, Equatable, Hashable {
         windows: [ServerProviderUsageWindow] = [],
         zeroSpendCap: Bool? = nil,
         credentialFingerprint: String? = nil,
-        unavailable: ServerProviderUsageUnavailable? = nil
+        unavailable: ServerProviderUsageUnavailable? = nil,
+        externalUsage: ServerProviderExternalUsage? = nil
     ) {
         self.checkedAt = checkedAt
         self.windows = windows
         self.zeroSpendCap = zeroSpendCap
         self.credentialFingerprint = credentialFingerprint
+        self.externalUsage = externalUsage
         self.unavailable = unavailable
     }
 }
@@ -189,6 +202,7 @@ extension ServerProviderUsageLimits: Codable {
         case windows
         case zeroSpendCap
         case credentialFingerprint
+        case externalUsage
         case unavailable
     }
 
@@ -217,6 +231,7 @@ extension ServerProviderUsageLimits: Codable {
         }
         self.zeroSpendCap = try c.decodeIfPresent(Bool.self, forKey: .zeroSpendCap)
         self.credentialFingerprint = try c.decodeIfPresent(String.self, forKey: .credentialFingerprint)
+        self.externalUsage = try c.decodeIfPresent(ServerProviderExternalUsage.self, forKey: .externalUsage)
         self.unavailable = try c.decodeIfPresent(ServerProviderUsageUnavailable.self, forKey: .unavailable)
     }
 
@@ -226,6 +241,7 @@ extension ServerProviderUsageLimits: Codable {
         try c.encode(windows, forKey: .windows)
         try c.encodeIfPresent(zeroSpendCap, forKey: .zeroSpendCap)
         try c.encodeIfPresent(credentialFingerprint, forKey: .credentialFingerprint)
+        try c.encodeIfPresent(externalUsage, forKey: .externalUsage)
         try c.encodeIfPresent(unavailable, forKey: .unavailable)
     }
 }

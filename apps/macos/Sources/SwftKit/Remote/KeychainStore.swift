@@ -19,10 +19,12 @@ public enum CredentialStoreError: Error, Sendable, Equatable, LocalizedError {
         case .encodingFailed:
             return "Failed to encode credential as UTF-8."
         case .keychainStatus(let status, let operation):
+            #if os(macOS)
             let message = SecCopyErrorMessageString(status, nil) as String?
             if let message, !message.isEmpty {
                 return "Keychain \(operation) failed (\(status)): \(message)"
             }
+            #endif
             return "Keychain \(operation) failed (OSStatus \(status))."
         }
     }
@@ -42,7 +44,7 @@ public final class KeychainCredentialStore: CredentialStore {
     /// so scratch or test launches never collide with the developer's live Swft credentials.
     public static func serviceName(forBaseDirectory baseDirectory: URL) -> String {
         let normalized = baseDirectory.standardizedFileURL.resolvingSymlinksInPath().path
-        let defaultPath = ServerLaunchConfiguration.defaultBaseDirectory
+        let defaultPath = SwftStoragePaths.defaultBaseDirectory
             .standardizedFileURL.resolvingSymlinksInPath().path
         if normalized == defaultPath {
             return defaultService

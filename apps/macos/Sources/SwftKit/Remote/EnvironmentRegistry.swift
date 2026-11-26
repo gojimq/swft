@@ -193,6 +193,7 @@ public final class EnvironmentRegistry {
     private let session: URLSession
     private let pairingClient: PairingClient
     private let clientLabel: String
+    private let clientIdentity: ClientIdentity
     private let pairHandler: RemotePairHandler
     @ObservationIgnored private var connectTasks: [String: Task<Void, Never>] = [:]
 
@@ -201,6 +202,7 @@ public final class EnvironmentRegistry {
         recordStore: any EnvironmentRecordStore = FileEnvironmentRecordStore(),
         session: URLSession = .shared,
         clientLabel: String = "Swft",
+        clientIdentity: ClientIdentity = .current,
         pairHandler: RemotePairHandler? = nil
     ) {
         self.credentialStore = credentialStore
@@ -209,11 +211,13 @@ public final class EnvironmentRegistry {
         let client = PairingClient(session: session)
         self.pairingClient = client
         self.clientLabel = clientLabel
+        self.clientIdentity = clientIdentity
         self.pairHandler = pairHandler ?? { target, expectedId, label in
             try await client.pairRemote(
                 target: target,
                 expectedEnvironmentId: expectedId,
-                clientLabel: label
+                clientLabel: label,
+                clientIdentity: clientIdentity
             )
         }
     }
@@ -275,6 +279,7 @@ public final class EnvironmentRegistry {
             .sorted { $0.thread.updatedAt > $1.thread.updatedAt }
     }
 
+    #if os(macOS)
     // MARK: - Local Registration
 
     /// Registers (or replaces) the local bundled server environment in the registry.
@@ -309,6 +314,7 @@ public final class EnvironmentRegistry {
         connectTasks.removeValue(forKey: local.id)?.cancel()
         entries.removeAll { $0.id == local.id }
     }
+    #endif
 
     internal func insertEnvironmentForTesting(_ entry: ManagedEnvironment) {
         entries.removeAll { $0.id == entry.id }
@@ -337,6 +343,7 @@ public final class EnvironmentRegistry {
                 httpBaseURL: record.httpBaseURL,
                 credential: credential,
                 clientLabel: clientLabel,
+                clientIdentity: clientIdentity,
                 session: session
             )
             let store = ThreadsStore(connection: connection)
@@ -407,6 +414,7 @@ public final class EnvironmentRegistry {
             httpBaseURL: paired.httpBaseURL,
             credential: .bearerToken(paired.accessToken),
             clientLabel: clientLabel,
+            clientIdentity: clientIdentity,
             session: session
         )
         let store = ThreadsStore(connection: connection)
@@ -554,6 +562,51 @@ public final class EnvironmentRegistry {
         for entry in entries where !entry.isLocal {
             entry.threadsStore.stop()
             await entry.connection.disconnect()
+        }
+    }
+
+    /// Suspends remote WebSockets when entering iOS background without tearing down `ThreadsStore`
+    /// sequence markers so resuming catches up incrementally.
+    public func suspendAllRemotes() async {
+        for task in connectTasks.values {
+            task.cancel()
+        }
+        connectTasks.removeAll()
+        for entry in entries where !entry.isLocal {
+            await entry.connection.suspend()
+        }
+    }
+
+    /// Resumes all remote environments in parallel when returning to the foreground.
+    public func resumeAllRemotes() async {
+        let targets = entries.filter { !$0.isLocal && !$0.hasMissingCredentials }
+        let tasks = targets.map { entry in
+            Task { @MainActor [weak self, weak entry] in
+                guard let self, let entry else { return }
+                entry.threadsStore.start()
+                await entry.connection.resume()
+                if let descriptor = await entry.connection.environment {
+                    self.updateMetadata(for: entry, descriptor: descriptor)
+                }
+            }
+        }
+        for task in tasks {
+            await task.value
+        }
+    }
+
+    /// Wakes any reconnecting remote environments immediately after a Wi-Fi / cellular / VPN switch.
+    public func handleNetworkPathChanged() async {
+        let targets = entries.filter { !$0.isLocal && !$0.hasMissingCredentials && !$0.isConnected }
+        let tasks = targets.map { entry in
+            Task { @MainActor [weak entry] in
+                guard let entry else { return }
+                entry.threadsStore.start()
+                await entry.connection.reconnectNow()
+            }
+        }
+        for task in tasks {
+            await task.value
         }
     }
 

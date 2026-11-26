@@ -82,7 +82,8 @@ public struct PairingClient: Sendable {
     public func pairRemote(
         target: ParsedPairingTarget,
         expectedEnvironmentId: String? = nil,
-        clientLabel: String = "Swft"
+        clientLabel: String = "Swft",
+        clientIdentity: ClientIdentity = .current
     ) async throws -> PairedRemoteSession {
         let descriptor = try await authClient.discoverEnvironment(baseURL: target.httpBaseURL)
         if let expected = expectedEnvironmentId, descriptor.environmentId != expected {
@@ -96,7 +97,8 @@ public struct PairingClient: Sendable {
         let exchanged = try await authClient.exchangeBootstrapToken(
             baseURL: target.httpBaseURL,
             bootstrapToken: target.credential,
-            clientLabel: clientLabel
+            clientLabel: clientLabel,
+            clientIdentity: clientIdentity
         )
         return PairedRemoteSession(
             descriptor: descriptor,

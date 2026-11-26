@@ -151,6 +151,23 @@ struct TranscriptLayoutTests {
         if case .note(_, _, _, let isError) = rows[1] { #expect(!isError) } else { Issue.record("expected a note") }
     }
 
+    @Test func aTurnWithMultipleNoticesFoldsThemIntoOneRow() {
+        let items = [
+            user("u", "Hi", start: 0),
+            TranscriptItem(id: "n1", kind: .notice(title: "MCP server a failed to start", message: "timed out", isError: false)),
+            TranscriptItem(id: "n2", kind: .notice(title: "MCP server b failed to start", message: "not found", isError: false)),
+            TranscriptItem(id: "n3", kind: .notice(title: "MCP server c failed to start", message: "refused", isError: false)),
+            assistant("a", "Hello", start: 1, end: 3),
+        ]
+        let rows = TranscriptLayout.rows(for: items, isRunning: false)
+        #expect(rows.map(\.id) == ["u", "work:u", "a"])
+        guard case .work(let fold) = rows[1] else { Issue.record("expected a fold"); return }
+        #expect(!fold.isLive)
+        #expect(fold.title == "3 notices")
+        #expect(fold.steps.map(\.id) == ["n1", "n2", "n3"])
+        #expect(TranscriptLayout.summaryLabel(fold.steps) == "3 notices")
+    }
+
     @Test func plainExchangeHasNoFold() {
         let items = [user("u", "Hi", start: 0), assistant("a", "Hello", start: 1, end: 2)]
         #expect(TranscriptLayout.rows(for: items, isRunning: false).map(\.id) == ["u", "a"])

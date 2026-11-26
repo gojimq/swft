@@ -126,5 +126,18 @@ struct RPCEnvelopeTests {
         )
         #expect(wssURL.scheme == "wss")
         #expect(wssURL.path == "/prefix/ws")
+
+        let iosURL = try client.webSocketURL(
+            httpBaseURL: URL(string: "https://mini.tailnet.ts.net")!,
+            ticket: "ios-tok",
+            clientIdentity: .iPhone
+        )
+        let iosComponents = try #require(URLComponents(url: iosURL, resolvingAgainstBaseURL: false))
+        let iosQuery = Dictionary(
+            uniqueKeysWithValues: (iosComponents.queryItems ?? []).map { ($0.name, $0.value ?? "") }
+        )
+        #expect(iosQuery["clientSurface"] == "mobile")
+        #expect(iosQuery["clientDeviceType"] == "mobile")
+        #expect(iosQuery["clientOs"] == "iOS")
     }
 }

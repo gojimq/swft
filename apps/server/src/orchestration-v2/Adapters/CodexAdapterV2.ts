@@ -2119,6 +2119,31 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
     threadId === null ? Effect.undefined : mcpSessions.read(threadId);
   const { clientFactory, digest, fileSystem, idAllocator, serverConfig } = adapterOptions;
   const continuationRequests = adapterOptions.continuationRequests;
+  // Outlives sessions: idle unload and session release reopen threads every few minutes.
+  // A server that reaches ready (or fails with a new message) is announced again.
+  const announcedMcpStartupFailures = new Map<string, Map<string, CodexMcpStartupFailure>>();
+  const MAX_ANNOUNCED_MCP_FAILURE_THREADS = 1_024;
+  const recordAnnouncedMcpStartupFailure = (
+    nativeThreadId: string,
+    name: string,
+    failure: CodexMcpStartupFailure,
+  ) => {
+    const existing = announcedMcpStartupFailures.get(nativeThreadId);
+    const byServer = existing ?? new Map<string, CodexMcpStartupFailure>();
+    byServer.set(name, failure);
+    if (existing !== undefined) announcedMcpStartupFailures.delete(nativeThreadId);
+    announcedMcpStartupFailures.set(nativeThreadId, byServer);
+    if (announcedMcpStartupFailures.size > MAX_ANNOUNCED_MCP_FAILURE_THREADS) {
+      const oldest = announcedMcpStartupFailures.keys().next().value;
+      if (oldest !== undefined) announcedMcpStartupFailures.delete(oldest);
+    }
+  };
+  const clearAnnouncedMcpStartupFailure = (nativeThreadId: string, name: string) => {
+    const byServer = announcedMcpStartupFailures.get(nativeThreadId);
+    if (byServer === undefined) return;
+    byServer.delete(name);
+    if (byServer.size === 0) announcedMcpStartupFailures.delete(nativeThreadId);
+  };
 
   return ProviderAdapter.ProviderAdapterV2.of({
     instanceId: adapterOptions.instanceId,
@@ -2686,6 +2711,15 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             if (failures === undefined) return;
             mcpStartupFailures.delete(nativeThreadId);
             for (const [name, failure] of failures) {
+              const previous = announcedMcpStartupFailures.get(nativeThreadId)?.get(name);
+              if (
+                previous !== undefined &&
+                previous.message === failure.message &&
+                previous.signIn === failure.signIn
+              ) {
+                continue;
+              }
+              recordAnnouncedMcpStartupFailure(nativeThreadId, name, failure);
               const nativeItemId = `mcp-startup-failed:${context.providerTurnId}:${name}`;
               const { ordinal, startedAt } = yield* resolveItemPosition(context, nativeItemId);
               yield* emitProviderEvent({
@@ -5460,6 +5494,9 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               });
               mcpStartupFailures.set(payload.threadId, failures);
             } else {
+              if (payload.status === "ready") {
+                clearAnnouncedMcpStartupFailure(payload.threadId, payload.name);
+              }
               failures.delete(payload.name);
               if (failures.size === 0) mcpStartupFailures.delete(payload.threadId);
               return;
@@ -5746,6 +5783,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           Effect.gen(function* () {
             const closing = threadClosings.get(payload.threadId);
             threadClosings.delete(payload.threadId);
+            mcpStartupFailures.delete(payload.threadId);
+            if (startingMcpServers.delete(payload.threadId)) yield* reportStartupPhase();
             if (closing !== undefined) yield* Deferred.succeed(closing, undefined);
             const completedAt = yield* DateTime.now;
             for (const context of (yield* Ref.get(settledTurns)).values()) {
@@ -8747,6 +8786,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             function* (unloadInput) {
               const nativeThreadId = yield* getNativeThreadId(unloadInput.providerThread);
               sessionApprovals.delete(nativeThreadId);
+              mcpStartupFailures.delete(nativeThreadId);
+              if (startingMcpServers.delete(nativeThreadId)) yield* reportStartupPhase();
               // Archive also unloads, inline and without thread/closed; resumeNativeThread
               // unarchives it on the next turn.
               if (unloadInput.archive === true) {

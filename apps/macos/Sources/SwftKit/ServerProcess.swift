@@ -1,3 +1,4 @@
+#if os(macOS)
 import Darwin
 import Foundation
 import os
@@ -45,9 +46,7 @@ public struct ServerLaunchConfiguration: Sendable {
     /// Dedicated Swft application data directory (`~/Library/Application Support/Swft`).
     /// Never points at `~/.t3` or `~/.t3/userdata`.
     public static var defaultBaseDirectory: URL {
-        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support", isDirectory: true)
-        return appSupport.appendingPathComponent("Swft", isDirectory: true)
+        SwftStoragePaths.defaultBaseDirectory
     }
 
     public init(
@@ -713,3 +712,4 @@ public actor ServerProcess {
         return bytes.map { String(format: "%02x", $0) }.joined()
     }
 }
+#endif

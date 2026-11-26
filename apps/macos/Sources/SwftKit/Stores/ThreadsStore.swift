@@ -541,6 +541,13 @@ public final class ThreadsStore {
         )
     }
 
+    public func getUsageSummary(_ input: UsageSummaryInput) async throws -> UsageSummary {
+        try await connection.call(
+            tag: RPCMethod.serverGetUsageSummary,
+            payload: input
+        )
+    }
+
     @discardableResult
     public func updateServerWithProgress(
         targetVersion: String,

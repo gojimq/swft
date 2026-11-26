@@ -1,3 +1,4 @@
+#if os(macOS)
 import CryptoKit
 import Foundation
 
@@ -416,3 +417,4 @@ public struct LocalAppUpdater: Sendable {
         "'\(value.replacingOccurrences(of: "'", with: "'\\''"))'"
     }
 }
+#endif

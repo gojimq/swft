@@ -68,6 +68,7 @@ private extension Duration {
 public actor ServerConnection {
     public let httpBaseURL: URL
     public let clientLabel: String
+    public let clientIdentity: ClientIdentity
 
     private let credential: AuthCredential
     private let authClient: AuthClient
@@ -111,6 +112,7 @@ public actor ServerConnection {
         httpBaseURL: URL,
         credential: AuthCredential,
         clientLabel: String = "Swft",
+        clientIdentity: ClientIdentity = .current,
         reconnectPolicy: ReconnectPolicy = .default,
         pingInterval: Duration = .seconds(5),
         livenessTimeout: Duration = .seconds(15),
@@ -119,6 +121,7 @@ public actor ServerConnection {
         self.httpBaseURL = httpBaseURL
         self.credential = credential
         self.clientLabel = clientLabel
+        self.clientIdentity = clientIdentity
         self.reconnectPolicy = reconnectPolicy
         self.pingInterval = pingInterval
         self.livenessTimeout = livenessTimeout
@@ -138,7 +141,8 @@ public actor ServerConnection {
         let token = try await authClient.resolveAccessToken(
             baseURL: httpBaseURL,
             credential: credential,
-            clientLabel: clientLabel
+            clientLabel: clientLabel,
+            clientIdentity: clientIdentity
         )
         cachedAccessToken = token
         return token
@@ -212,6 +216,51 @@ public actor ServerConnection {
         }
         teardownActiveSocket(failWith: RPCError.disconnected)
         transition(to: .disconnected)
+    }
+
+    /// Suspends the socket and reconnect timers when the host app enters the background.
+    public func suspend() async {
+        await disconnect()
+    }
+
+    /// Resumes a suspended or disconnected session, immediately attempting a connection and
+    /// falling back to exponential backoff on transient errors (such as Wi-Fi or VPN waking up).
+    public func resume() async {
+        if case .connected = currentState, socketTask != nil {
+            return
+        }
+        if case .connecting = currentState {
+            return
+        }
+        shouldStayConnected = true
+        reconnectTask?.cancel()
+        reconnectTask = nil
+        transition(to: .connecting)
+
+        do {
+            _ = try await openAuthenticatedSocket()
+        } catch {
+            if case RPCError.authenticationFailed = error {
+                transition(to: .failed(error.localizedDescription))
+                return
+            }
+            if case RPCError.incompatibleProtocol = error {
+                transition(to: .failed(error.localizedDescription))
+                return
+            }
+            if shouldStayConnected {
+                startReconnectLoop(initialReason: error.localizedDescription)
+            }
+        }
+    }
+
+    /// Cancels any backoff delay and attempts an immediate reconnect when network reachability changes.
+    public func reconnectNow() async {
+        guard shouldStayConnected else { return }
+        if case .connected = currentState, socketTask != nil {
+            return
+        }
+        await resume()
     }
 
     /// Executes a unary Effect RPC call and decodes its `Exit.Success.value`.
@@ -388,7 +437,11 @@ public actor ServerConnection {
         environmentDescriptor = descriptor
 
         let ticket = try await mintWebSocketTicketWithRefresh()
-        let wsURL = try authClient.webSocketURL(httpBaseURL: httpBaseURL, ticket: ticket.ticket)
+        let wsURL = try authClient.webSocketURL(
+            httpBaseURL: httpBaseURL,
+            ticket: ticket.ticket,
+            clientIdentity: clientIdentity
+        )
 
         teardownActiveSocket(failWith: RPCError.disconnected)
 
@@ -441,7 +494,8 @@ public actor ServerConnection {
         let token = try await authClient.resolveAccessToken(
             baseURL: httpBaseURL,
             credential: credential,
-            clientLabel: clientLabel
+            clientLabel: clientLabel,
+            clientIdentity: clientIdentity
         )
         cachedAccessToken = token
         return try await authClient.mintWebSocketTicket(baseURL: httpBaseURL, accessToken: token)

@@ -85,12 +85,13 @@ enum TranscriptLayout {
                 segmentLive = false
             }
 
-            // A turn whose only "work" is a notice reads better as that notice's single quiet line.
+            // A turn whose only "work" is a single notice reads better as that notice's quiet line;
+            // multiple notices stay folded into one collapsed row.
             let notes = steps.compactMap { step -> TranscriptRow? in
                 guard case .note(let title, let message) = step.kind else { return nil }
                 return .note(id: step.id, title: title, message: message, isError: false)
             }
-            if !segmentLive, notes.count == steps.count {
+            if !segmentLive, notes.count == steps.count, notes.count == 1 {
                 rows.insert(contentsOf: notes, at: position)
                 return
             }
@@ -198,8 +199,13 @@ enum TranscriptLayout {
         }
 
         let summary = summaryLabel(steps)
+        let onlyNotes = !steps.isEmpty && steps.allSatisfy {
+            if case .note = $0.kind { true } else { false }
+        }
         let title: String
-        if let answerIndex, case .assistant(_, false) = turn[answerIndex].kind, let seconds = workedSeconds(timingItems), seconds >= 1 {
+        if onlyNotes {
+            title = summary ?? "\(steps.count) notices"
+        } else if let answerIndex, case .assistant(_, false) = turn[answerIndex].kind, let seconds = workedSeconds(timingItems), seconds >= 1 {
             title = "Worked for \(formatDuration(seconds))"
         } else {
             title = summary ?? "Worked"
@@ -230,6 +236,7 @@ enum TranscriptLayout {
         var order: [ToolCallItem.Kind] = []
         var calls: [ToolCallItem.Kind: [ToolCallItem]] = [:]
         var thoughts = 0
+        var notes = 0
         for step in steps {
             switch step.kind {
             case .tool(let call):
@@ -237,6 +244,8 @@ enum TranscriptLayout {
                 calls[call.kind, default: []].append(call)
             case .thought:
                 thoughts += 1
+            case .note:
+                notes += 1
             default:
                 break
             }
@@ -257,6 +266,7 @@ enum TranscriptLayout {
             }
         }
         if clauses.isEmpty, thoughts > 0 { clauses = ["thought"] }
+        if clauses.isEmpty, notes > 0 { clauses = [plural(notes, "notice")] }
         guard let first = clauses.first else { return nil }
         clauses[0] = first.prefix(1).uppercased() + first.dropFirst()
         return clauses.joined(separator: ", ")
