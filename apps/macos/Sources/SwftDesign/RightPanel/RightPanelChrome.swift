@@ -57,11 +57,77 @@ extension AnyTransition {
         if reduceMotion { return .opacity }
         return .asymmetric(
             insertion: .opacity
-                .combined(with: .scale(scale: 0.88, anchor: .bottomLeading))
-                .combined(with: .offset(y: 5)),
+                .combined(with: .scale(scale: 0.92, anchor: .bottomLeading))
+                .combined(with: .offset(y: 6)),
             removal: .opacity
-                .combined(with: .scale(scale: 0.86, anchor: .bottom))
+                .combined(with: .scale(scale: 0.90, anchor: .bottomLeading))
                 .combined(with: .offset(y: 4))
+        )
+    }
+}
+
+/// Single-pass layout keeping the horizontal tab strip flush to the leading edge while the trailing `+`
+/// accessory hugs the last tab (and pins beside the strip once tabs overflow), avoiding two-pass jump frames.
+public struct DiaTabBarAccessoryLayout: Layout {
+    public var spacing: CGFloat
+    public var emptyLeadingInset: CGFloat
+
+    public init(spacing: CGFloat = 2, emptyLeadingInset: CGFloat = 4) {
+        self.spacing = spacing
+        self.emptyLeadingInset = emptyLeadingInset
+    }
+
+    public func sizeThatFits(
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) -> CGSize {
+        let height = proposal.height ?? RightPanelMetrics.tabBarHeight
+        if let proposedWidth = proposal.width {
+            return CGSize(width: max(0, proposedWidth), height: height)
+        }
+        let intrinsic = subviews.reduce(CGFloat(0)) { $0 + $1.sizeThatFits(.unspecified).width }
+        return CGSize(width: intrinsic + spacing, height: height)
+    }
+
+    public func placeSubviews(
+        in bounds: CGRect,
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) {
+        guard subviews.count >= 2 else {
+            for subview in subviews {
+                subview.place(
+                    at: CGPoint(x: bounds.minX, y: bounds.maxY),
+                    anchor: .bottomLeading,
+                    proposal: ProposedViewSize(width: bounds.width, height: bounds.height)
+                )
+            }
+            return
+        }
+
+        let scrollSubview = subviews[0]
+        let accessorySubview = subviews[1]
+
+        let accessorySize = accessorySubview.sizeThatFits(.unspecified)
+        let idealScrollWidth = max(0, scrollSubview.sizeThatFits(.unspecified).width)
+        let hasTabs = idealScrollWidth > 0.5
+        let gap = hasTabs ? spacing : emptyLeadingInset
+        let maxScrollWidth = max(0, bounds.width - accessorySize.width - gap)
+        let resolvedScrollWidth = hasTabs ? min(idealScrollWidth, maxScrollWidth) : 0
+
+        scrollSubview.place(
+            at: CGPoint(x: bounds.minX, y: bounds.maxY),
+            anchor: .bottomLeading,
+            proposal: ProposedViewSize(width: resolvedScrollWidth, height: bounds.height)
+        )
+
+        let accessoryX = bounds.minX + resolvedScrollWidth + gap
+        accessorySubview.place(
+            at: CGPoint(x: accessoryX, y: bounds.maxY),
+            anchor: .bottomLeading,
+            proposal: ProposedViewSize(accessorySize)
         )
     }
 }

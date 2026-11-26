@@ -1,7 +1,9 @@
+import AppKit
 import CoreGraphics
 import SwftDesign
 import SwiftUI
 import Testing
+@testable import Swft
 
 @Suite("Dia Tabs Geometry, Divider Rules & Split Layout")
 struct DiaTabsLayoutTests {
@@ -151,5 +153,63 @@ struct DiaTabsLayoutTests {
         #expect(zero.chatContainerWidth == 0)
         #expect(zero.chatContentWidth == 0)
         #expect(zero.panelWidth == 0)
+    }
+
+    // MARK: - Single-Pass DiaTabBarAccessoryLayout
+
+    @Test @MainActor func placesFirstTabLeadingAlignedAndHugsAddControlInSinglePass() {
+        let layout = DiaTabBarAccessoryLayout(spacing: 2, emptyLeadingInset: 4)
+        var measuredScrollFrame: CGRect = .zero
+        var measuredAddFrame: CGRect = .zero
+
+        func render(tabCount: Int, barWidth: CGFloat = 420) {
+            let root = layout {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(alignment: .bottom, spacing: 0) {
+                        ForEach(0..<tabCount, id: \.self) { index in
+                            Color.clear
+                                .frame(width: 110, height: RightPanelMetrics.tabHeight)
+                                .padding(.leading, index == 0 ? 10 : 0)
+                                .padding(.trailing, index == tabCount - 1 ? 10 : 0)
+                        }
+                    }
+                    .frame(height: RightPanelMetrics.tabBarHeight, alignment: .bottom)
+                }
+                .defaultScrollAnchor(.leading)
+                .background(GeometryReader { g in
+                    Color.clear.onAppear { measuredScrollFrame = g.frame(in: .named("bar")) }
+                })
+
+                Color.clear
+                    .frame(width: 44, height: 28)
+                    .background(GeometryReader { g in
+                        Color.clear.onAppear { measuredAddFrame = g.frame(in: .named("bar")) }
+                    })
+            }
+            .frame(width: barWidth, height: RightPanelMetrics.tabBarHeight)
+            .coordinateSpace(name: "bar")
+
+            let host = NSHostingView(rootView: root)
+            host.frame = CGRect(x: 0, y: 0, width: barWidth, height: RightPanelMetrics.tabBarHeight)
+            host.layoutSubtreeIfNeeded()
+        }
+
+        // 0 tabs: scroll strip is 0pt wide and `+` sits at the leading inset.
+        render(tabCount: 0)
+        #expect(measuredScrollFrame.minX == 0)
+        #expect(measuredScrollFrame.width == 0)
+        #expect(abs(measuredAddFrame.minX - 4) < 0.5)
+
+        // 1 tab (110 + 10 + 10 = 130pt): sits flush at leading x = 0, NEVER centered in the 420pt bar!
+        render(tabCount: 1)
+        #expect(abs(measuredScrollFrame.minX) < 0.5)
+        #expect(abs(measuredScrollFrame.width - 130) < 0.5)
+        #expect(abs(measuredAddFrame.minX - 132) < 0.5)
+
+        // 6 overflowing tabs: strip clamps to barWidth - addWidth - spacing (420 - 44 - 2 = 374pt) and `+` pins beside it.
+        render(tabCount: 6)
+        #expect(abs(measuredScrollFrame.minX) < 0.5)
+        #expect(abs(measuredScrollFrame.width - 374) < 0.5)
+        #expect(abs(measuredAddFrame.minX - 376) < 0.5)
     }
 }

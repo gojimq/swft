@@ -19,7 +19,6 @@ struct RightPanelContainerView: View {
 
     @State private var dragStartWidth: CGFloat?
     @State private var hoveredTabID: String?
-    @State private var tabsContentWidth: CGFloat = 0
     @State private var scrollEdges = TabStripScrollEdges()
 
     private struct TabStripScrollEdges: Equatable {
@@ -59,7 +58,7 @@ struct RightPanelContainerView: View {
         .background(SwftColor.canvas)
         .frame(maxHeight: .infinity)
         .overlay(alignment: .leading) {
-            // Keep a crisp leading edge beside the chat column or open left sidebar; fade out against the window edge.
+            // Separate overlay so the 1pt edge sits strictly at x = 0 instead of centering inside the 8pt resize handle.
             let showLeadingEdge = !panelState.isMaximized || model.sidebarVisible
             Rectangle()
                 .fill(SwftColor.borderSubtle)
@@ -67,7 +66,8 @@ struct RightPanelContainerView: View {
                 .opacity(showLeadingEdge ? 1 : 0)
                 .allowsHitTesting(false)
                 .animation(panelLayoutAnimation, value: showLeadingEdge)
-
+        }
+        .overlay(alignment: .leading) {
             if !panelState.isMaximized {
                 // Straddles the split edge without taking layout width, so no gutter shows between columns.
                 RightPanelResizeHandle { travel in
@@ -98,13 +98,13 @@ struct RightPanelContainerView: View {
                 .transition(.swftPop(reduceMotion: reduceMotion, scale: 0.8))
             }
 
-            tabStrip
-
-            addTabControl
-                .padding(.leading, panelState.tabs.isEmpty ? 4 : 2)
-                .padding(.bottom, 11)
-
-            Spacer(minLength: 8)
+            DiaTabBarAccessoryLayout(spacing: 2, emptyLeadingInset: 4) {
+                tabStrip
+                addTabControl
+                    .padding(.bottom, 11)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .animation(tabLifecycleAnimation, value: panelState.tabs.map(\.id))
 
             HStack(spacing: 2) {
                 Rectangle()
@@ -250,13 +250,9 @@ struct RightPanelContainerView: View {
                 .padding(.top, RightPanelMetrics.tabTopInset)
                 .frame(height: RightPanelMetrics.tabBarHeight, alignment: .bottom)
                 .animation(tabLifecycleAnimation, value: tabIDs)
-                .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width in
-                    tabsContentWidth = width
-                }
             }
-            .frame(maxWidth: tabs.isEmpty ? 0 : (tabsContentWidth > 0 ? tabsContentWidth : nil))
+            .defaultScrollAnchor(.leading)
             .frame(height: RightPanelMetrics.tabBarHeight)
-            .animation(tabLifecycleAnimation, value: tabsContentWidth)
             .onScrollGeometryChange(for: TabStripScrollEdges.self) { geo in
                 TabStripScrollEdges(
                     canScrollLeading: geo.contentOffset.x > 2,
