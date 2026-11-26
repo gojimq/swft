@@ -60,15 +60,18 @@ struct RightPanelTests {
         #expect(!store.isOpen(for: threadA))
         #expect(!store.isMaximized(for: threadA))
 
-        // Launcher tab deduplicates and is replaced when choosing a surface
+        // Opening a new tab always appends a fresh launcher tab; picking a surface replaces only that tab
         let launcher1 = store.openLauncherTab(for: threadA)
         let launcher2 = store.openLauncherTab(for: threadA)
-        #expect(launcher1.id == launcher2.id)
-        #expect(store.tabs(for: threadA).count == 1)
+        #expect(launcher1.id != launcher2.id)
+        #expect(store.tabs(for: threadA).count == 2)
+        #expect(store.activeTab(for: threadA)?.id == launcher2.id)
 
-        let browserTab = store.openSurface(.browser, for: threadA, replacingLauncherTabID: launcher1.id)
-        #expect(store.tabs(for: threadA).count == 1)
+        let browserTab = store.openSurface(.browser, for: threadA, replacingLauncherTabID: launcher2.id)
+        #expect(store.tabs(for: threadA).count == 2)
         #expect(store.activeTab(for: threadA)?.id == browserTab.id)
+        store.closeTab(launcher1.id, for: threadA)
+        #expect(store.tabs(for: threadA).count == 1)
 
         // Update browser tab title & URL
         store.updateBrowserTab(

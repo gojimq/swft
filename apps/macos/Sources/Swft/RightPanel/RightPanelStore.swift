@@ -115,11 +115,6 @@ final class RightPanelStore {
     func openLauncherTab(for threadID: String) -> RightPanelTab {
         var current = state(for: threadID)
         current.isOpen = true
-        if let existing = current.tabs.first(where: { $0.payload == .launcher }) {
-            current.activeTabID = existing.id
-            byThreadID[threadID] = current
-            return existing
-        }
         let tab = RightPanelTab(id: "launcher:\(UUID().uuidString)", payload: .launcher)
         current.tabs.append(tab)
         current.activeTabID = tab.id
