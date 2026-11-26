@@ -1,4 +1,5 @@
 import Foundation
+import SwftDesign
 import Testing
 @testable import Swft
 
@@ -114,13 +115,42 @@ struct NewThreadLauncherTests {
     @Test func postsTheHandOffHookWithTheFirstMessage() async {
         let launcher = NewThreadLauncher()
         let token = launcher.begin(text: "Fix the flaky test")
+        #expect(launcher.launchingMessage == NewThreadLaunchMessage(text: "Fix the flaky test"))
         launcher.dockSettled(token: token)
         nonisolated(unsafe) var received: [AnyHashable: Any]?
         let observer = NotificationCenter.default.addObserver(forName: .swftNewThreadDidHandOff, object: nil, queue: nil) { received = $0.userInfo }
         defer { NotificationCenter.default.removeObserver(observer) }
         #expect(await launcher.awaitHandoff(token: token, threadID: "t-new"))
+        #expect(launcher.launchingMessage == nil)
         #expect(received?["threadID"] as? String == "t-new")
         #expect(received?["text"] as? String == "Fix the flaky test")
+    }
+
+    @Test func launchingMessageTracksAttachmentsAndClearsOnFailureOrCancel() {
+        let launcher = NewThreadLauncher()
+        let attachment = TranscriptAttachment(
+            id: "att-1",
+            kind: .file,
+            name: "spec.md",
+            mimeType: "text/markdown",
+            sizeBytes: 256
+        )
+        let first = launcher.begin(text: "Review spec", attachments: [attachment])
+        #expect(launcher.launchingMessage == NewThreadLaunchMessage(text: "Review spec", attachments: [attachment]))
+
+        // Stale token failure must not clear the active launch message.
+        launcher.fail(token: first + 1)
+        #expect(launcher.launchingMessage != nil)
+
+        // Matching failure clears the launch message so Home removes the preview cleanly.
+        launcher.fail(token: first)
+        #expect(launcher.launchingMessage == nil)
+
+        let second = launcher.begin(text: "Try again")
+        #expect(launcher.launchingMessage == NewThreadLaunchMessage(text: "Try again"))
+        #expect(launcher.launchingToken == second)
+        launcher.cancel()
+        #expect(launcher.launchingMessage == nil)
     }
 
     /// Yields until the waiting task has registered (no sleeps).
@@ -156,23 +186,26 @@ struct NewThreadMockTests {
         model.composerText = "Find and fix the failing test"
         model.send()
         let row = model.sidebar.threads[0]
+        // First message payload is exposed immediately while Home docks so it fades in concurrently with the slide.
+        #expect(model.newThread.launchingMessage == NewThreadLaunchMessage(text: "Find and fix the failing test"))
         model.newThread.dockSettled(token: model.newThread.launchingToken!)
         for _ in 0..<1000 where model.destination == .home { await Task.yield() }
         #expect(model.destination == .thread(row.id))
+        #expect(model.newThread.launchingMessage == nil)
         let handoff = try #require(model.latestThreadSend)
         #expect(handoff.isHandoff == true)
         #expect(handoff.threadID == row.id)
         #expect(handoff.text == "Find and fix the failing test")
 
-        // The handoff uses fade-in rather than launching a J-curve flight overlay.
+        // The handoff adopts the thread in place (Home already faded the first message in — no flight, no double-fade).
         let detail = try #require(model.detail(for: row.id))
         let coordinator = SendFlightCoordinator()
         coordinator.syncThread(detail: detail, isBusy: true)
-        #expect(coordinator.adoptOnAppear(handoff, detail: detail, isHandoffScreen: true, reduceMotion: false) == .handoffFade)
+        #expect(coordinator.adoptOnAppear(handoff, detail: detail, isHandoffScreen: true, reduceMotion: false) == .handoff)
         #expect(coordinator.activeFlight == nil)
-        #expect(coordinator.handoffFadeBubbleID != nil)
+        #expect(coordinator.latestTurnHeldForSendID == nil)
 
-        // Leaving the thread drops the event, so coming back later can never fade or hold it again.
+        // Leaving the thread drops the event, so coming back later can never hold or replay it again.
         model.goHome()
         #expect(model.latestThreadSend == nil)
         model.open(row.id)

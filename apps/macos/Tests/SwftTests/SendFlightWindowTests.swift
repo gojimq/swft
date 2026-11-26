@@ -184,6 +184,128 @@ struct SendFlightWindowTests {
         #expect(samples.contains { $0.offset >= oldEnd - 5 && $0.offset < newEnd - 20 })
     }
 
+    /// The first message fades in concurrently while Home's composer slides down (no sequential wait until dock
+    /// completion) and sits pixel-for-pixel at `ThreadView`'s resting `UserBubble` coordinates across the handoff.
+    @Test func newThreadFirstMessageFadesInConcurrentlyWithDockAndAlignsPixelExactOnHandoff() async throws {
+        let model = AppModel.mock()
+        let prompt = "Simultaneous dock and fade alignment check"
+        let probe = NewThreadBubbleProbe()
+        nonisolated(unsafe) var handoffTimestamp: CFAbsoluteTime?
+        let observer = NotificationCenter.default.addObserver(forName: .swftNewThreadDidHandOff, object: nil, queue: nil) { _ in
+            handoffTimestamp = CFAbsoluteTimeGetCurrent()
+        }
+        defer { NotificationCenter.default.removeObserver(observer) }
+
+        let (window, _) = Self.presentCustom(
+            RootView()
+                .environment(model)
+                .environment(\.newThreadBubbleProbe, probe),
+            size: CGSize(width: 1280, height: 860)
+        )
+        defer { window.orderOut(nil) }
+
+        #expect(probe.samples.isEmpty)
+
+        model.composerText = prompt
+        let sendTime = CFAbsoluteTimeGetCurrent()
+        model.send()
+
+        // Mid-dock (~0.08s): Home is STILL sliding the composer down (`destination == .home`), yet the first message
+        // preview has ALREADY mounted and begun fading in (`targetOpacity` transitioning 0 → 1) concurrently!
+        await Self.pumpAsync(0.08)
+        #expect(model.destination == .home)
+        #expect(model.newThread.launchingToken != nil)
+        #expect(model.newThread.launchingMessage == NewThreadLaunchMessage(text: prompt))
+        let midDockPreview = try #require(probe.samples.last(where: { $0.source == .homePreview }))
+        #expect(midDockPreview.targetOpacity == 1.0)
+        // Fade-in starts immediately alongside the composer slide (well before dock settles / handoff fires).
+        #expect(midDockPreview.timestamp - sendTime < 0.12)
+
+        // Complete the handoff into ThreadView.
+        let deadline = Date().addingTimeInterval(1.0)
+        while Date() < deadline, model.destination == .home { await Self.tick() }
+        await Self.pumpAsync(0.10)
+
+        guard case .thread = model.destination else {
+            Issue.record("Home did not hand off to the new thread")
+            return
+        }
+        let handoffTime = try #require(handoffTimestamp)
+        #expect(midDockPreview.timestamp < handoffTime)
+
+        // ThreadView's real UserBubble must appear immediately at opacity 1 (no double-fade) in the EXACT same
+        // window-space rect as Home's fading preview (sub-pixel alignment, zero jump on handoff).
+        let threadSample = try #require(probe.samples.first(where: { $0.source == .threadBubble }))
+        #expect(threadSample.targetOpacity == 1.0)
+        #expect(abs(midDockPreview.frameInWindow.minX - threadSample.frameInWindow.minX) < 0.5)
+        #expect(abs(midDockPreview.frameInWindow.minY - threadSample.frameInWindow.minY) < 0.5)
+        #expect(abs(midDockPreview.frameInWindow.width - threadSample.frameInWindow.width) < 0.5)
+        #expect(abs(midDockPreview.frameInWindow.height - threadSample.frameInWindow.height) < 0.5)
+    }
+
+    /// Cancelling or failing a launch mid-dock cleanly restores Home and fades out the launching first-message preview
+    /// so no orphan bubble stays visible.
+    @Test func failedOrCancelledLaunchMidDockRemovesFirstMessagePreviewCleanly() async throws {
+        let model = AppModel.mock()
+        let probe = NewThreadBubbleProbe()
+        let (window, _) = Self.presentCustom(
+            RootView()
+                .environment(model)
+                .environment(\.newThreadBubbleProbe, probe),
+            size: CGSize(width: 1280, height: 860)
+        )
+        defer { window.orderOut(nil) }
+
+        model.composerText = "This launch will fail mid-dock"
+        model.send()
+        await Self.pumpAsync(0.08)
+        #expect(model.destination == .home)
+        let token = try #require(model.newThread.launchingToken)
+        let revealed = try #require(probe.samples.last(where: { $0.source == .homePreview }))
+        #expect(revealed.targetOpacity == 1.0)
+
+        // Simulate a server rejection mid-dock.
+        model.newThread.fail(token: token)
+        await Self.pumpAsync(0.45)
+        #expect(model.destination == .home)
+        #expect(model.newThread.launchingToken == nil)
+        #expect(model.newThread.launchingMessage == nil)
+
+        // The launching preview faded back down to opacity 0 and never handed off to ThreadView.
+        let finalPreview = try #require(probe.samples.last(where: { $0.source == .homePreview }))
+        #expect(finalPreview.targetOpacity == 0.0)
+        #expect(!probe.samples.contains(where: { $0.source == .threadBubble }))
+    }
+
+    /// Under Reduce Motion, Home fades out without showing the sliding-dock message preview and hands off cleanly.
+    @Test func reduceMotionLaunchSkipsHomePreviewAndCrossfadesCleanly() async throws {
+        let model = AppModel.mock()
+        let probe = NewThreadBubbleProbe()
+        let (window, _) = Self.presentCustom(
+            RootView()
+                .environment(model)
+                .environment(\.sendFlightForceReduceMotion, true)
+                .environment(\.newThreadBubbleProbe, probe),
+            size: CGSize(width: 1280, height: 860)
+        )
+        defer { window.orderOut(nil) }
+
+        model.composerText = "Reduce motion launch test"
+        model.send()
+        let deadline = Date().addingTimeInterval(0.8)
+        while Date() < deadline, model.destination == .home { await Self.tick() }
+        await Self.pumpAsync(0.20)
+
+        guard case .thread = model.destination else {
+            Issue.record("Reduce Motion Home did not hand off to the new thread")
+            return
+        }
+        // Under Reduce Motion, Home never mounts the sliding preview; ThreadView crossfades in whole with the real bubble.
+        #expect(!probe.samples.contains(where: { $0.source == .homePreview }))
+        let threadSample = try #require(probe.samples.first(where: { $0.source == .threadBubble }))
+        #expect(threadSample.targetOpacity == 1.0)
+    }
+
     /// The first message of a brand-new thread fades in cleanly at the top and fills one screen without overflow.
     @Test func newThreadFirstTurnFillsTheViewportWithoutOverflow() async throws {
         let model = AppModel.mock()
@@ -219,6 +341,14 @@ struct SendFlightWindowTests {
         await Task.yield()
     }
 
+    private static func pumpAsync(_ seconds: TimeInterval) async {
+        let end = Date().addingTimeInterval(seconds)
+        while Date() < end {
+            pump(min(1.0 / 60.0, max(0.002, end.timeIntervalSinceNow)))
+            await Task.yield()
+        }
+    }
+
     private static func sampleOffsets(of scroll: NSScrollView, for duration: TimeInterval) -> [(time: TimeInterval, offset: CGFloat)] {
         var samples: [(time: TimeInterval, offset: CGFloat)] = []
         let start = Date()
@@ -237,7 +367,11 @@ struct SendFlightWindowTests {
         presentCustom(RootView().environment(model), size: CGSize(width: 1280, height: 860))
     }
 
-    private static func presentCustom<V: View>(_ view: V, size: CGSize) -> (NSWindow, NSView) {
+    private static func presentCustom<V: View>(
+        _ view: V,
+        size: CGSize,
+        appearance: NSAppearance.Name? = nil
+    ) -> (NSWindow, NSView) {
         SwftFonts.register()
         let window = NSWindow(
             contentRect: CGRect(origin: CGPoint(x: -4000, y: -4000), size: size),
@@ -245,6 +379,9 @@ struct SendFlightWindowTests {
             backing: .buffered,
             defer: false
         )
+        if let appearance {
+            window.appearance = NSAppearance(named: appearance)
+        }
         let host = NSHostingView(rootView: view)
         host.frame = CGRect(origin: .zero, size: size)
         window.contentView = host

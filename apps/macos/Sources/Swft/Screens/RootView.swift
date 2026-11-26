@@ -4,27 +4,30 @@ import SwiftUI
 struct RootView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.sendFlightForceReduceMotion) private var forceReduceMotion
+
+    private var effectiveReduceMotion: Bool { reduceMotion || forceReduceMotion }
 
     var body: some View {
         HStack(spacing: 0) {
             if model.sidebarVisible {
                 SidebarView()
                     .frame(width: SwftLayout.sidebarWidth)
-                    .transition(reduceMotion ? .opacity : .move(edge: .leading).combined(with: .opacity))
+                    .transition(effectiveReduceMotion ? .opacity : .move(edge: .leading).combined(with: .opacity))
             }
             ZStack(alignment: .top) {
                 screen
                     .id(model.destination)
-                    .swftEntrance(reduceMotion: reduceMotion)
+                    .swftEntrance(reduceMotion: effectiveReduceMotion)
                     .environment(\.swftScreenHandoff, model.newThread.isHandoff(to: model.destination))
                 // Animate the bar only when the kind of screen changes; between threads its text swaps with the screen.
                 TopBar()
-                    .animation(SwftMotion.resolve(SwftMotion.screenSwitch, reduceMotion: reduceMotion), value: model.selectedThreadID == nil)
+                    .animation(SwftMotion.resolve(SwftMotion.screenSwitch, reduceMotion: effectiveReduceMotion), value: model.selectedThreadID == nil)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(SwftColor.canvas)
         }
-        .animation(SwftMotion.resolve(SwftMotion.screen, reduceMotion: reduceMotion), value: model.sidebarVisible)
+        .animation(SwftMotion.resolve(SwftMotion.screen, reduceMotion: effectiveReduceMotion), value: model.sidebarVisible)
         .background(SwftColor.sidebar)
         .background(WindowChrome())
         .ignoresSafeArea()
