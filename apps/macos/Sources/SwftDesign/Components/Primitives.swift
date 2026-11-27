@@ -90,24 +90,27 @@ public struct HoverFillStyle<S: Shape>: ButtonStyle {
         @Environment(\.swftSelectionNamespace) private var selectionNamespace
         @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+        // Hover and press animate only the fill and the scale. An `.animation(_:value:)` over the whole label would also
+        // take over its position when a click moves it (opening a panel), so the icon would leave its pill behind.
         var body: some View {
+            let pressAnimation = SwftMotion.pressAnimation(isPressed: configuration.isPressed, reduceMotion: reduceMotion)
             configuration.label
                 .background {
-                    ZStack {
-                        shape.fill(hoverFill)
-                        if selected {
-                            if let selectionNamespace {
-                                shape.fill(SwftColor.selection)
-                                    .matchedGeometryEffect(id: SwftSelection.pillID, in: selectionNamespace)
-                            } else {
-                                shape.fill(SwftColor.selection)
-                            }
+                    shape.fill(hoverFill)
+                        .animation(SwftMotion.resolve(SwftMotion.quick, reduceMotion: reduceMotion), value: hovering)
+                        .animation(pressAnimation, value: configuration.isPressed)
+                    if selected {
+                        if let selectionNamespace {
+                            shape.fill(SwftColor.selection)
+                                .matchedGeometryEffect(id: SwftSelection.pillID, in: selectionNamespace)
+                        } else {
+                            shape.fill(SwftColor.selection)
                         }
                     }
                 }
-                .scaleEffect(SwftMotion.pressScale(isPressed: configuration.isPressed, scale: pressScale, reduceMotion: reduceMotion))
-                .animation(SwftMotion.resolve(SwftMotion.quick, reduceMotion: reduceMotion), value: hovering)
-                .animation(SwftMotion.pressAnimation(isPressed: configuration.isPressed, reduceMotion: reduceMotion), value: configuration.isPressed)
+                .animation(pressAnimation) { label in
+                    label.scaleEffect(SwftMotion.pressScale(isPressed: configuration.isPressed, scale: pressScale, reduceMotion: reduceMotion))
+                }
                 .onHover { hovering = $0 }
         }
 
