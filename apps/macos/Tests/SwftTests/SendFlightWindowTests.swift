@@ -139,7 +139,7 @@ struct SendFlightWindowTests {
     @Test func sendFromTopOfLongThreadJumpsToOldEndThenGlidesSmoothly() throws {
         var items: [TranscriptItem] = []
         let base = MockData.now.addingTimeInterval(-3600)
-        for i in 0..<14 {
+        for i in 0..<40 {
             items.append(.init(id: "u-\(i)", kind: .user("Prompt \(i)"), startedAt: base.addingTimeInterval(Double(i * 60))))
             items.append(.init(id: "a-\(i)", kind: .assistant(blocks: [.text("Response \(i) with several sentences to give each turn real vertical height in the scroll view.")], streaming: false), startedAt: base.addingTimeInterval(Double(i * 60 + 2)), completedAt: base.addingTimeInterval(Double(i * 60 + 5))))
         }
@@ -155,10 +155,8 @@ struct SendFlightWindowTests {
         let oldEnd = (scroll.documentView?.frame.height ?? 0) - scroll.contentView.bounds.height
         #expect(oldEnd > 1000)
 
-        // Scroll all the way back to the top.
-        scroll.contentView.scroll(to: .zero)
-        scroll.reflectScrolledClipView(scroll.contentView)
-        Self.pump(0.15)
+        // Scroll all the way back to the top with a trackpad gesture.
+        Self.userScroll(scroll, in: window, to: 0)
         #expect(scroll.contentView.bounds.origin.y < 1)
 
         // Send a new message from the top.
@@ -400,6 +398,47 @@ struct SendFlightWindowTests {
         for height in heights { #expect(abs(height - liveHeight) < 0.5) }
     }
 
+    /// Opening a finished turn's work log grows it downward: the row clicked stays under the pointer instead of the
+    /// transcript following the growth to the bottom (a thread that fit the window re-armed bottom-follow mid-open).
+    @Test func openingWorkFoldInAShortThreadKeepsItsHeaderInPlace() throws {
+        let base = MockData.now.addingTimeInterval(-600)
+        var items: [TranscriptItem] = [.init(id: "u-0", kind: .user("Find the iOS project"), startedAt: base)]
+        for i in 0..<40 {
+            items.append(.init(id: "t-\(i)", kind: .toolCall(.init(kind: .command, title: "Ran", detail: "ls -la /Users/example/project-\(i)", status: .succeeded, duration: 0.3, output: "ok")), startedAt: base.addingTimeInterval(Double(i + 1)), completedAt: base.addingTimeInterval(Double(i + 2))))
+        }
+        items.append(.init(id: "a-0", kind: .assistant(blocks: [.text("Found it. The project lives in its own worktree.")], streaming: false), startedAt: base.addingTimeInterval(20), completedAt: base.addingTimeInterval(106)))
+        let model = AppModel.mock()
+        let box = WindowDetailBox(ThreadDetailState(summary: MockData.threads[0], items: items, diffStat: nil, isRunning: false))
+        let (window, host) = Self.presentCustom(WindowThreadHarness(model: model, box: box), size: CGSize(width: 1000, height: 760))
+        defer { window.orderOut(nil) }
+        let scroll = try #require(Self.transcriptScrollView(in: host))
+        #expect(scroll.contentView.bounds.origin.y < 0.5)
+
+        // Click down the left of the reading column until the fold row opens.
+        let column = (1000 - SwftLayout.contentMaxWidth) / 2 + 48
+        var opened = false
+        for y in stride(from: CGFloat(60), through: 400, by: 6) where !opened {
+            let point = NSPoint(x: column, y: 760 - y)
+            for kind in [NSEvent.EventType.mouseMoved, .leftMouseDown, .leftMouseUp] {
+                if let event = NSEvent.mouseEvent(with: kind, location: point, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: kind == .leftMouseUp ? 0 : 1) {
+                    window.sendEvent(event)
+                }
+            }
+            Self.pump(0.02)
+            opened = !model.expandedWorkFolds.isEmpty
+        }
+        try #require(opened)
+
+        var offsets: [CGFloat] = []
+        let start = Date()
+        while Date().timeIntervalSince(start) < 0.8 {
+            Self.pump(1.0 / 120.0)
+            offsets.append(scroll.contentView.bounds.origin.y)
+        }
+        #expect((scroll.documentView?.frame.height ?? 0) > scroll.contentView.bounds.height + 100)
+        for offset in offsets { #expect(offset < 0.5) }
+    }
+
     /// One display frame of run loop, then a yield so main-actor tasks (the launch's hand-off) get to run.
     private static func tick() async {
         pump(1.0 / 60.0)
@@ -422,6 +461,24 @@ struct SendFlightWindowTests {
             samples.append((Date().timeIntervalSince(start), scroll.contentView.bounds.origin.y))
         }
         return samples
+    }
+
+    /// A trackpad scroll: the gesture's began and ended phases bracket the move, as a person's swipe would.
+    private static func userScroll(_ scroll: NSScrollView, in window: NSWindow, to offsetY: CGFloat) {
+        let point = scroll.convert(NSPoint(x: scroll.bounds.midX, y: scroll.bounds.midY), to: nil)
+        func send(_ phase: CGScrollPhase, delta: Int32) {
+            guard let cg = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: delta, wheel2: 0, wheel3: 0) else { return }
+            cg.location = CGPoint(x: window.frame.minX + point.x, y: (NSScreen.screens.first?.frame.height ?? 0) - (window.frame.minY + point.y))
+            cg.setIntegerValueField(.scrollWheelEventScrollPhase, value: Int64(phase.rawValue))
+            if let event = NSEvent(cgEvent: cg) { window.sendEvent(event) }
+            pump(1.0 / 60.0)
+        }
+        send(.began, delta: 10)
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: offsetY))
+        scroll.reflectScrolledClipView(scroll.contentView)
+        pump(0.05)
+        send(.ended, delta: 0)
+        pump(0.15)
     }
 
     private static func pump(_ seconds: TimeInterval) {

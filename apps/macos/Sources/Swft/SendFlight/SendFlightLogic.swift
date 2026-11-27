@@ -70,15 +70,18 @@ struct ThreadScrollStickiness: Equatable, Sendable {
     }
 
     /// Processes a scroll event: scrolling up releases stick immediately; content shrinking underneath does not;
-    /// scrolling back within `SendFlightTiming.stickThreshold` (80pt) of the bottom re-arms stick.
+    /// scrolling back within `SendFlightTiming.stickThreshold` (80pt) of the bottom re-arms stick. Content growing
+    /// in place never re-arms it, so a work log opened near the bottom unfolds downward instead of being followed.
     mutating func handleScroll(_ metrics: ScrollMetrics) {
         let fromEnd = metrics.distanceFromBottom
+        let moved = abs(metrics.offsetY - lastOffsetY) > 0.5
         let scrolledUp = metrics.offsetY < lastOffsetY - 0.5 && fromEnd > 1
+        let grew = metrics.contentHeight > lastMetrics.contentHeight + 0.5
         lastOffsetY = metrics.offsetY
         lastMetrics = metrics
         if !metrics.isScrollable {
-            isSticking = true
-        } else {
+            if !grew { isSticking = true }
+        } else if moved {
             isSticking = fromEnd < SendFlightTiming.stickThreshold && !scrolledUp
         }
     }

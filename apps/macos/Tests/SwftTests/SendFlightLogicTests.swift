@@ -96,6 +96,20 @@ struct SendFlightLogicTests {
 
     // MARK: - Stick-to-Bottom
 
+    @Test func contentGrowingInPlaceNeverReArmsAReleasedStick() {
+        var stick = ThreadScrollStickiness()
+        stick.handleScroll(ScrollMetrics(offsetY: 0, contentHeight: 700, viewportHeight: 800))
+        stick.releaseStick()
+        // A work log opening in a thread that fit the window: still unscrollable, then just past the edge.
+        stick.handleScroll(ScrollMetrics(offsetY: 0, contentHeight: 790, viewportHeight: 800))
+        #expect(!stick.isSticking)
+        stick.handleScroll(ScrollMetrics(offsetY: 0, contentHeight: 840, viewportHeight: 800))
+        #expect(!stick.isSticking)
+        // Scrolling down to the end is what re-arms it.
+        stick.handleScroll(ScrollMetrics(offsetY: 40, contentHeight: 840, viewportHeight: 800))
+        #expect(stick.isSticking)
+    }
+
     @Test func scrollStickinessFollowsStudioStickRules() {
         var stick = ThreadScrollStickiness()
         #expect(stick.isSticking)
