@@ -68,6 +68,18 @@ struct NewThreadMotionFrames {
         size: CGSize = CGSize(width: 1280, height: 820),
         action: () async -> Void
     ) async throws {
+        try await record(model, name: name, appearance: appearance, frames: frames, interval: interval, size: size) { _ in await action() }
+    }
+
+    static func record(
+        _ model: AppModel,
+        name: String,
+        appearance: String = "light",
+        frames: Int,
+        interval: TimeInterval,
+        size: CGSize = CGSize(width: 1280, height: 820),
+        action: (NSWindow) async -> Void
+    ) async throws {
         SwftFonts.register()
         let window = NSWindow(
             contentRect: CGRect(origin: CGPoint(x: -4000, y: -4000), size: size),
@@ -83,7 +95,7 @@ struct NewThreadMotionFrames {
         await Self.pump(1.2)
         let folder = directory.appendingPathComponent(name)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        await action()
+        await action(window)
         let start = Date()
         for index in 0..<frames {
             await pump(until: start.addingTimeInterval(interval * Double(index)))

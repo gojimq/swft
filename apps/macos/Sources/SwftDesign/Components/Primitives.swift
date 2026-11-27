@@ -52,7 +52,9 @@ public struct IconButton: View {
     }
 
     public var body: some View {
-        Button(action: action) {
+        // macOS runs a Button's action inside the click's own update, which keeps the button from animating a move its
+        // action causes (opening a panel slid the icon out of its pill). Acting a beat later lets it move with the rest.
+        Button { DispatchQueue.main.async(execute: action) } label: {
             Image(systemName: systemName)
                 .font(.system(size: size * 0.52, weight: weight))
                 .frame(width: size, height: size)
@@ -90,27 +92,24 @@ public struct HoverFillStyle<S: Shape>: ButtonStyle {
         @Environment(\.swftSelectionNamespace) private var selectionNamespace
         @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-        // Hover and press animate only the fill and the scale. An `.animation(_:value:)` over the whole label would also
-        // take over its position when a click moves it (opening a panel), so the icon would leave its pill behind.
         var body: some View {
-            let pressAnimation = SwftMotion.pressAnimation(isPressed: configuration.isPressed, reduceMotion: reduceMotion)
             configuration.label
                 .background {
-                    shape.fill(hoverFill)
-                        .animation(SwftMotion.resolve(SwftMotion.quick, reduceMotion: reduceMotion), value: hovering)
-                        .animation(pressAnimation, value: configuration.isPressed)
-                    if selected {
-                        if let selectionNamespace {
-                            shape.fill(SwftColor.selection)
-                                .matchedGeometryEffect(id: SwftSelection.pillID, in: selectionNamespace)
-                        } else {
-                            shape.fill(SwftColor.selection)
+                    ZStack {
+                        shape.fill(hoverFill)
+                        if selected {
+                            if let selectionNamespace {
+                                shape.fill(SwftColor.selection)
+                                    .matchedGeometryEffect(id: SwftSelection.pillID, in: selectionNamespace)
+                            } else {
+                                shape.fill(SwftColor.selection)
+                            }
                         }
                     }
                 }
-                .animation(pressAnimation) { label in
-                    label.scaleEffect(SwftMotion.pressScale(isPressed: configuration.isPressed, scale: pressScale, reduceMotion: reduceMotion))
-                }
+                .scaleEffect(SwftMotion.pressScale(isPressed: configuration.isPressed, scale: pressScale, reduceMotion: reduceMotion))
+                .animation(SwftMotion.resolve(SwftMotion.quick, reduceMotion: reduceMotion), value: hovering)
+                .animation(SwftMotion.pressAnimation(isPressed: configuration.isPressed, reduceMotion: reduceMotion), value: configuration.isPressed)
                 .onHover { hovering = $0 }
         }
 
