@@ -11,6 +11,9 @@ struct SendFlightTurnSection: View, Equatable {
     let turn: TranscriptTurn
     let isLatest: Bool
     let streamRoomHeight: CGFloat?
+    /// Extra space above a turn with stream room, so the previous turn sits fully above the window instead of
+    /// showing through the soft title-bar edge.
+    let streamRoomLead: CGFloat
     let showWorking: Bool
     /// When a just-sent turn's "Working" row appears, so it follows the message's fade instead of racing it.
     let workingRevealAt: Date?
@@ -33,6 +36,7 @@ struct SendFlightTurnSection: View, Equatable {
         turn: TranscriptTurn,
         isLatest: Bool,
         streamRoomHeight: CGFloat?,
+        streamRoomLead: CGFloat = 0,
         showWorking: Bool,
         workingRevealAt: Date? = nil,
         fadeBubbleID: String?,
@@ -50,6 +54,7 @@ struct SendFlightTurnSection: View, Equatable {
         self.turn = turn
         self.isLatest = isLatest
         self.streamRoomHeight = streamRoomHeight
+        self.streamRoomLead = streamRoomLead
         self.showWorking = showWorking
         self.workingRevealAt = workingRevealAt
         self.fadeBubbleID = fadeBubbleID
@@ -69,6 +74,7 @@ struct SendFlightTurnSection: View, Equatable {
             && lhs.turn == rhs.turn
             && lhs.isLatest == rhs.isLatest
             && lhs.streamRoomHeight == rhs.streamRoomHeight
+            && lhs.streamRoomLead == rhs.streamRoomLead
             && lhs.showWorking == rhs.showWorking
             && lhs.workingRevealAt == rhs.workingRevealAt
             && lhs.fadeBubbleID == rhs.fadeBubbleID
@@ -80,6 +86,8 @@ struct SendFlightTurnSection: View, Equatable {
     }
 
     var body: some View {
+        let room = isLatest ? streamRoomHeight : nil
+        let lead = room == nil ? 0 : streamRoomLead
         VStack(alignment: .leading, spacing: 16) {
             ForEach(turn.rows) { row in
                 rowView(row)
@@ -91,7 +99,8 @@ struct SendFlightTurnSection: View, Equatable {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .frame(minHeight: isLatest ? streamRoomHeight : nil, alignment: .top)
+        .padding(.top, lead)
+        .frame(minHeight: room.map { $0 + lead }, alignment: .top)
         .animation(SwftMotion.resolve(SwftMotion.settle, reduceMotion: reduceMotion), value: showWorking)
     }
 

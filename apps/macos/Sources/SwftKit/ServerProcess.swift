@@ -240,14 +240,10 @@ public actor ServerProcess {
             child.currentDirectoryURL = launchTarget.defaultWorkingDirectory
         }
 
-        // Strip ambient T3CODE_* env vars so a developer's live T3 Code session never overrides bootstrap.
-        var env = ProcessInfo.processInfo.environment.filter { key, _ in
-            !key.hasPrefix("T3CODE_") && key != "VITE_DEV_SERVER_URL"
-        }
-        for (key, value) in configuration.extraEnvironment {
-            env[key] = value
-        }
-        child.environment = env
+        child.environment = Self.childEnvironment(
+            inherited: ProcessInfo.processInfo.environment,
+            extra: configuration.extraEnvironment
+        )
 
         let stdin = Pipe()
         let stdout = Pipe()
@@ -361,6 +357,31 @@ public actor ServerProcess {
     // MARK: - Validation & Discovery
 
     /// Guardrail preventing accidental launch against the user's live `~/.t3` / `~/.t3/userdata`.
+    /// The bundled server's environment. Ambient T3CODE_* vars are stripped so a developer's live T3 Code session never
+    /// overrides bootstrap, and TMPDIR is reset to the user's own temp folder: an app opened from inside another
+    /// tool's run (an agent session, say) inherits that run's private TMPDIR, which is deleted when the run ends, and
+    /// then the server and every provider it spawns fail to create temp files.
+    public static func childEnvironment(inherited: [String: String], extra: [String: String]) -> [String: String] {
+        var env = inherited.filter { key, _ in
+            !key.hasPrefix("T3CODE_") && key != "VITE_DEV_SERVER_URL"
+        }
+        if let userTemp = userTemporaryDirectory() {
+            env["TMPDIR"] = userTemp
+        }
+        for (key, value) in extra {
+            env[key] = value
+        }
+        return env
+    }
+
+    private static func userTemporaryDirectory() -> String? {
+        let length = confstr(_CS_DARWIN_USER_TEMP_DIR, nil, 0)
+        guard length > 0 else { return nil }
+        var buffer = [CChar](repeating: 0, count: length)
+        guard confstr(_CS_DARWIN_USER_TEMP_DIR, &buffer, length) > 0 else { return nil }
+        return String(cString: buffer)
+    }
+
     public static func validateBaseDirectory(_ url: URL) throws {
         let candidate = url.standardizedFileURL.resolvingSymlinksInPath().path
         let home = FileManager.default.homeDirectoryForCurrentUser

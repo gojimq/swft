@@ -29,6 +29,9 @@ struct ThreadView: View {
     }
 
     nonisolated static let topInset = SwftLayout.titlebarHeight + 24
+    nonisolated static let turnSpacing: CGFloat = 32
+    /// Puts the previous turn's last line a little above the window top while a new turn rests at `topInset`.
+    nonisolated static let streamRoomLead = max(0, topInset - turnSpacing + 8)
 
     private var effectiveReduceMotion: Bool { reduceMotion || forceReduceMotion }
 
@@ -67,7 +70,7 @@ struct ThreadView: View {
         }
 
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 32) {
+            LazyVStack(alignment: .leading, spacing: Self.turnSpacing) {
                 ForEach(Array(turns.enumerated()), id: \.element.id) { index, turn in
                     let isLatest = index == turns.count - 1
                     SendFlightTurnSection(
@@ -75,6 +78,7 @@ struct ThreadView: View {
                         turn: turn,
                         isLatest: isLatest,
                         streamRoomHeight: isLatest ? streamRoom : nil,
+                        streamRoomLead: index > 0 ? Self.streamRoomLead : 0,
                         showWorking: isLatest && showWorking,
                         workingRevealAt: isLatest ? workingRevealAt : nil,
                         fadeBubbleID: isLatest ? fadeBubbleID : nil,
