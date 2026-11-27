@@ -29,7 +29,7 @@ public struct TranscriptAttachment: Identifiable, Hashable, Sendable {
 }
 
 /// Fixed attachment geometry. Sizes never depend on load state (only a lone image's width follows its aspect ratio
-/// once decoded), so rows never jump vertically and the send flight can predict the landing size exactly.
+/// once decoded), so rows never jump vertically.
 public enum AttachmentMetrics {
     public static let singleImageHeight: CGFloat = 200
     public static let singleImageMinWidth: CGFloat = 120
@@ -62,27 +62,6 @@ public enum AttachmentMetrics {
         case .file:
             return CGSize(width: fileChipWidth, height: fileChipHeight)
         }
-    }
-
-    /// Size of the trailing-aligned, wrapping attachment strip (mirrors `AttachmentFlowLayout`).
-    public static func stripSize(
-        for attachments: [TranscriptAttachment],
-        maxWidth: CGFloat,
-        aspectRatio: (TranscriptAttachment) -> CGFloat? = { _ in nil }
-    ) -> CGSize {
-        guard !attachments.isEmpty else { return .zero }
-        let single = usesSingleImageLayout(attachments)
-        let sizes = attachments.map { itemSize($0, single: single, aspectRatio: single ? aspectRatio($0) : nil) }
-        return AttachmentFlowLayout.measure(sizes, maxWidth: maxWidth, spacing: spacing)
-    }
-
-    /// Aspect ratio of an attachment image already in `SwftImageCache`, if any.
-    @MainActor public static func cachedAspectRatio(_ attachment: TranscriptAttachment) -> CGFloat? {
-        guard attachment.kind == .image,
-              let image = SwftImageCache.shared.image(for: SwftImageReference.attachmentKey(attachment.id)),
-              image.height > 0
-        else { return nil }
-        return CGFloat(image.width) / CGFloat(image.height)
     }
 
     public static func formattedSize(_ bytes: Int) -> String {
@@ -364,8 +343,7 @@ public struct MessageImage: View {
 
 // MARK: - User turn
 
-/// One sent user turn: its attachments above an optional text bubble, trailing-aligned. Shared by the transcript's
-/// `UserBubble` and the send-flight overlay so the flight lands on identical geometry.
+/// One sent user turn: its attachments above an optional text bubble, trailing-aligned.
 public struct UserTurnContent: View {
     let text: String
     let attachments: [TranscriptAttachment]

@@ -5,7 +5,6 @@ struct ThreadView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.sendFlightForceReduceMotion) private var forceReduceMotion
-    @Environment(\.swftScreenHandoff) private var isHandoffScreen
     let detail: ThreadDetailState
     /// Keeps the floating bottom composer rooted when switching directly from another thread so only the
     /// transcript transitions instead of blinking the shared input capsule.
@@ -34,10 +33,8 @@ struct ThreadView: View {
     private var effectiveReduceMotion: Bool { reduceMotion || forceReduceMotion }
 
     var body: some View {
-        let rows = detail.rows
+        let rows = TranscriptLayout.rows(for: detail.items, isRunning: detail.isRunning, inlineTurnIDs: sendFlight.inlineTurnIDs)
         let turns = SendFlightLogic.turns(from: rows)
-        // One inset drives the transcript's padding, the stream room and the flight's landing, so a sent prompt
-        // lands exactly where its real bubble rests.
         let topInset = Self.topInset
         let bottomInset = composerHeight + 28
         let isBusy = model.isComposerBusy
@@ -47,40 +44,19 @@ struct ThreadView: View {
         let streamRoom = hasStreamRoom
             ? SendFlightLogic.streamRoomHeight(viewportHeight: sendFlight.viewportSize.height, topInset: topInset, bottomInset: bottomInset)
             : nil
-        let showWorking = sendFlight.shouldShowWorking(
-            for: detail,
+        let showWorking = SendFlightLogic.shouldShowWorkingIndicator(
+            isRunning: detail.isRunning,
             isBusy: isBusy,
-            latestTurnRows: turns.last?.rows ?? [],
-            latestSend: latestSend,
-            isHandoffScreen: isHandoffScreen,
-            reduceMotion: effectiveReduceMotion
+            latestTurnRows: turns.last?.rows ?? []
         )
-        let holdsLatestTurn = sendFlight.holdsLatestTurn(
-            for: detail,
-            latestSend: latestSend,
-            isHandoffScreen: isHandoffScreen,
-            reduceMotion: effectiveReduceMotion
-        )
-        let pendingFlightRowID = sendFlight.pendingFlightRowID(
-            latestSend: latestSend,
-            in: detail,
-            rows: rows,
-            reduceMotion: effectiveReduceMotion
-        )
-        let hiddenBubbleID = sendFlight.activeHiddenFlightBubbleID(
-            in: detail,
-            rows: rows,
-            pendingRowID: pendingFlightRowID
-        )
-        let (fadeBubbleID, fadeStyle): (String?, SendBubbleFadeStyle) = {
-            if effectiveReduceMotion, let rmID = sendFlight.reduceMotionFadeBubbleID, !rmID.isEmpty {
-                return (rmID, .reduceMotion)
-            }
-            return (nil, .none)
-        }()
-        // The send's own row insertion and active scroll flight land without a LazyVStack layout animation:
-        // the flight and display-synced scroll carry that motion cleanly without fighting layout.
-        let animatesRows = populated && !isSendPending && !sendFlight.isFlightAnimating
+        let fadeBubbleID = sendFlight.fadingBubbleID(latestSend: latestSend, in: detail)
+        let workingRevealAt = latestSend.flatMap { send in
+            send.optimisticItemID != nil && send.optimisticItemID == fadeBubbleID
+                ? send.timestamp.addingTimeInterval(SendFlightTiming.workingDelay)
+                : nil
+        }
+        // The send's own row lands without a layout animation; the scroll and its fade carry that motion.
+        let animatesRows = populated && !isSendPending
         let expandedWorkFolds = model.expandedWorkFolds
         let expandedSubagentRows = model.expandedSubagentRows
         let knownEnvironmentIDs = model.knownEnvironmentIDs
@@ -100,10 +76,8 @@ struct ThreadView: View {
                         isLatest: isLatest,
                         streamRoomHeight: isLatest ? streamRoom : nil,
                         showWorking: isLatest && showWorking,
-                        holdsRows: isLatest && holdsLatestTurn,
-                        hiddenBubbleID: isLatest ? hiddenBubbleID : nil,
+                        workingRevealAt: isLatest ? workingRevealAt : nil,
                         fadeBubbleID: isLatest ? fadeBubbleID : nil,
-                        fadeStyle: isLatest ? fadeStyle : .none,
                         expandedFoldIDs: Self.expandedFoldIDs(for: turn, in: expandedWorkFolds),
                         expandedSubagentIDs: Self.expandedSubagentIDs(for: turn, in: expandedSubagentRows),
                         parentEnvironmentID: parentEnvironmentID,
@@ -147,7 +121,7 @@ struct ThreadView: View {
                 distance: SwftMotion.threadSwitchOffset,
                 animation: SwftMotion.threadSwitch,
                 ready: !rows.isEmpty,
-                bypass: isSendPending || sendFlight.isFlightAnimating
+                bypass: isSendPending
             )
             .swftOverlayScrollbars()
             .background(SendFlightScrollAnchor(driver: sendFlight.scrollDriver).frame(width: 0, height: 0))
@@ -174,18 +148,10 @@ struct ThreadView: View {
                 )
                 .onGeometryChange(for: CGFloat.self, of: \.size.height) { height in
                     let quantized = (height * 2).rounded() / 2
-                    sendFlight.recordMeasuredComposerHeight(quantized)
-                    // Avoid re-rendering the transcript every frame while a multi-line composer or attachment tray
-                    // collapses during a send flight; the settled height flushes when the flight finishes.
-                    if !sendFlight.isFlightAnimating, abs(quantized - composerHeight) >= 0.5 {
+                    if abs(quantized - composerHeight) >= 0.5 {
                         composerHeight = quantized
                     }
                 }
-        }
-        .onChange(of: sendFlight.isFlightAnimating) { _, animating in
-            if !animating, let measured = sendFlight.latestMeasuredComposerHeight, abs(measured - composerHeight) >= 0.5 {
-                composerHeight = measured
-            }
         }
         .threadSendFlightHost(
             detail: detail,
@@ -193,8 +159,6 @@ struct ThreadView: View {
             isBusy: isBusy,
             latestThreadSend: latestSend,
             failedThreadSendID: model.failedThreadSendID,
-            topInset: topInset,
-            bottomInset: bottomInset,
             reduceMotion: effectiveReduceMotion,
             coordinator: sendFlight,
             scrollPosition: $scrollPosition
@@ -208,7 +172,7 @@ struct ThreadView: View {
                     .id(imagePreview.id)
             }
         }
-        // Transcript, flight overlay and lightbox all resolve images through this thread's own environment.
+        // Transcript and lightbox both resolve images through this thread's own environment.
         .environment(\.swftImageLoader, model.imageLoader(forThreadID: detail.summary.id))
         .onChange(of: subagentItems) { _, updated in
             model.rightPanel.syncSubagentTabs(
@@ -253,7 +217,6 @@ struct ThreadView: View {
 
             ComposerView(placeholder: "Reply to \(detail.summary.providerLabel)…")
                 .frame(maxWidth: SwftLayout.composerMaxWidth)
-                .sendFlightComposerAnchor()
                 .overlay(alignment: .top) {
                     if sendFlight.showsScrollToBottom {
                         ScrollToBottomButton {
@@ -262,10 +225,7 @@ struct ThreadView: View {
                                 if !sendFlight.scrollDriver.scrollToBottomImmediately() {
                                     scrollPosition.scrollTo(edge: .bottom)
                                 }
-                            } else if !sendFlight.scrollDriver.animateToBottom(
-                                duration: SendFlightTiming.settleDuration,
-                                curve: .settle
-                            ) {
+                            } else if !sendFlight.scrollDriver.animateToBottom(duration: SendFlightTiming.settleDuration) {
                                 withAnimation(SwftMotion.screen) {
                                     scrollPosition.scrollTo(edge: .bottom)
                                 }

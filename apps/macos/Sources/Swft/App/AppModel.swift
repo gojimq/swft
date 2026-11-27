@@ -109,9 +109,9 @@ final class AppModel {
     let newThread = NewThreadLauncher()
     /// Release checks and the remote-first, this-Mac-last update run behind Home's update pill.
     let updates: UpdateCoordinator
-    /// Most recent send dispatched inside an existing thread, observed by `ThreadView` to launch send flight.
+    /// Most recent send dispatched inside an existing thread, observed by `ThreadView` to scroll to it and fade it in.
     var latestThreadSend: ThreadSendEvent?
-    /// Send event ID whose live dispatch failed, so `ThreadView` can cancel its flight overlay immediately.
+    /// Send event ID whose live dispatch failed, so `ThreadView` stops scrolling toward its removed row.
     var failedThreadSendID: UUID?
 
     // MARK: - Usage Pills
@@ -1764,7 +1764,7 @@ final class AppModel {
     }
 
     /// When the server promotes `pending-<uuid>` uploads to `<thread>-<uuid>` on send/launch, alias the local preview
-    /// into `SwftImageCache` under the promoted id so the flight and transcript never flash a loading spinner.
+    /// into `SwftImageCache` under the promoted id so the transcript never flashes a loading spinner.
     static func aliasAttachmentPreviews(from pending: [TranscriptAttachment], to promoted: [ChatAttachment]) {
         guard !pending.isEmpty, pending.count == promoted.count else { return }
         for (local, server) in zip(pending, promoted) where local.id != server.id {
@@ -1872,8 +1872,8 @@ final class AppModel {
             }
             let useFreshContext = freshSessionThreadIDs.remove(threadID) != nil
             let attachments = composerAttachments.takeReady(keepPinned: false)
-            // The row appears on this frame (not after the server's echo), so the send flight and the scroll have
-            // their real landing geometry from the start.
+            // The row appears on this frame (not after the server's echo), so the scroll has the new turn's real
+            // geometry from the start.
             let messageID = UUID().uuidString
             pendingUserMessages[threadID, default: []].append(PendingUserMessage(messageID: messageID, text: text, attachments: attachments))
             let sendEvent = ThreadSendEvent(threadID: threadID, text: text, attachments: attachments, optimisticItemID: messageID)
@@ -1948,7 +1948,7 @@ final class AppModel {
                 )
                 let result = try await launchStore.launchThread(input)
                 // The server promotes `pending-<uuid>` uploads to `<thread>-<uuid>` on launch; carry the cached local
-                // preview across so the flight and landing never flash a spinner.
+                // preview across so the first message never flashes a spinner.
                 let handoffAttachments = Self.aliasLaunchedAttachmentPreviews(
                     pending: attachments,
                     projection: result.projection

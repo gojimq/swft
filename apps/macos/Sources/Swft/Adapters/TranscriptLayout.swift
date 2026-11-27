@@ -4,15 +4,24 @@ import SwftKit
 /// Folds each turn's intermediate work (thoughts, tool calls, interim commentary, resolved approvals, quiet notices)
 /// into one `WorkFold` row, leaving the user's message, the final answer, errors and pending approvals visible.
 enum TranscriptLayout {
-    static func rows(for items: [TranscriptItem], isRunning: Bool) -> [TranscriptRow] {
+    /// `inlineTurnIDs` (a turn's first item ID) keeps those turns laid out as they streamed after they settle, so a turn
+    /// the user just watched does not collapse under them; it folds the next time the thread opens.
+    static func rows(for items: [TranscriptItem], isRunning: Bool, inlineTurnIDs: Set<String> = []) -> [TranscriptRow] {
         let turns = splitTurns(items)
         var rows: [TranscriptRow] = []
         for (index, turn) in turns.enumerated() {
             let isLast = index == turns.count - 1
             let live = isLast && (isRunning || turn.contains(where: isInFlight))
-            rows += fold(turn, live: live)
+            let inline = live || turn.first.map { inlineTurnIDs.contains($0.id) } == true
+            rows += fold(turn, live: live, inline: inline)
         }
         return rows
+    }
+
+    /// The first item ID of the latest turn when it is live; the ID `rows(for:isRunning:inlineTurnIDs:)` keys turns by.
+    static func liveTurnID(in items: [TranscriptItem], isRunning: Bool) -> String? {
+        guard let last = splitTurns(items).last, isRunning || last.contains(where: isInFlight) else { return nil }
+        return last.first?.id
     }
 
     // MARK: - Turns
@@ -41,9 +50,9 @@ enum TranscriptLayout {
         }
     }
 
-    private static func fold(_ turn: [TranscriptItem], live: Bool) -> [TranscriptRow] {
+    private static func fold(_ turn: [TranscriptItem], live: Bool, inline: Bool) -> [TranscriptRow] {
         guard let first = turn.first else { return [] }
-        let settledAnswerIndex = live ? nil : turn.indices.last {
+        let settledAnswerIndex = inline ? nil : turn.indices.last {
             if case .assistant = turn[$0].kind { true } else { false }
         }
         let hasSubagents = turn.contains { if case .subagent = $0.kind { true } else { false } }
@@ -105,7 +114,7 @@ enum TranscriptLayout {
             let fold = makeFold(
                 id: foldID,
                 steps: steps,
-                timingItems: (hasSubagents || live) ? segmentItems : turn,
+                timingItems: (hasSubagents || inline) ? segmentItems : turn,
                 turn: turn,
                 answerIndex: isTail ? settledAnswerIndex : nil,
                 live: segmentLive
@@ -120,7 +129,7 @@ enum TranscriptLayout {
             case .assistant(let blocks, let streaming):
                 // Match T3 Code: while a turn is live, assistant messages stay visible inline in chronological
                 // order between work groups; once settled, interim messages fold into one "Worked for …" row.
-                if live {
+                if inline {
                     flushWorkSegment(isTail: false)
                     rows.append(.assistant(id: item.id, blocks: blocks, streaming: streaming))
                 } else if index == settledAnswerIndex {

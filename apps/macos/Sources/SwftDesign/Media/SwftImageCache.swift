@@ -75,11 +75,11 @@ public struct SwftImagePreviewAction: Sendable {
 
 extension EnvironmentValues {
     @Entry public var swftImageLoader: SwftImageLoader = .cacheOnly
-    /// Nil where images are not clickable (the send-flight overlay, the composer).
+    /// Nil where images are not clickable (the composer).
     @Entry public var swftImagePreviewAction: SwftImagePreviewAction? = nil
 }
 
-/// In-memory decoded image cache shared by the composer, the send flight, the transcript and the lightbox, so a sent
+/// In-memory decoded image cache shared by the composer, the transcript and the lightbox, so a sent
 /// attachment shows the same pixels in all four with no blank frame. Loads are deduplicated per key.
 @MainActor
 public final class SwftImageCache {

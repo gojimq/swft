@@ -7,18 +7,22 @@ import SwiftUI
 ///
 /// SwiftUI's animated `ScrollPosition.scrollTo(edge: .bottom)` on macOS `HostingScrollView` steps `bounds.origin.y`
 /// in whole-point integers at uneven frame cadence with velocity jitter. Driving `NSClipView` directly from a
-/// `CADisplayLink` synced to the display's native refresh rate (60/120Hz ProMotion) with `CubicBezierCurve.send`
-/// keeps the transcript scroll locked in phase with `SendFlightOverlayBubble` at physical-pixel precision, while
-/// canceling immediately the instant the user touches the trackpad, mouse wheel, or scrollbar.
+/// `CADisplayLink` synced to the display's native refresh rate (60/120Hz ProMotion) glides at physical-pixel
+/// precision, and cancels the instant the user touches the trackpad, mouse wheel, or scrollbar.
+///
+/// The glide is a critically damped follower of the live bottom rather than a fixed curve to a fixed target: a
+/// `LazyVStack` only learns a new turn's real height as it scrolls into view, so the bottom moves mid-glide, and a
+/// follower absorbs that in one continuous motion instead of stopping short and gliding again.
 @MainActor
 final class SendFlightScrollDriver {
     private struct ActiveScrollAnimation {
-        let startY: CGFloat
-        var targetY: CGFloat
+        var position: CGFloat
+        var velocity: CGFloat
+        var lastTime: CFTimeInterval
         let startTime: CFTimeInterval
+        /// Natural frequency; the follower is within 0.2% of a fixed distance after `duration`.
+        let omega: CGFloat
         let duration: TimeInterval
-        let curve: CubicBezierCurve
-        var targetLocked: Bool
         let onComplete: (() -> Void)?
     }
 
@@ -86,12 +90,11 @@ final class SendFlightScrollDriver {
         return true
     }
 
-    /// Animates the attached `NSScrollView` to its bottom using `curve` over `duration`.
+    /// Glides the attached `NSScrollView` to its live bottom, settling in about `duration`.
     /// Returns `false` when no scroll view is attached so the caller can fall back to SwiftUI's `ScrollPosition`.
     @discardableResult
     func animateToBottom(
         duration: TimeInterval,
-        curve: CubicBezierCurve,
         preJumpY: CGFloat? = nil,
         onComplete: (() -> Void)? = nil
     ) -> Bool {
@@ -101,23 +104,20 @@ final class SendFlightScrollDriver {
         if let preJumpY {
             applyOffset(preJumpY, to: scrollView)
         }
-        let startY = scrollView.contentView.bounds.origin.y
-        let targetY = maxScrollY(of: scrollView)
-
         if duration <= 0 {
-            applyOffset(targetY, to: scrollView)
+            applyOffset(maxScrollY(of: scrollView), to: scrollView)
             onComplete?()
             return true
         }
 
         let now = CACurrentMediaTime()
         animation = ActiveScrollAnimation(
-            startY: startY,
-            targetY: targetY,
+            position: scrollView.contentView.bounds.origin.y,
+            velocity: 0,
+            lastTime: now,
             startTime: now,
+            omega: 8.5 / CGFloat(duration),
             duration: duration,
-            curve: curve,
-            targetLocked: false,
             onComplete: onComplete
         )
         startFramePacing(for: scrollView)
@@ -129,19 +129,6 @@ final class SendFlightScrollDriver {
         guard let scrollView else { return nil }
         let maxY = maxScrollY(of: scrollView)
         return max(0, maxY - scrollView.contentView.bounds.origin.y)
-    }
-
-    /// Finishes an active scroll cleanly at its target (used when the paired flight lands right before the final tick).
-    func finishAnimationAtTarget() {
-        guard let anim = animation, let scrollView else {
-            cancelAnimation()
-            return
-        }
-        let finalY = anim.targetLocked ? anim.targetY : maxScrollY(of: scrollView)
-        applyOffset(finalY, to: scrollView)
-        let completion = anim.onComplete
-        cancelAnimation()
-        completion?()
     }
 
     func cancelAnimation() {
@@ -211,38 +198,36 @@ final class SendFlightScrollDriver {
             cancelAnimation()
             return
         }
-        let clipView = scrollView.contentView
-        let elapsed = max(0, now - anim.startTime)
+        let target = maxScrollY(of: scrollView)
+        let dt = CGFloat(max(0, now - anim.lastTime))
+        anim.lastTime = now
 
-        // Allow LazyVStack to settle the newly added turn's height during the first 80ms (while eased < ~0.12),
-        // then lock the target so mid-flight streaming overflow never causes a sudden velocity jump.
-        if !anim.targetLocked {
-            let liveMax = maxScrollY(of: scrollView)
-            if liveMax > anim.startY + 0.5 {
-                anim.targetY = liveMax
-            }
-            if elapsed >= 0.08 && anim.targetY > anim.startY + 0.5 {
-                anim.targetLocked = true
-            }
+        // Exact critically damped step toward the live target: stable at any frame interval, never overshoots from
+        // rest, and a target that moves mid-glide just bends the motion.
+        let offset = anim.position - target
+        let decay = exp(-anim.omega * dt)
+        let carry = (anim.velocity + anim.omega * offset) * dt
+        let next = target + (offset + carry) * decay
+        anim.velocity = (anim.velocity - anim.omega * carry) * decay
+        // Lazy rows swapping estimated heights for real ones can nudge the bottom up a point; never glide backward.
+        if next < anim.position {
+            anim.velocity = 0
+        } else {
+            anim.position = next
         }
 
-        let progress = min(1.0, elapsed / anim.duration)
-
-        if progress >= 1.0 {
-            let finalY = anim.targetLocked ? anim.targetY : maxScrollY(of: scrollView)
-            applyOffset(finalY, to: scrollView)
+        let settled = target - anim.position < 0.5 && abs(anim.velocity) < 20
+        if settled || now - anim.startTime > anim.duration * 3 {
+            applyOffset(target, to: scrollView)
             let completion = anim.onComplete
             cancelAnimation()
             completion?()
             return
         }
 
-        let eased = anim.curve.value(at: progress)
         let scale = max(2, scrollView.window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2)
-        let interpolated = anim.startY + (anim.targetY - anim.startY) * CGFloat(eased)
-        let nextY = (interpolated * scale).rounded() / scale
-
-        if abs(nextY - clipView.bounds.origin.y) >= 0.01 {
+        let nextY = (anim.position * scale).rounded() / scale
+        if abs(nextY - scrollView.contentView.bounds.origin.y) >= 0.01 {
             applyOffset(nextY, to: scrollView)
         }
         animation = anim

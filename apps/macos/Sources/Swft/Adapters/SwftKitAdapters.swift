@@ -513,7 +513,7 @@ enum SwftAdapters {
                 mapped.completedAt = item.completedAt
                 if case .userMessage(let messageId, _, _, _, _, _) = item.kind, pendingIDs.contains(messageId) {
                     // The server echoed a message sent from here: keep the optimistic row's identity so the
-                    // transcript (and any send flight bound to it) never sees the row swap out.
+                    // transcript (and a sent message fading in) never sees the row swap out.
                     echoedPendingIDs.insert(messageId)
                     mapped = TranscriptItem(id: messageId, kind: mapped.kind, startedAt: mapped.startedAt, completedAt: mapped.completedAt)
                 }

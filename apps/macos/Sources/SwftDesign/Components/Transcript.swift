@@ -3,7 +3,6 @@ import os
 import SwiftUI
 
 /// Right-aligned user message: its attachments above a plain soft-grey bubble with a large radius, like the reference.
-/// The whole unit (attachments and text) is the send-flight landing surface.
 public struct UserBubble: View, Equatable {
     let text: String
     let attachments: [TranscriptAttachment]
@@ -22,7 +21,6 @@ public struct UserBubble: View, Equatable {
             Spacer(minLength: UserBubbleMetrics.leadingSpacerMinLength)
             UserTurnContent(text: text, attachments: attachments)
                 .textSelection(.enabled)
-                .sendFlightBubbleAnchor()
         }
     }
 }
@@ -47,6 +45,9 @@ public struct AssistantMessage<Content: View>: View {
 public struct MessageText: View, Equatable {
     let markdown: String
     var streaming: Bool
+    /// The size it last had while streaming. Dropping the caret can unwrap a line, so a finished message keeps that
+    /// height at the same width and the transcript under the reader does not jump.
+    @State private var streamedSize: CGSize?
 
     public init(_ markdown: String, streaming: Bool = false) {
         self.markdown = markdown
@@ -68,6 +69,14 @@ public struct MessageText: View, Equatable {
         }
         .textSelection(.enabled)
         .fixedSize(horizontal: false, vertical: true)
+        .frame(minHeight: streaming ? nil : streamedSize?.height, alignment: .top)
+        .onGeometryChange(for: CGSize.self, of: \.size) { size in
+            if streaming {
+                streamedSize = size
+            } else if let streamedSize, abs(streamedSize.width - size.width) > 0.5 {
+                self.streamedSize = nil
+            }
+        }
         .animation(streaming ? .easeOut(duration: 0.22) : nil, value: markdown)
     }
 
@@ -415,5 +424,88 @@ public struct ApprovalCard: View {
         .animation(SwftMotion.resolve(SwftMotion.spring, reduceMotion: reduceMotion), value: status)
         .padding(14)
         .background(RoundedRectangle(cornerRadius: SwftRadius.l, style: .continuous).fill(SwftColor.surfaceMuted))
+    }
+}
+
+/// Layout metrics shared by `UserBubble` and the attachment strip above it.
+public enum UserBubbleMetrics {
+    public static let horizontalPadding: CGFloat = 18
+    public static let verticalPadding: CGFloat = max(8, (44 - SwftFonts.lineHeight(SwftType.bodySize)) / 2)
+    public static let cornerRadius: CGFloat = 22
+    public static let leadingSpacerMinLength: CGFloat = 80
+
+    /// Attachment-only messages render no text pill.
+    public static func hasText(_ text: String) -> Bool {
+        !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+}
+
+/// Quiet "Working" tail row shown while a turn is running before work steps or streaming text arrive.
+/// Waits `delay` (or until `revealAt`, typically `send.timestamp + SendFlightTiming.workingDelay`) so a just-sent
+/// message has faded in first.
+public struct WorkingIndicatorRow: View {
+    let delay: TimeInterval
+    let revealAt: Date?
+    let reduceMotionOverride: Bool?
+    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
+    @State private var shown: Bool
+
+    private var reduceMotion: Bool { reduceMotionOverride ?? systemReduceMotion }
+
+    public init(delay: TimeInterval = 0, revealAt: Date? = nil, reduceMotion: Bool? = nil) {
+        self.delay = delay
+        self.revealAt = revealAt
+        self.reduceMotionOverride = reduceMotion
+        let initialRemaining: TimeInterval
+        if reduceMotion == true {
+            initialRemaining = 0
+        } else if let revealAt {
+            initialRemaining = max(0, revealAt.timeIntervalSinceNow)
+        } else {
+            initialRemaining = max(0, delay)
+        }
+        self._shown = State(initialValue: initialRemaining <= 0)
+    }
+
+    public var body: some View {
+        HStack(spacing: 8) {
+            if reduceMotion {
+                Circle()
+                    .fill(SwftColor.textTertiary)
+                    .frame(width: 6, height: 6)
+                    .frame(width: 12, height: 12)
+            } else {
+                ProgressView()
+                    .controlSize(.mini)
+                    .frame(width: 12, height: 12)
+            }
+            Text("Working")
+                .font(SwftType.label)
+                .foregroundStyle(SwftColor.textSecondary)
+        }
+        .frame(height: 24, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .opacity(shown ? 1 : 0)
+        .offset(y: shown || reduceMotion ? 0 : 8)
+        .task(id: revealAt?.timeIntervalSinceReferenceDate ?? delay) {
+            if shown { return }
+            let remaining: TimeInterval
+            if reduceMotion {
+                remaining = 0
+            } else if let revealAt {
+                remaining = max(0, revealAt.timeIntervalSinceNow)
+            } else {
+                remaining = max(0, delay)
+            }
+            if remaining > 0 {
+                try? await Task.sleep(for: .seconds(remaining))
+                guard !Task.isCancelled else { return }
+            }
+            withAnimation(SwftMotion.resolve(SwftMotion.settle, reduceMotion: reduceMotion)) {
+                shown = true
+            }
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Working")
     }
 }

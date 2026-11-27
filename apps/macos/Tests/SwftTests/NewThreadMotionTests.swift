@@ -181,7 +181,7 @@ struct NewThreadMockTests {
         #expect(model.threadSummary(for: row.id)?.title == "Fix Failing Test")
     }
 
-    @Test func handoffEmitsFirstMessageFadeAndFollowUpUsesFlightWithoutReplaying() async throws {
+    @Test func handoffAdoptsTheFirstMessageAndAFollowUpScrollsWithoutReplaying() async throws {
         let model = AppModel.mock()
         model.composerText = "Find and fix the failing test"
         model.send()
@@ -197,13 +197,12 @@ struct NewThreadMockTests {
         #expect(handoff.threadID == row.id)
         #expect(handoff.text == "Find and fix the failing test")
 
-        // The handoff adopts the thread in place (Home already faded the first message in — no flight, no double-fade).
+        // The handoff adopts the thread in place (Home already faded the first message in — no second fade).
         let detail = try #require(model.detail(for: row.id))
         let coordinator = SendFlightCoordinator()
-        coordinator.syncThread(detail: detail, isBusy: true)
-        #expect(coordinator.adoptOnAppear(handoff, detail: detail, isHandoffScreen: true, reduceMotion: false) == .handoff)
-        #expect(coordinator.activeFlight == nil)
-        #expect(coordinator.latestTurnHeldForSendID == nil)
+        coordinator.syncThread(detail: detail, rows: detail.rows, isBusy: true)
+        #expect(coordinator.adoptOnAppear(handoff, detail: detail, rows: detail.rows, isHandoffScreen: true) == .handoff)
+        #expect(coordinator.fadeBubbleID == nil)
 
         // Leaving the thread drops the event, so coming back later can never hold or replay it again.
         model.goHome()
@@ -211,16 +210,15 @@ struct NewThreadMockTests {
         model.open(row.id)
         #expect(model.latestThreadSend == nil)
 
-        // A send inside the open thread keeps its event and runs the full J-curve flight.
+        // A send inside the open thread scrolls to its new turn and fades the message in.
         model.composerText = "One more thing"
         model.send()
         let followUp = try #require(model.latestThreadSend)
         #expect(followUp.isHandoff == false)
         #expect(followUp.threadID == row.id)
         let updatedDetail = try #require(model.detail(for: row.id))
-        #expect(coordinator.beginSend(followUp, detail: updatedDetail, reduceMotion: false) == .startFlight)
-        #expect(coordinator.activeFlight?.id == followUp.id)
-        coordinator.cancelFlight(clearPendingStreamRoom: true)
+        #expect(coordinator.beginSend(followUp, detail: updatedDetail, rows: updatedDetail.rows) == .scrollToNewTurn(preJumpY: nil))
+        #expect(coordinator.fadeBubbleID == followUp.optimisticItemID)
     }
 
     @Test func newThreadMidLaunchStaysHome() async {

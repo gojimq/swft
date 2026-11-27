@@ -44,9 +44,9 @@ struct SendFlightWindowTests {
         }
     }
 
-    /// Sending in a realistic 20-turn rich-markdown thread while live server updates stream in mid-flight must keep
-    /// gliding monotonically at sub-pixel precision with zero preference-key churn and land cleanly at the bottom.
-    @Test func richLongThreadWithLiveUpdatesGlidesSmoothlyWithoutPreferenceChurn() throws {
+    /// Sending in a realistic 20-turn rich-markdown thread while live server updates stream in mid-scroll must keep
+    /// gliding monotonically at sub-pixel precision and land cleanly at the bottom.
+    @Test func richLongThreadWithLiveUpdatesGlidesSmoothly() throws {
         var items: [TranscriptItem] = []
         let base = MockData.now.addingTimeInterval(-3600)
         for i in 0..<20 {
@@ -61,18 +61,11 @@ struct SendFlightWindowTests {
         let model = AppModel.mock()
         let summary = MockData.threads[0]
         let box = WindowDetailBox(ThreadDetailState(summary: summary, items: items, diffStat: "+142 −38", isRunning: false))
-        var bubblePreferenceCallbacks = 0
-        let (window, host) = Self.presentCustom(
-            WindowThreadHarness(model: model, box: box) { _ in
-                bubblePreferenceCallbacks += 1
-            },
-            size: CGSize(width: 1000, height: 860)
-        )
+        let (window, host) = Self.presentCustom(WindowThreadHarness(model: model, box: box), size: CGSize(width: 1000, height: 860))
         defer { window.orderOut(nil) }
 
         let scroll = try #require(Self.transcriptScrollView(in: host))
         let before = scroll.contentView.bounds.origin.y
-        bubblePreferenceCallbacks = 0
 
         let msgID = "u-live-new"
         box.detail.items.append(.init(id: msgID, kind: .user("Investigate laggy scroll-up during send flight.")))
@@ -116,11 +109,9 @@ struct SendFlightWindowTests {
             #expect(next.offset >= previous.offset - 0.5)
             #expect(next.offset <= end + 0.5)
         }
-        // Horizontal-only bubble measurement must not churn PreferenceKey on every scroll frame.
-        #expect(bubblePreferenceCallbacks <= 3)
     }
 
-    /// Touching the trackpad or scroll wheel mid-flight immediately hands control back to the user without snapping back.
+    /// Touching the trackpad or scroll wheel mid-scroll immediately hands control back to the user without snapping back.
     @Test func userScrollInterruptsActiveSendScrollWithoutSnappingBack() throws {
         let model = AppModel.mock()
         model.destination = .thread(MockData.threadDetail.summary.id)
@@ -139,7 +130,7 @@ struct SendFlightWindowTests {
         scroll.contentView.scroll(to: NSPoint(x: 0, y: interruptedTarget))
         scroll.reflectScrolledClipView(scroll.contentView)
 
-        // Wait past the original 680ms flight duration; the scroll must stay where the user put it.
+        // Wait past the 680ms send scroll; the scroll must stay where the user put it.
         Self.pump(0.75)
         #expect(abs(scroll.contentView.bounds.origin.y - interruptedTarget) < 2.0)
     }
@@ -156,7 +147,7 @@ struct SendFlightWindowTests {
         let summary = MockData.threads[0]
         let box = WindowDetailBox(ThreadDetailState(summary: summary, items: items, diffStat: nil, isRunning: false))
         let (window, host) = Self.presentCustom(
-            WindowThreadHarness(model: model, box: box) { _ in },
+            WindowThreadHarness(model: model, box: box),
             size: CGSize(width: 1000, height: 860)
         )
         defer { window.orderOut(nil) }
@@ -326,13 +317,87 @@ struct SendFlightWindowTests {
         #expect(documentHeight <= scroll.contentView.bounds.height + 0.5)
         #expect(scroll.contentView.bounds.origin.y < 0.5)
 
-        // A subsequent message sent inside this new thread DOES glide smoothly with the in-thread flight.
+        // A subsequent message sent inside this new thread scrolls down to its own turn.
         let beforeSecond = scroll.contentView.bounds.origin.y
         model.composerText = "Follow up inside the existing thread"
         model.send()
         let secondSamples = Self.sampleOffsets(of: scroll, for: 0.9)
         let afterSecond = try #require(secondSamples.last?.offset)
         #expect(afterSecond > beforeSecond + 40)
+    }
+
+    /// A send from anywhere glides down to the new turn's stream room, and when the streamed reply finishes nothing
+    /// above it folds away and nothing moves: the transcript stays exactly where the user was reading.
+    @Test func finishedReplyStaysPutAfterStreamingIntoItsRoom() throws {
+        var items: [TranscriptItem] = []
+        let base = MockData.now.addingTimeInterval(-3600)
+        for i in 0..<8 {
+            items.append(.init(id: "u-\(i)", kind: .user("Prompt \(i)"), startedAt: base.addingTimeInterval(Double(i * 60))))
+            items.append(.init(id: "a-\(i)", kind: .assistant(blocks: [.text("Response \(i) with several sentences to give each turn real vertical height in the scroll view, wrapping across lines.")], streaming: false), startedAt: base.addingTimeInterval(Double(i * 60 + 2)), completedAt: base.addingTimeInterval(Double(i * 60 + 5))))
+        }
+        let model = AppModel.mock()
+        let summary = MockData.threads[0]
+        let box = WindowDetailBox(ThreadDetailState(summary: summary, items: items, diffStat: nil, isRunning: false))
+        let (window, host) = Self.presentCustom(WindowThreadHarness(model: model, box: box), size: CGSize(width: 1000, height: 760))
+        defer { window.orderOut(nil) }
+        let scroll = try #require(Self.transcriptScrollView(in: host))
+
+        // Send from the middle of the history.
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: 300))
+        scroll.reflectScrolledClipView(scroll.contentView)
+        Self.pump(0.2)
+        box.detail.items.append(.init(id: "u-new", kind: .user("Tighten the send animation"), startedAt: Date()))
+        box.detail.isRunning = true
+        model.latestThreadSend = ThreadSendEvent(threadID: summary.id, text: "Tighten the send animation", optimisticItemID: "u-new")
+        func maxOffset() -> CGFloat { (scroll.documentView?.frame.height ?? 0) - scroll.contentView.bounds.height }
+        // One continuous forward glide to the new end, even though the new turn's real height is only learned as it
+        // scrolls into view (the glide used to stop at the old end, then glide again).
+        let glide = Self.sampleOffsets(of: scroll, for: 0.9)
+        for (previous, next) in zip(glide, glide.dropFirst()) {
+            #expect(next.offset >= previous.offset - 0.5)
+        }
+        // Until it is nearly there it never pauses for more than a few frames.
+        let glideStart = glide.first?.offset ?? 0
+        let glideEnd = glide.last?.offset ?? 0
+        let travel = glide.filter { $0.offset < glideStart + (glideEnd - glideStart) * 0.95 }.map(\.time)
+        for (previous, next) in zip(travel, travel.dropFirst()) {
+            #expect(next - previous < 0.05)
+        }
+        #expect(abs(scroll.contentView.bounds.origin.y - maxOffset()) < 1.5)
+
+        // Stream a turn with work, an interim message and a long answer, following the bottom as it grows.
+        let now = Date()
+        box.detail.items.append(.init(id: "t-1", kind: .toolCall(.init(kind: .read, title: "Read", detail: "ThreadView.swift", status: .succeeded, duration: 0.3)), startedAt: now, completedAt: now))
+        Self.pump(0.1)
+        box.detail.items.append(.init(id: "c-1", kind: .assistant(blocks: [.text("I'll look at the scroll driver next.")], streaming: false), startedAt: now))
+        Self.pump(0.1)
+        box.detail.items.append(.init(id: "t-2", kind: .toolCall(.init(kind: .read, title: "Read", detail: "SendFlightScrollDriver.swift", status: .succeeded, duration: 0.2)), startedAt: now, completedAt: now))
+        Self.pump(0.1)
+        let paragraphs = (1...14).map { "Paragraph \($0) of the answer, long enough to wrap across the reading column so the turn outgrows the viewport." }
+        box.detail.items.append(.init(id: "answer", kind: .assistant(blocks: [.text(paragraphs.prefix(1).joined(separator: "\n\n"))], streaming: true), startedAt: now))
+        for count in 2...paragraphs.count {
+            Self.pump(0.05)
+            box.detail.items[box.detail.items.count - 1].kind = .assistant(blocks: [.text(paragraphs.prefix(count).joined(separator: "\n\n"))], streaming: true)
+        }
+        Self.pump(0.6)
+        let liveOffset = scroll.contentView.bounds.origin.y
+        let liveHeight = scroll.documentView?.frame.height ?? 0
+        #expect(abs(liveOffset - maxOffset()) < 1.5)
+
+        // The reply finishes.
+        box.detail.items[box.detail.items.count - 1].kind = .assistant(blocks: [.text(paragraphs.joined(separator: "\n\n"))], streaming: false)
+        box.detail.items[box.detail.items.count - 1].completedAt = Date()
+        box.detail.isRunning = false
+        var offsets: [CGFloat] = []
+        var heights: [CGFloat] = []
+        let start = Date()
+        while Date().timeIntervalSince(start) < 0.8 {
+            Self.pump(1.0 / 120.0)
+            offsets.append(scroll.contentView.bounds.origin.y)
+            heights.append(scroll.documentView?.frame.height ?? 0)
+        }
+        for offset in offsets { #expect(abs(offset - liveOffset) < 0.5) }
+        for height in heights { #expect(abs(height - liveHeight) < 0.5) }
     }
 
     /// One display frame of run loop, then a yield so main-actor tasks (the launch's hand-off) get to run.
@@ -409,11 +474,9 @@ private final class WindowDetailBox {
 private struct WindowThreadHarness: View {
     let model: AppModel
     let box: WindowDetailBox
-    let onBubbleFrames: ([String: CGRect]) -> Void
 
     var body: some View {
         ThreadView(detail: box.detail)
             .environment(model)
-            .onSendFlightBubbleFramesChange(onBubbleFrames)
     }
 }

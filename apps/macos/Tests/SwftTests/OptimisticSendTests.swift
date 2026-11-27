@@ -79,16 +79,15 @@ struct OptimisticSendTests {
     }
 
     @MainActor
-    @Test func aFailedSendCancelsItsFlightAndHold() {
+    @Test func aFailedSendStopsScrollingTowardItsRow() {
         let coordinator = SendFlightCoordinator()
         var detail = MockData.threadDetail
         detail.items.append(TranscriptItem(id: "msg-new", kind: .user("Fix the hitch")))
         let event = ThreadSendEvent(threadID: detail.summary.id, text: "Fix the hitch", optimisticItemID: "msg-new")
-        coordinator.syncThread(detail: detail, isBusy: true)
-        _ = coordinator.beginSend(event, detail: detail, reduceMotion: false)
-        #expect(coordinator.activeFlight?.boundItemID == "msg-new")
+        coordinator.syncThread(detail: detail, rows: detail.rows, isBusy: true)
+        #expect(coordinator.beginSend(event, detail: detail, rows: detail.rows) == .scrollToNewTurn(preJumpY: nil))
         coordinator.failSend(event.id)
-        #expect(coordinator.activeFlight == nil)
-        #expect(coordinator.latestTurnHeldForSendID == nil)
+        #expect(!coordinator.scrollDriver.isAnimating)
+        #expect(!coordinator.programmaticScrollPending)
     }
 }

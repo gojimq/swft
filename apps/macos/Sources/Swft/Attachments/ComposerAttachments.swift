@@ -12,7 +12,7 @@ struct AttachmentPayload: Sendable {
     var name: String
     var mimeType: String
     var data: Data
-    /// Decoded, downsampled preview for images; shared by the tray, the flight and the transcript.
+    /// Decoded, downsampled preview for images; shared by the tray and the transcript.
     var preview: CGImage?
 }
 
@@ -316,7 +316,7 @@ final class ComposerAttachments {
     }
 
     private func adoptServerID(_ serverID: String, for localID: String, preview: CGImage?) {
-        // Registered under the server id now, so the sent bubble and its flight find the same pixels.
+        // Registered under the server id now, so the sent bubble finds the same pixels.
         if let preview { SwftImageCache.shared.store(preview, for: SwftImageReference.attachmentKey(serverID), pinned: true) }
         update(localID) { $0.serverID = serverID }
     }
