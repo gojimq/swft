@@ -54,7 +54,7 @@ public struct IconButton: View {
     public var body: some View {
         // macOS runs a Button's action inside the click's own update, which keeps the button from animating a move its
         // action causes (opening a panel slid the icon out of its pill). Acting a beat later lets it move with the rest.
-        Button { DispatchQueue.main.async(execute: action) } label: {
+        Button { Task { action() } } label: {
             Image(systemName: systemName)
                 .font(.system(size: size * 0.52, weight: weight))
                 .frame(width: size, height: size)

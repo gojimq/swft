@@ -379,7 +379,8 @@ public actor ServerProcess {
         guard length > 0 else { return nil }
         var buffer = [CChar](repeating: 0, count: length)
         guard confstr(_CS_DARWIN_USER_TEMP_DIR, &buffer, length) > 0 else { return nil }
-        return String(cString: buffer)
+        let utf8 = buffer.prefix { $0 != 0 }.map(UInt8.init(bitPattern:))
+        return String(decoding: utf8, as: UTF8.self)
     }
 
     public static func validateBaseDirectory(_ url: URL) throws {
