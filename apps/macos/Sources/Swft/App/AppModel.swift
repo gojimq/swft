@@ -327,6 +327,14 @@ final class AppModel {
         model.selectedProjectID = MockData.swft.id
         model.selectedModelID = MockData.models.first?.id
         model.selectedReasoningChoiceId = MockData.models.first?.defaultReasoningChoiceId
+        return finalizeMock(model, defaults: defaults)
+    }
+
+    func setMockDetail(_ detail: ThreadDetailState, for id: ThreadSummary.ID) {
+        mockBacking?.details[id] = detail
+    }
+
+    private static func finalizeMock(_ model: AppModel, defaults: UserDefaults?) -> AppModel {
         // `-SwftScreen thread` opens straight into the mock thread (used for screenshots).
         if UserDefaults.standard.string(forKey: "SwftScreen") == "thread" {
             model.destination = .thread(MockData.threadDetail.summary.id)
@@ -1281,6 +1289,18 @@ final class AppModel {
 
     func toggleSidebar() {
         withAnimation(.snappy(duration: 0.22)) { sidebarVisible.toggle() }
+    }
+
+    func zoomIn() {
+        settings.zoomIn()
+    }
+
+    func zoomOut() {
+        settings.zoomOut()
+    }
+
+    func resetUIScale() {
+        settings.resetUIScale()
     }
 
     func toggleSettledSection() {

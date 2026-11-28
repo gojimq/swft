@@ -9,7 +9,10 @@ struct RootView: View {
     private var effectiveReduceMotion: Bool { reduceMotion || forceReduceMotion }
 
     var body: some View {
+        let scale = SwftUIScale.clamp(model.settings.uiScale)
         GeometryReader { geo in
+            let logicalWidth = geo.size.width / scale
+            let logicalHeight = geo.size.height / scale
             let activeRightThreadID: String? = {
                 if case .thread(let id) = model.destination, model.rightPanel.isOpen(for: id) {
                     return id
@@ -30,7 +33,7 @@ struct RootView: View {
                 GeometryReader { contentGeo in
                     let clampedPanelWidth = RightPanelLogic.clampedWidth(
                         model.rightPanel.panelWidth,
-                        availableWindowWidth: geo.size.width
+                        availableWindowWidth: logicalWidth
                     )
                     let split = RightPanelSplitLayout.compute(
                         availableContentWidth: contentGeo.size.width,
@@ -53,7 +56,7 @@ struct RootView: View {
                         if let rightThreadID = activeRightThreadID {
                             RightPanelContainerView(
                                 threadID: rightThreadID,
-                                availableWindowWidth: geo.size.width
+                                availableWindowWidth: logicalWidth
                             )
                             .frame(width: split.panelWidth, height: contentGeo.size.height)
                             .zIndex(1)
@@ -67,9 +70,35 @@ struct RootView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             .animation(panelMotion, value: model.sidebarVisible)
+            .frame(width: logicalWidth, height: logicalHeight, alignment: .topLeading)
+            .scaleEffect(scale, anchor: .topLeading)
+            .frame(width: geo.size.width, height: geo.size.height, alignment: .topLeading)
+            .environment(\.swftUIScale, scale)
         }
+        .overlay(alignment: .top) {
+            if model.settings.zoomHUDVisible {
+                Text(SwftUIScale.percentLabel(for: scale))
+                    .font(SwftType.labelStrong.monospacedDigit())
+                    .foregroundStyle(SwftColor.textPrimary)
+                    .padding(.horizontal, 12)
+                    .frame(height: 28)
+                    .background(Capsule().fill(SwftColor.menuSurface))
+                    .overlay(Capsule().strokeBorder(SwftColor.border))
+                    .shadow(color: SwftColor.shadow, radius: 8, y: 2)
+                    .padding(.top, 12)
+                    .allowsHitTesting(false)
+                    .transition(.swftPop(reduceMotion: effectiveReduceMotion, scale: 0.9))
+            }
+        }
+        .animation(SwftMotion.resolve(SwftMotion.quick, reduceMotion: effectiveReduceMotion), value: model.settings.zoomHUDVisible)
         .background(SwftColor.sidebar)
-        .background(WindowChrome())
+        .background(
+            WindowChrome(
+                onZoomIn: { model.zoomIn() },
+                onZoomOut: { model.zoomOut() },
+                onResetZoom: { model.resetUIScale() }
+            )
+        )
         .ignoresSafeArea()
     }
 
@@ -111,15 +140,17 @@ struct TopBar: View {
     @Environment(AppModel.self) private var model
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.sendFlightForceReduceMotion) private var forceReduceMotion
+    @Environment(\.swftUIScale) private var uiScale
     @State private var showingServerPopover = false
 
     private var effectiveReduceMotion: Bool { reduceMotion || forceReduceMotion }
 
     var body: some View {
+        let barHeight = SwftUIScale.trafficLightTopBarHeight(base: SwftLayout.titlebarHeight, scale: uiScale)
         HStack(spacing: 8) {
             if !model.sidebarVisible {
-                // Leave room for the traffic lights.
-                Color.clear.frame(width: 76, height: 1)
+                // Leave room for the unscaled macOS traffic lights at any UI scale.
+                Color.clear.frame(width: SwftUIScale.trafficLightHorizontalClearance(base: 76, scale: uiScale), height: 1)
                 Group {
                     IconButton("sidebar.left", help: "Show sidebar", action: model.toggleSidebar)
                     IconButton("square.and.pencil", help: "New thread", action: model.goHome)
@@ -160,12 +191,12 @@ struct TopBar: View {
             trailingPills
         }
         .padding(.horizontal, 12)
-        .frame(height: SwftLayout.titlebarHeight)
+        .frame(height: barHeight)
         .background {
             if model.selectedThreadID != nil {
                 // Transcript scrolls under the bar; fade it out rather than drawing a hard edge.
                 LinearGradient(stops: [.init(color: SwftColor.canvas, location: 0.7), .init(color: SwftColor.canvas.opacity(0), location: 1)], startPoint: .top, endPoint: .bottom)
-                    .frame(height: SwftLayout.titlebarHeight + 16)
+                    .frame(height: barHeight + 16)
                     .frame(maxHeight: .infinity, alignment: .top)
                     .allowsHitTesting(false)
             }

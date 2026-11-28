@@ -6,6 +6,7 @@ import SwiftUI
 struct RightPanelContainerView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.swftUIScale) private var uiScale
     let threadID: String
     let availableWindowWidth: CGFloat
 
@@ -89,8 +90,8 @@ struct RightPanelContainerView: View {
         HStack(alignment: .bottom, spacing: 0) {
             if panelState.isMaximized && !model.sidebarVisible {
                 HStack(spacing: 4) {
-                    // Leave room for the traffic lights, mirroring `TopBar`.
-                    Color.clear.frame(width: 74, height: 1)
+                    // Leave room for the unscaled macOS traffic lights, mirroring `TopBar`.
+                    Color.clear.frame(width: SwftUIScale.trafficLightHorizontalClearance(base: 74, scale: uiScale), height: 1)
                     IconButton("sidebar.left", help: "Show sidebar", size: 28, action: model.toggleSidebar)
                 }
                 .padding(.trailing, 4)
@@ -132,7 +133,7 @@ struct RightPanelContainerView: View {
         }
         .padding(.leading, 8)
         .padding(.trailing, 10)
-        .frame(height: RightPanelMetrics.tabBarHeight)
+        .frame(height: SwftUIScale.trafficLightTopBarHeight(base: RightPanelMetrics.tabBarHeight, scale: uiScale))
         .background {
             RightPanelColor.tabStripBackground
                 .overlay(alignment: .bottom) {

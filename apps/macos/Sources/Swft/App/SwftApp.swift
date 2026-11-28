@@ -42,6 +42,16 @@ struct SwftApp: App {
                     .keyboardShortcut("s", modifiers: [.command, .control])
                 Button("Toggle Right Panel") { model.toggleRightPanel() }
                     .keyboardShortcut("b", modifiers: [.command, .option])
+                Divider()
+                Button("Actual Size") { model.resetUIScale() }
+                    .keyboardShortcut("0", modifiers: .command)
+                    .disabled(SwftUIScale.isDefault(model.settings.uiScale))
+                Button("Zoom In") { model.zoomIn() }
+                    .keyboardShortcut("=", modifiers: .command)
+                    .disabled(!model.settings.canZoomIn)
+                Button("Zoom Out") { model.zoomOut() }
+                    .keyboardShortcut("-", modifiers: .command)
+                    .disabled(!model.settings.canZoomOut)
             }
         }
     }

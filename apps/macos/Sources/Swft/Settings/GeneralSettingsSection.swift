@@ -50,6 +50,22 @@ struct GeneralSettingsSection: View {
                         }
                     )
                 }
+
+                SettingsRowDivider()
+
+                SettingsRow(
+                    "Interface scale",
+                    description: "Scale the entire app to fit more or less on screen (⌘- / ⌘+ / ⌘0).",
+                    isModified: !SwftUIScale.isDefault(controller.uiScale),
+                    onReset: { controller.resetUIScale(showHUD: false) }
+                ) {
+                    SettingsScaleControl(
+                        scale: controller.uiScale,
+                        onZoomOut: { controller.zoomOut(showHUD: false) },
+                        onZoomIn: { controller.zoomIn(showHUD: false) },
+                        onSelect: { controller.setUIScale($0, showHUD: false) }
+                    )
+                }
             }
 
             SettingsSectionCard("New threads") {

@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import Observation
+import SwftDesign
 import SwftKit
 import UserNotifications
 
@@ -24,6 +25,24 @@ final class SettingsController {
             applyAppearance()
         }
     }
+
+    var uiScale: CGFloat {
+        didSet {
+            let clamped = SwftUIScale.clamp(uiScale)
+            if abs(clamped - uiScale) > 0.0001 {
+                uiScale = clamped
+                return
+            }
+            guard abs(oldValue - clamped) > 0.0001 else { return }
+            UIScalePreference.save(clamped, to: defaults)
+        }
+    }
+
+    var zoomHUDVisible = false
+    @ObservationIgnored private var zoomHUDTask: Task<Void, Never>?
+
+    var canZoomIn: Bool { SwftUIScale.canZoomIn(from: uiScale) }
+    var canZoomOut: Bool { SwftUIScale.canZoomOut(from: uiScale) }
 
     var notificationMode: NotificationModePreference {
         didSet {
@@ -81,6 +100,7 @@ final class SettingsController {
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         self.appearance = AppearancePreference.load(from: defaults)
+        self.uiScale = UIScalePreference.load(from: defaults)
         self.notificationMode = NotificationModePreference.load(from: defaults)
         if defaults.object(forKey: NotificationModePreference.notifyOnCompleteKey) != nil {
             self.notifyOnComplete = defaults.bool(forKey: NotificationModePreference.notifyOnCompleteKey)
@@ -115,6 +135,35 @@ final class SettingsController {
             app.appearance = NSAppearance(named: name)
         } else {
             app.appearance = nil
+        }
+    }
+
+    func setUIScale(_ next: CGFloat, showHUD: Bool = false) {
+        uiScale = SwftUIScale.clamp(next)
+        if showHUD {
+            flashZoomHUD()
+        }
+    }
+
+    func zoomIn(showHUD: Bool = true) {
+        setUIScale(SwftUIScale.steppedIn(from: uiScale), showHUD: showHUD)
+    }
+
+    func zoomOut(showHUD: Bool = true) {
+        setUIScale(SwftUIScale.steppedOut(from: uiScale), showHUD: showHUD)
+    }
+
+    func resetUIScale(showHUD: Bool = true) {
+        setUIScale(SwftUIScale.defaultScale, showHUD: showHUD)
+    }
+
+    private func flashZoomHUD() {
+        zoomHUDTask?.cancel()
+        zoomHUDVisible = true
+        zoomHUDTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(1.1))
+            guard !Task.isCancelled else { return }
+            self?.zoomHUDVisible = false
         }
     }
 

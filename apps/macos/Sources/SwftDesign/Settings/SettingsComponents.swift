@@ -545,6 +545,95 @@ public struct SettingsMenuTrigger: View {
     }
 }
 
+/// Compact `-` / percentage menu / `+` stepper control for whole-app UI scaling inside Settings.
+public struct SettingsScaleControl: View {
+    let scale: CGFloat
+    let steps: [CGFloat]
+    let onZoomOut: () -> Void
+    let onZoomIn: () -> Void
+    let onSelect: (CGFloat) -> Void
+
+    public init(
+        scale: CGFloat,
+        steps: [CGFloat] = SwftUIScale.steps,
+        onZoomOut: @escaping () -> Void,
+        onZoomIn: @escaping () -> Void,
+        onSelect: @escaping (CGFloat) -> Void
+    ) {
+        self.scale = scale
+        self.steps = steps
+        self.onZoomOut = onZoomOut
+        self.onZoomIn = onZoomIn
+        self.onSelect = onSelect
+    }
+
+    public var body: some View {
+        HStack(spacing: 2) {
+            Button(action: onZoomOut) {
+                Image(systemName: "minus")
+                    .font(.system(size: 11, weight: .semibold))
+                    .frame(width: 28, height: 26)
+                    .contentShape(Capsule())
+            }
+            .buttonStyle(HoverFillStyle(shape: Capsule()))
+            .foregroundStyle(SwftUIScale.canZoomOut(from: scale) ? SwftColor.textPrimary : SwftColor.textTertiary)
+            .disabled(!SwftUIScale.canZoomOut(from: scale))
+            .help("Zoom out (⌘-)")
+            .accessibilityLabel("Zoom out")
+
+            Menu {
+                ForEach(steps, id: \.self) { step in
+                    Button {
+                        onSelect(step)
+                    } label: {
+                        let label = SwftUIScale.isDefault(step)
+                            ? "\(SwftUIScale.percentLabel(for: step)) (Default)"
+                            : SwftUIScale.percentLabel(for: step)
+                        if abs(step - scale) < 0.001 {
+                            Label(label, systemImage: "checkmark")
+                        } else {
+                            Text(label)
+                        }
+                    }
+                }
+            } label: {
+                HStack(spacing: 4) {
+                    Text(SwftUIScale.percentLabel(for: scale))
+                        .font(SwftType.labelStrong.monospacedDigit())
+                        .foregroundStyle(SwftColor.textPrimary)
+                        .frame(minWidth: 38, alignment: .center)
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.system(size: 8.5, weight: .semibold))
+                        .foregroundStyle(SwftColor.textTertiary)
+                }
+                .padding(.horizontal, 8)
+                .frame(height: 26)
+                .contentShape(Capsule())
+            }
+            .menuStyle(.button)
+            .buttonStyle(HoverFillStyle(shape: Capsule()))
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .accessibilityLabel("Interface scale \(SwftUIScale.percentLabel(for: scale))")
+
+            Button(action: onZoomIn) {
+                Image(systemName: "plus")
+                    .font(.system(size: 11, weight: .semibold))
+                    .frame(width: 28, height: 26)
+                    .contentShape(Capsule())
+            }
+            .buttonStyle(HoverFillStyle(shape: Capsule()))
+            .foregroundStyle(SwftUIScale.canZoomIn(from: scale) ? SwftColor.textPrimary : SwftColor.textTertiary)
+            .disabled(!SwftUIScale.canZoomIn(from: scale))
+            .help("Zoom in (⌘+)")
+            .accessibilityLabel("Zoom in")
+        }
+        .padding(3)
+        .background(Capsule().fill(SwftColor.surface))
+        .overlay(Capsule().strokeBorder(SwftColor.borderSubtle))
+    }
+}
+
 /// Convenience settings row wrapping a native `Menu` picker styled with `SettingsMenuTrigger`.
 public struct SettingsPickerRow<Value: Hashable>: View {
     let title: String

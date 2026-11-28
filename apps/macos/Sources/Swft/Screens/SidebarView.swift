@@ -4,18 +4,19 @@ import SwiftUI
 struct SidebarView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.swftUIScale) private var uiScale
 
     var body: some View {
         @Bindable var model = model
         VStack(alignment: .leading, spacing: 0) {
-            // Shares the traffic-light row. Like the reference, these icons sit ~5pt above the lights' centre line.
+            // Shares the traffic-light row. Keep enough unscaled vertical room so the lights never crowd the brand row.
             HStack(spacing: 2) {
                 Spacer()
                 IconButton("magnifyingglass", help: "Search threads", weight: .medium, tint: SwftColor.textPrimary)
                 IconButton("sidebar.left", help: "Hide sidebar", weight: .medium, tint: SwftColor.textPrimary, action: model.toggleSidebar)
             }
             .padding(.horizontal, 10)
-            .frame(height: 42)
+            .frame(height: SwftUIScale.trafficLightTopBarHeight(base: 42, minimumPhysicalHeight: 42, scale: uiScale))
 
             HStack(spacing: 9) {
                 SwftMark(size: 22)

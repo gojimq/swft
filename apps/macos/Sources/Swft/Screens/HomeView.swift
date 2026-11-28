@@ -111,6 +111,7 @@ struct HomeView: View {
 struct ComposerView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.swftUIScale) private var uiScale
     let placeholder: String
     /// Home has room below the composer; a thread's composer sits at the bottom, so its picker opens above.
     var pickerOpensBelow = false
@@ -177,8 +178,8 @@ struct ComposerView: View {
             .overlay(alignment: pickerOpensBelow ? .bottomLeading : .topLeading) {
                 if model.selectedThreadID == nil, model.isProjectPickerOpen {
                     let leadingOffset = ProjectDeletionLogic.panelLeadingOffset(
-                        triggerFrame: projectTriggerFrame,
-                        composerFrame: composerFrame,
+                        triggerFrame: SwftUIScale.unscaledRect(projectTriggerFrame, scale: uiScale),
+                        composerFrame: SwftUIScale.unscaledRect(composerFrame, scale: uiScale),
                         panelWidth: ProjectPickerPanel.width
                     )
                     ProjectPickerPanel(triggerFrame: projectTriggerFrame)

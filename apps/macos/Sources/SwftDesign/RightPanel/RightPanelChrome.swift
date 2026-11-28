@@ -713,6 +713,7 @@ public struct RightPanelResizeHandle: View {
     @State private var hovering = false
     @State private var dragging = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.swftUIScale) private var uiScale
 
     public init(
         onDragChanged: @escaping (CGFloat) -> Void,
@@ -739,8 +740,8 @@ public struct RightPanelResizeHandle: View {
                 DragGesture(minimumDistance: 1, coordinateSpace: .global)
                     .onChanged { value in
                         dragging = true
-                        // Dragging left (negative x) widens the right sidebar.
-                        onDragChanged(-value.translation.width)
+                        // Dragging left (negative x) widens the right sidebar; convert global pts back to scaled layout space.
+                        onDragChanged(-value.translation.width / SwftUIScale.clamp(uiScale))
                     }
                     .onEnded { _ in
                         dragging = false

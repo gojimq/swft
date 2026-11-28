@@ -33,6 +33,9 @@ public enum SwftColor {
     public static let menuSurface = Color.swft(light: 0xFFFFFF, dark: 0x28292A)
     public static let surfaceMuted = Color.swft(light: 0xF3F4F5, dark: 0x232425)
     public static let codeBackground = Color.swft(light: 0xF6F7F8, dark: 0x1A1B1C)
+    public static let inlineCodeBackground = Color.swft(light: 0x000000, dark: 0xFFFFFF, lightAlpha: 0.065, darkAlpha: 0.10)
+    public static let tableDivider = Color.swft(light: 0x000000, dark: 0xFFFFFF, lightAlpha: 0.10, darkAlpha: 0.12)
+    public static let blockquoteBorder = Color.swft(light: 0x000000, dark: 0xFFFFFF, lightAlpha: 0.24, darkAlpha: 0.28)
     /// Milky tint so glass reads white like the reference composer instead of picking up the blue glow.
     public static let glassTint = Color.swft(light: 0xFFFFFF, dark: 0x1E1F20, lightAlpha: 0.72, darkAlpha: 0.45)
     public static let userBubble = Color.swft(light: 0xF2F0F0, dark: 0x2C2D2F)
@@ -68,6 +71,13 @@ public enum SwftColor {
     public static let warningBorder = Color.swft(light: 0xF3DDB5, dark: 0x4A3A22)
     public static let danger = Color.swft(light: 0xB3261E, dark: 0xF2B8B5)
     public static let dangerSoft = Color.swft(light: 0xFCE8E6, dark: 0x3C1F1E)
+
+    // Syntax highlighting (calm, high-legibility tones over `codeBackground`)
+    public static let syntaxKeyword = Color.swft(light: 0x8F2D9C, dark: 0xD2A8FF)
+    public static let syntaxString = Color.swft(light: 0x1E6B3A, dark: 0xA5D6A7)
+    public static let syntaxComment = Color.swft(light: 0x6F767E, dark: 0x7D8590)
+    public static let syntaxNumber = Color.swft(light: 0x0550AE, dark: 0x79C0FF)
+    public static let syntaxType = Color.swft(light: 0x953800, dark: 0xFFA657)
 
     public static let shadow = Color.swft(light: 0x1F2A44, dark: 0x000000, lightAlpha: 0.08, darkAlpha: 0.45)
 

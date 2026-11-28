@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import SwftDesign
 import SwftKit
 
 // MARK: - Sections & Local Preferences
@@ -81,6 +82,26 @@ enum AppearancePreference: String, CaseIterable, Identifiable, Hashable {
               let parsed = AppearancePreference(rawValue: raw)
         else { return .system }
         return parsed
+    }
+}
+
+enum UIScalePreference {
+    static let defaultsKey = "SwftUIScale"
+
+    static func load(from defaults: UserDefaults = .standard) -> CGFloat {
+        guard defaults.object(forKey: defaultsKey) != nil else { return SwftUIScale.defaultScale }
+        let raw = defaults.double(forKey: defaultsKey)
+        guard raw > 0 else { return SwftUIScale.defaultScale }
+        return SwftUIScale.clamp(CGFloat(raw))
+    }
+
+    static func save(_ scale: CGFloat, to defaults: UserDefaults = .standard) {
+        let clamped = SwftUIScale.clamp(scale)
+        if SwftUIScale.isDefault(clamped) {
+            defaults.removeObject(forKey: defaultsKey)
+        } else {
+            defaults.set(Double(clamped), forKey: defaultsKey)
+        }
     }
 }
 
