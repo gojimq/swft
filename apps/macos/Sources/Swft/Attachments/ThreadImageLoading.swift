@@ -46,6 +46,49 @@ enum ThreadImageLoading {
         }
         return data
     }
+
+    static func mediaLoader(threadID: String, environmentID: String?, connection: ServerConnection?) -> SwftMediaLoader {
+        SwftMediaLoader(scope: "\(environmentID ?? "local"):\(threadID)") { source in
+            let ext = ImageSourceLocation.fileExtension(for: source) ?? "mp4"
+            switch ImageSourceLocation.classify(source) {
+            case .remote(let url):
+                return try await downloadRemote(url, preferredExtension: ext)
+            case .inlineData(let data, _):
+                let dir = FileManager.default.temporaryDirectory.appendingPathComponent("swft-asset-downloads", isDirectory: true)
+                try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+                let fileURL = dir.appendingPathComponent("\(UUID().uuidString.lowercased()).\(ext)")
+                try data.write(to: fileURL, options: .atomic)
+                return fileURL
+            case .serverRelative(let path):
+                guard let connection else { throw LoadError.noConnection }
+                return try await connection.downloadAssetDataToTemporaryFile(relativeUrl: path, preferredExtension: ext)
+            case .mediaFile(let path):
+                guard let connection else { throw LoadError.noConnection }
+                return try await connection.downloadAssetToTemporaryFile(
+                    .mediaFile(threadId: threadID, path: path),
+                    preferredExtension: ext
+                )
+            case .unsupported:
+                throw LoadError.unsupportedSource
+            }
+        }
+    }
+
+    private static func downloadRemote(_ url: URL, preferredExtension: String) async throws -> URL {
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 180
+        let (tempURL, response) = try await URLSession.shared.download(for: request)
+        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+            try? FileManager.default.removeItem(at: tempURL)
+            throw LoadError.httpStatus(http.statusCode)
+        }
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("swft-asset-downloads", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let dest = dir.appendingPathComponent("\(UUID().uuidString.lowercased()).\(preferredExtension)")
+        try? FileManager.default.removeItem(at: dest)
+        try FileManager.default.moveItem(at: tempURL, to: dest)
+        return dest
+    }
 }
 
 /// Routes ⌘V to the composer when the pasteboard holds files or an image; text pastes reach the field untouched.

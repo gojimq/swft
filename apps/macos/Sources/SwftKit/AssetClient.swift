@@ -250,6 +250,38 @@ public extension ServerConnection {
         return try await fetchAssetData(relativeUrl: minted.relativeUrl)
     }
 
+    /// Streams the asset behind a signed relative URL directly to a temporary file on disk with `preferredExtension`.
+    func downloadAssetDataToTemporaryFile(relativeUrl: String, preferredExtension: String? = nil) async throws -> URL {
+        var request = URLRequest(url: try resolveServerURL(relativeUrl))
+        request.timeoutInterval = 180
+        let (tempURL, response) = try await session.download(for: request)
+        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+            let previewData = (try? Data(contentsOf: tempURL, options: .mappedIfSafe).prefix(300)) ?? Data()
+            try? FileManager.default.removeItem(at: tempURL)
+            try Self.ensureSuccess(response, body: Data(previewData))
+        }
+        return try Self.moveDownloadedTempFile(tempURL, preferredExtension: preferredExtension)
+    }
+
+    /// Mints a signed URL for `resource` and streams it directly to a temporary file on disk.
+    func downloadAssetToTemporaryFile(_ resource: AssetResource, preferredExtension: String? = nil) async throws -> URL {
+        let minted = try await createAssetURL(resource)
+        return try await downloadAssetDataToTemporaryFile(relativeUrl: minted.relativeUrl, preferredExtension: preferredExtension)
+    }
+
+    private static func moveDownloadedTempFile(_ tempURL: URL, preferredExtension: String?) throws -> URL {
+        let ext = preferredExtension?
+            .trimmingCharacters(in: CharacterSet(charactersIn: ". \t\r\n"))
+            .lowercased()
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("swft-asset-downloads", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let filename = (ext?.isEmpty == false) ? "\(UUID().uuidString.lowercased()).\(ext!)" : UUID().uuidString.lowercased()
+        let destination = dir.appendingPathComponent(filename)
+        try? FileManager.default.removeItem(at: destination)
+        try FileManager.default.moveItem(at: tempURL, to: destination)
+        return destination
+    }
+
     private static func ensureSuccess(_ response: URLResponse, body: Data) throws {
         guard let http = response as? HTTPURLResponse else { return }
         guard (200..<300).contains(http.statusCode) else {
@@ -269,13 +301,20 @@ public enum AssetURLResolver {
     }
 }
 
-// MARK: - Image Source Classification
+// MARK: - Media Kind & Image Source Classification
 
-/// Where an image a message points at (markdown `![](target)`, a viewed path) is fetched from.
+/// Media type inferred from a markdown media path, URL, or data URI (matching `packages/shared/src/mediaPreview.ts`).
+public enum MediaSourceKind: Equatable, Sendable {
+    case image
+    case video
+    case audio
+}
+
+/// Where a media item a message points at (markdown `![](target)`, a viewed path) is fetched from.
 public enum ImageSourceLocation: Equatable, Sendable {
     /// `http(s)://` — fetched directly.
     case remote(URL)
-    /// `data:image/...;base64,...` — decoded in place.
+    /// `data:<mime>;base64,...` — decoded in place.
     case inlineData(Data, mimeType: String)
     /// `/api/assets/...` or another server route — resolved against the thread's environment origin.
     case serverRelative(String)
@@ -283,8 +322,61 @@ public enum ImageSourceLocation: Equatable, Sendable {
     case mediaFile(path: String)
     case unsupported
 
+    private static let videoExtensions: Set<String> = ["mp4", "m4v", "mov", "webm", "mkv", "avi", "ogv"]
+    private static let audioExtensions: Set<String> = ["mp3", "wav", "m4a", "aac", "flac", "ogg", "oga", "opus", "aiff", "weba"]
+    private static let imageExtensions: Set<String> = ["png", "jpg", "jpeg", "gif", "webp", "heic", "heif", "avif", "bmp", "ico", "svg", "tif", "tiff"]
+
+    /// Lowercase file extension extracted from a path, `file://`, or `http(s)://` URL (stripping query/fragment).
+    public static func fileExtension(for rawSource: String) -> String? {
+        var source = rawSource.trimmingCharacters(in: .whitespacesAndNewlines)
+        if source.hasPrefix("<"), source.hasSuffix(">"), source.count >= 2 {
+            source = String(source.dropFirst().dropLast())
+        }
+        let lower = source.lowercased()
+        if lower.hasPrefix("data:") {
+            guard let comma = source.firstIndex(of: ",") else { return nil }
+            let header = source[source.index(source.startIndex, offsetBy: 5)..<comma].lowercased()
+            let mime = header.split(separator: ";").first.map(String.init) ?? ""
+            switch mime {
+            case "video/mp4": return "mp4"
+            case "video/quicktime": return "mov"
+            case "video/webm": return "webm"
+            default: return nil
+            }
+        }
+        let stripped = source.split(whereSeparator: { $0 == "?" || $0 == "#" }).first.map(String.init) ?? source
+        let pathPart: String
+        if lower.hasPrefix("http://") || lower.hasPrefix("https://") || lower.hasPrefix("file://"),
+           let url = URL(string: stripped)
+        {
+            pathPart = url.path(percentEncoded: false)
+        } else {
+            pathPart = stripped.removingPercentEncoding ?? stripped
+        }
+        let ext = (pathPart as NSString).pathExtension.lowercased()
+        return ext.isEmpty ? nil : ext
+    }
+
+    public static func mediaKind(for rawSource: String) -> MediaSourceKind? {
+        var trimmed = rawSource.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if trimmed.hasPrefix("<"), trimmed.hasSuffix(">"), trimmed.count >= 2 {
+            trimmed = String(trimmed.dropFirst().dropLast())
+        }
+        if trimmed.hasPrefix("data:video/") { return .video }
+        if trimmed.hasPrefix("data:audio/") { return .audio }
+        if trimmed.hasPrefix("data:image/") { return .image }
+        guard let ext = fileExtension(for: rawSource) else { return nil }
+        if videoExtensions.contains(ext) { return .video }
+        if audioExtensions.contains(ext) { return .audio }
+        if imageExtensions.contains(ext) { return .image }
+        return nil
+    }
+
     public static func classify(_ rawSource: String) -> ImageSourceLocation {
-        let source = rawSource.trimmingCharacters(in: .whitespacesAndNewlines)
+        var source = rawSource.trimmingCharacters(in: .whitespacesAndNewlines)
+        if source.hasPrefix("<"), source.hasSuffix(">"), source.count >= 2 {
+            source = String(source.dropFirst().dropLast())
+        }
         guard !source.isEmpty else { return .unsupported }
         let lower = source.lowercased()
 
@@ -317,7 +409,10 @@ public enum ImageSourceLocation: Equatable, Sendable {
         guard let comma = source.firstIndex(of: ",") else { return nil }
         let header = source[source.index(source.startIndex, offsetBy: 5)..<comma].lowercased()
         let parts = header.split(separator: ";").map(String.init)
-        guard let mime = parts.first, mime.hasPrefix("image/"), parts.contains("base64") else { return nil }
+        guard let mime = parts.first,
+              (mime.hasPrefix("image/") || mime.hasPrefix("video/") || mime.hasPrefix("audio/")),
+              parts.contains("base64")
+        else { return nil }
         let payload = String(source[source.index(after: comma)...])
         guard let data = Data(base64Encoded: payload, options: .ignoreUnknownCharacters), !data.isEmpty else { return nil }
         return .inlineData(data, mimeType: mime)

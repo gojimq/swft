@@ -290,6 +290,15 @@ public struct MessageImage: View {
     }
 
     public var body: some View {
+        if SwftMediaClassifier.isVideo(source) {
+            MessageVideo(source: source, alt: alt)
+        } else {
+            imageBody
+        }
+    }
+
+    @ViewBuilder
+    private var imageBody: some View {
         let reference = SwftImageReference.source(source)
         let shape = RoundedRectangle(cornerRadius: AttachmentMetrics.cornerRadius, style: .continuous)
         SwftCachedImage(reference) { phase in

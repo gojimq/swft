@@ -176,8 +176,9 @@ struct ThreadView: View {
                     .id(imagePreview.id)
             }
         }
-        // Transcript and lightbox both resolve images through this thread's own environment.
+        // Transcript and lightbox both resolve images and videos through this thread's own environment.
         .environment(\.swftImageLoader, model.imageLoader(forThreadID: detail.summary.id))
+        .environment(\.swftMediaLoader, model.mediaLoader(forThreadID: detail.summary.id))
         .onChange(of: subagentItems) { _, updated in
             model.rightPanel.syncSubagentTabs(
                 from: updated,

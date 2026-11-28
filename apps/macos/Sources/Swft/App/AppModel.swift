@@ -170,6 +170,7 @@ final class AppModel {
     @ObservationIgnored private let defaults: UserDefaults?
     @ObservationIgnored private var recentProjections = RecentProjections()
     @ObservationIgnored private var imageLoaders: [String: SwftImageLoader] = [:]
+    @ObservationIgnored private var mediaLoaders: [String: SwftMediaLoader] = [:]
     @ObservationIgnored private var cachedLiveDetail: CachedLiveThreadDetail?
 
     private struct CachedLiveThreadDetail {
@@ -1762,6 +1763,23 @@ final class AppModel {
         return loader
     }
 
+    func mediaLoader(forThreadID id: String) -> SwftMediaLoader {
+        mediaLoader(forThreadID: id, environmentID: nil)
+    }
+
+    func mediaLoader(forThreadID id: String, environmentID: String?) -> SwftMediaLoader {
+        if isMock {
+            return ThreadImageLoading.mediaLoader(threadID: id, environmentID: "mock", connection: nil)
+        }
+        let owner = environmentID.flatMap { environmentRegistry.environment(id: $0) }
+            ?? owningEnvironment(forThreadID: id)
+        let key = "\(owner?.id ?? "local"):\(id)"
+        if let cached = mediaLoaders[key] { return cached }
+        let loader = ThreadImageLoading.mediaLoader(threadID: id, environmentID: owner?.id, connection: owner?.connection ?? connection)
+        mediaLoaders[key] = loader
+        return loader
+    }
+
     func cachedProjection(for threadID: String) -> ThreadProjection? {
         if activeThreadStore?.threadId == threadID, let projection = activeThreadStore?.projection {
             return projection
@@ -1956,15 +1974,14 @@ final class AppModel {
         Task {
             do {
                 let projectId = try await resolveLaunchProjectID(for: launchTarget, using: launchStore)
-                let input = LaunchThreadInput(
+                let input = Self.makeHomeLaunchInput(
                     projectId: projectId,
                     title: initialTitle,
-                    generateTitle: true,
                     modelSelection: modelSelection,
                     runtimeMode: runtimeMode,
                     interactionMode: interactionMode,
-                    workspaceStrategy: .root(),
-                    initialMessage: LaunchThreadInitialMessage(text: text, attachments: attachments.map(SwftAdapters.chatAttachment))
+                    text: text,
+                    attachments: attachments
                 )
                 let result = try await launchStore.launchThread(input)
                 // The server promotes `pending-<uuid>` uploads to `<thread>-<uuid>` on launch; carry the cached local
@@ -1998,6 +2015,34 @@ final class AppModel {
             }
             self.isSubmitting = false
         }
+    }
+
+    /// Builds the wire payload for Home's `orchestration.launchThread` RPC.
+    /// The server requires a client-supplied `threadId` whenever `initialMessage.attachments` contains pending uploads.
+    static func makeHomeLaunchInput(
+        projectId: String,
+        title: String,
+        modelSelection: ModelSelection,
+        runtimeMode: RuntimeMode,
+        interactionMode: ProviderInteractionMode,
+        text: String,
+        attachments: [TranscriptAttachment],
+        threadIDGenerator: () -> String = { UUID().uuidString.lowercased() }
+    ) -> LaunchThreadInput {
+        LaunchThreadInput(
+            threadId: attachments.isEmpty ? nil : threadIDGenerator(),
+            projectId: projectId,
+            title: title,
+            generateTitle: true,
+            modelSelection: modelSelection,
+            runtimeMode: runtimeMode,
+            interactionMode: interactionMode,
+            workspaceStrategy: .root(),
+            initialMessage: LaunchThreadInitialMessage(
+                text: text,
+                attachments: attachments.map(SwftAdapters.chatAttachment)
+            )
+        )
     }
 
     /// Mock Home send: a new thread row lands in the inbox, Home hands off once the composer docks, and a "generated"

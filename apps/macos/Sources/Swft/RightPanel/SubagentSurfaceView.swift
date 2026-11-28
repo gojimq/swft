@@ -264,6 +264,7 @@ struct SubagentSurfaceView: View {
             binding.wrappedValue = preview
         })
         .environment(\.swftImageLoader, model.imageLoader(forThreadID: subagentThreadId, environmentID: resolvedEnvironmentID))
+        .environment(\.swftMediaLoader, model.mediaLoader(forThreadID: subagentThreadId, environmentID: resolvedEnvironmentID))
         .overlay {
             if let imagePreview {
                 SwftImageLightbox(preview: imagePreview) { self.imagePreview = nil }
